@@ -65,6 +65,7 @@ import {
   hashPassword,
   hashPasswordWeb,
   hashRecoveryCodes,
+  isWorkerd,
   MemorySessionStore,
   needsRehash,
   needsRehashWeb,
@@ -161,7 +162,14 @@ const DEFAULT_THROTTLE_WINDOW_MS = 15 * 60 * 1000;
  */
 const defaultRateLimiter = (clock: Clock | undefined): RateLimiter =>
   new RateLimiter({
-    store: new MemoryRateLimitStore(),
+    // Hand the store its ceiling so it can SELF-EVICT a bucket the instant it has
+    // fully refilled (L-8244c703). The key here is `login:<email>` / `totp:<userId>`
+    // — attacker-chosen — so a store that persisted every key forever would grow its
+    // Map without bound (a memory-exhaustion DoS) and leak one entry per distinct
+    // email even under benign traffic. A full bucket == a first-seen key, so evicting
+    // it loses no throttle state; an actively-throttled (partially-drained) bucket is
+    // never full and so never evicted. See `MemoryRateLimitStore`.
+    store: new MemoryRateLimitStore({ capacity: DEFAULT_THROTTLE_CAPACITY }),
     capacity: DEFAULT_THROTTLE_CAPACITY,
     refillPerSecond: DEFAULT_THROTTLE_CAPACITY / (DEFAULT_THROTTLE_WINDOW_MS / 1000),
     ...(clock ? { clock } : {}),
@@ -739,6 +747,27 @@ export function createIdentity(options: IdentityOptions): Identity {
 
   const loginRateLimiter = resolveLimiter(options.loginRateLimiter);
   const totpRateLimiter = resolveLimiter(options.totpRateLimiter);
+
+  // The default limiter is IN-MEMORY, which is a real per-process floor on a
+  // long-lived Node server but resets on every isolate recycle on Workers/edge —
+  // so "on by default" over-promises there: the per-account cap does not actually
+  // hold across requests. Warn ONCE at wiring time (createIdentity, not per
+  // login()) when a default is relied on under workerd, steering to a durable
+  // SQL-backed limiter. A caller who wired BOTH limiters explicitly, or opted out
+  // with `false`, made their own choice and is not nagged (the check is cheap and
+  // short-circuits to a no-op on Node, so it never spams the common path).
+  const usesDefaultLimiter =
+    options.loginRateLimiter === undefined || options.totpRateLimiter === undefined;
+
+  if (isWorkerd() && usesDefaultLimiter) {
+    console.warn(
+      "[@lesto/identity] The default brute-force limiter is in-memory and resets on " +
+        "every isolate recycle on Cloudflare Workers/edge, so the per-account cap does " +
+        "not hold across requests here — 'on by default' over-promises on edge. Wire a " +
+        "durable `loginRateLimiter`/`totpRateLimiter` over `sqlRateLimitStore` for a " +
+        "fleet-wide cap, or pass `false` to opt out deliberately.",
+    );
+  }
 
   const sessions = new Sessions({
     store: sessionStore,

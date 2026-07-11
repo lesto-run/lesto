@@ -1279,6 +1279,75 @@ describe("default login throttle (secure by default, opt-out not opt-in)", () =>
 });
 
 // ---------------------------------------------------------------------------
+// Edge over-promise warning (L-8244c703)
+//
+// The default brute-force limiter is IN-MEMORY: a real per-process floor on a
+// long-lived Node server, but reset on every isolate recycle on Workers/edge, so
+// "on by default" over-promises there. createIdentity warns ONCE at wiring time
+// (not per login()) when a default limiter is relied on under workerd. isWorkerd()
+// keys off `globalThis.navigator.userAgent`, so we stub a Cloudflare-Workers brand
+// to drive the edge branch deterministically on Node and unstub afterward.
+// ---------------------------------------------------------------------------
+
+describe("default limiter edge over-promise warning", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // Construct an identity with no throttle-relevant defaults overridden; the
+  // console.warn spy is the unit under test, so we discard the returned service.
+  function build(opts: Partial<IdentityOptions> = {}): void {
+    createIdentity({
+      db,
+      secret: "test-secret-0123456789abcdefghij",
+      mailer: captureMailer().mailer,
+      verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+      resetUrl: (token) => `https://app.test/reset?token=${token}`,
+      hasher: cheapHasher,
+      clock: () => clock(),
+      ...opts,
+    });
+  }
+
+  it("warns once on workerd when the default (in-memory) limiter is relied on", () => {
+    // A positive Cloudflare-Workers brand is authoritative for isWorkerd().
+    vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    build(); // no limiter wired → the in-memory default
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/in-memory/i);
+  });
+
+  it("does NOT warn on workerd when BOTH limiters are wired explicitly", () => {
+    vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // A caller who wired durable limiters for both paths made their own choice —
+    // nothing to nag. (Never checked here; we only assert the warn is silent.)
+    const durable = new RateLimiter({
+      store: sqlRateLimitStore(sql),
+      capacity: 5,
+      refillPerSecond: 1,
+    });
+    build({ loginRateLimiter: durable, totpRateLimiter: durable });
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("does NOT warn off-edge, even on the default limiter (no spam on Node)", () => {
+    // A recognized Node brand is authoritative-negative for isWorkerd().
+    vi.stubGlobal("navigator", { userAgent: "Node.js/22.0.0" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    build(); // default limiter, but not on edge
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // identity event seam (onEvent) — auth-security item 6
 // ---------------------------------------------------------------------------
 

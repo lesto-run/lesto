@@ -161,3 +161,93 @@ describe("RateLimiter.check", () => {
     expect(persisted?.updatedAt).toBeLessThanOrEqual(after);
   });
 });
+
+// ---------------------------------------------------------------------------
+// MemoryRateLimitStore self-eviction (bounded Map) — L-8244c703
+//
+// The store is keyed by attacker-chosen strings (`login:<email>`), so persisting
+// every key forever is a memory-exhaustion DoS + a per-key leak. Given a capacity
+// the store evicts a bucket the moment it fully refills, because a full bucket ==
+// a first-seen key and so carries no throttle state to lose. The invariant these
+// tests defend: eviction is lossless (an evicted key re-materializes identically)
+// AND a partially-drained, actively-throttled bucket is NEVER evicted — the two
+// halves that make this a bound rather than a limiter bypass.
+// ---------------------------------------------------------------------------
+
+describe("MemoryRateLimitStore self-eviction (bounded Map)", () => {
+  it("does not leak an entry for a cost-0 peek on a first-seen key", async () => {
+    const capped = new MemoryRateLimitStore({ capacity: 5 });
+    const limiter = new RateLimiter({ store: capped, capacity: 5, refillPerSecond: 1, clock });
+
+    // A cost-0 peek (the shape `login()` uses before it decides to throttle)
+    // spends nothing, so the bucket is still full → evicted. The attacker-chosen
+    // key leaves NO permanent entry — the leak/DoS the fix closes.
+    const peek = await limiter.check("login:ghost@example.com", 0);
+
+    expect(peek).toEqual({ allowed: true, remaining: 5, retryAfterMs: 0 });
+    expect(capped.size).toBe(0);
+  });
+
+  it("evicts a bucket once it has fully refilled (the Map shrinks back to 0)", async () => {
+    const capped = new MemoryRateLimitStore({ capacity: 5 });
+    const limiter = new RateLimiter({ store: capped, capacity: 5, refillPerSecond: 1, clock });
+
+    // Spend one token so the bucket is partially drained and must be persisted.
+    await limiter.check("login:ada@example.com"); // 5 -> 4
+    expect(capped.size).toBe(1);
+
+    // Idle long enough to refill to the ceiling (4 -> 5 at 1/sec).
+    advance(1000);
+    await limiter.check("login:ada@example.com", 0); // refills to 5, spends 0
+
+    // Fully refilled == first-seen, so the entry is dropped: no residue.
+    expect(capped.size).toBe(0);
+
+    // And it re-materializes identically — eviction lost no state.
+    const fresh = await limiter.check("login:ada@example.com", 0);
+    expect(fresh).toEqual({ allowed: true, remaining: 5, retryAfterMs: 0 });
+  });
+
+  it("never evicts a partially-drained (throttled) bucket — no bypass under a flood", async () => {
+    const capped = new MemoryRateLimitStore({ capacity: 3 });
+    const limiter = new RateLimiter({ store: capped, capacity: 3, refillPerSecond: 1, clock });
+
+    // Drain the target's bucket to empty — it is now actively throttled, below
+    // capacity, so it MUST persist (evicting it would reset an in-progress cap).
+    expect((await limiter.check("login:target")).allowed).toBe(true); // 3 -> 2
+    expect((await limiter.check("login:target")).allowed).toBe(true); // 2 -> 1
+    expect((await limiter.check("login:target")).allowed).toBe(true); // 1 -> 0
+    expect((await limiter.check("login:target")).allowed).toBe(false); // drained
+    expect(capped.size).toBe(1);
+
+    // Flood 100 distinct first-seen keys — each is a full bucket that self-evicts
+    // on write, so the Map never accretes them AND (unlike an LRU/size cap) the
+    // flood cannot push the throttled target out. Only the target remains: that is
+    // the bypass this eviction rule is specifically shaped to forbid.
+    for (let i = 0; i < 100; i++) {
+      await limiter.check(`login:flood-${i}`, 0);
+    }
+
+    expect(capped.size).toBe(1);
+
+    // The target is STILL throttled — the flood bought the attacker nothing.
+    expect((await limiter.check("login:target")).allowed).toBe(false);
+  });
+
+  it("with NO capacity, always persists — the backward-compatible default", async () => {
+    const uncapped = new MemoryRateLimitStore(); // no capacity wired
+    const limiter = new RateLimiter({ store: uncapped, capacity: 5, refillPerSecond: 1, clock });
+
+    // Even a full, untouched bucket (a cost-0 peek on a first-seen key) is
+    // retained, exactly as before the eviction option existed — a caller relying
+    // on the old always-persist semantics is not broken.
+    await limiter.check("login:ada", 0);
+    expect(uncapped.size).toBe(1);
+
+    // Still retained after a full refill, too (the branch that would evict when a
+    // capacity IS set).
+    advance(10_000);
+    await limiter.check("login:ada", 0);
+    expect(uncapped.size).toBe(1);
+  });
+});
