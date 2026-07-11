@@ -17,7 +17,7 @@ import { createApp } from "@lesto/kernel";
 import type { App, KernelDatabase } from "@lesto/kernel";
 import { createLiveDataHttpHandlers, createShapeEngine } from "@lesto/live-server";
 import type { ShapeEngine } from "@lesto/live-server";
-import { contentTypeOf, nodeStaticReader } from "@lesto/runtime";
+import { contentTypeOf, nodeStaticReader, staticCacheControl } from "@lesto/runtime";
 import { lesto } from "@lesto/web";
 
 import { notes } from "./schema";
@@ -60,7 +60,18 @@ async function serveBuiltFile(relativePath: string): Promise<{
     };
   }
 
-  return { status: 200, headers: { "content-type": contentTypeOf(relativePath) }, body };
+  return {
+    status: 200,
+    // `staticCacheControl` freezes a content-hashed path for a year and sends
+    // `no-cache` for everything else — including the fixed, unhashed `index.js`
+    // this build emits, so a stale cached copy can never outlive a rebuild and
+    // request a since-deleted worker chunk (see `vite.config.ts`).
+    headers: {
+      "content-type": contentTypeOf(relativePath),
+      "cache-control": staticCacheControl(relativePath),
+    },
+    body,
+  };
 }
 
 /** Boot the durable-store demo: the shape stream, the write, and the built client bundle. */

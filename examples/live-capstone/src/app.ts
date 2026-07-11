@@ -34,7 +34,7 @@ import {
 } from "@lesto/live-server";
 import type { PgReplicationSource, ShapeEngine } from "@lesto/live-server";
 import type { ShapeDefinition } from "@lesto/live-protocol";
-import { contentTypeOf, nodeStaticReader } from "@lesto/runtime";
+import { contentTypeOf, nodeStaticReader, staticCacheControl } from "@lesto/runtime";
 import { lesto } from "@lesto/web";
 import type { Context } from "@lesto/web";
 
@@ -382,5 +382,16 @@ async function serveBuiltFile(
     };
   }
 
-  return { status: 200, headers: { "content-type": contentTypeOf(relativePath) }, body: built };
+  return {
+    status: 200,
+    // `staticCacheControl` freezes a content-hashed path for a year and sends
+    // `no-cache` for everything else — including the fixed, unhashed `index.js`
+    // this build emits, so a stale cached copy can never outlive a rebuild and
+    // request a since-deleted worker chunk (see `vite.config.ts`).
+    headers: {
+      "content-type": contentTypeOf(relativePath),
+      "cache-control": staticCacheControl(relativePath),
+    },
+    body: built,
+  };
 }
