@@ -12,6 +12,7 @@ import { DEFAULT_RENDER_DEADLINE_MS } from "../src/render-page";
 
 import { runWithContext } from "../src/context";
 import { applyUiDialect, lesto } from "../src/lesto";
+import { notFound } from "../src/not-found";
 import { Context as RequestCtx } from "../src/handler-context";
 import { renderPageResponse } from "../src/render-page";
 import type { Context } from "../src/handler-context";
@@ -499,6 +500,82 @@ describe("lesto().data() + a defineIsland on a page (the canonical island)", () 
   });
 });
 
+describe("notFound() + load status (F18)", () => {
+  it("answers a real 404 (not a 500) when a bare page calls notFound() with no boundary", async () => {
+    // A hand-written `.page()` has no `not-found.tsx` boundary, so the throw escapes
+    // to the shell and the render rejects — we answer a plain 404, not a 500. (The
+    // boundary case — a streamed shell + a client-recovered view + a 404 STATUS —
+    // is covered in file-routes.test.tsx.)
+    const app = lesto().page("/listings/:id", {
+      component: () => {
+        notFound();
+      },
+    });
+
+    const response = await app.handle("GET", "/listings/99");
+
+    expect(response.status).toBe(404);
+    expect(response.body).toBe("Not Found");
+  });
+
+  it("answers a real 404 (not a 500) when a LOADER calls notFound()", async () => {
+    const app = lesto().page("/listings/:id", {
+      load: () => {
+        notFound();
+      },
+      component: () => createElement("main", null, "never"),
+    });
+
+    const response = await app.handle("GET", "/listings/99");
+
+    expect(response.status).toBe(404);
+    expect(response.body).toBe("Not Found");
+  });
+
+  it("lets a loader set the response status via c.status()", async () => {
+    const app = lesto().page("/gone", {
+      load: (c: Context) => {
+        c.status(410);
+
+        return { note: "gone" };
+      },
+      component: () => createElement("main", null, "gone"),
+    });
+
+    const response = await app.handle("GET", "/gone");
+
+    expect(response.status).toBe(410);
+    // The page still rendered its document with the overridden status.
+    expect(await drain(response)).toContain("<html");
+  });
+
+  it("re-throws a non-notFound loader error (a real bug is not masked as a 404)", async () => {
+    const app = lesto().page("/boom", {
+      load: () => {
+        throw new Error("real loader bug");
+      },
+      component: () => createElement("main", null, "never"),
+    });
+
+    await expect(app.handle("GET", "/boom")).rejects.toThrow("real loader bug");
+  });
+
+  it("re-throws a non-notFound render error (a shell error is not masked as a 404)", async () => {
+    // A bare page whose render throws a REAL error rejects the shell; the streaming
+    // catch must re-raise it (only the notFound signal becomes a 404), so it stays
+    // the server's error to own — not a silent 404.
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const app = lesto().page("/boom", {
+      component: () => {
+        throw new Error("render boom");
+      },
+    });
+
+    await expect(app.handle("GET", "/boom")).rejects.toThrow("render boom");
+  });
+});
+
 // A PRIVATE source + a DEFERRED (ssr:false) island that binds it — estate's
 // "Account" shape: a cacheable static page whose island fetches per-user data on
 // the client, while a dynamic page inlines the same data per request.
@@ -765,6 +842,42 @@ describe("the server-render dialect (the matched pair)", () => {
     expect(typeof response.body).toBe("string");
     expect(response.body as string).toContain("<main>preact</main>");
     expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
+  });
+
+  it("answers a 404 when a preact buffered render throws notFound() (F18)", async () => {
+    // A preact-dialect render is buffered (no client-recovery twin), so a
+    // notFound() thrown in render propagates out of `renderToString` — caught and
+    // answered as a real 404.
+    const notFoundPreact = {
+      dialect: "preact" as const,
+      renderToString: (): string => notFound(),
+      renderToStaticMarkup: () => "",
+    };
+
+    const app = lesto()
+      .renderer(notFoundPreact)
+      .page("/p", { component: () => createElement("main", null, "x") });
+
+    const response = await app.handle("GET", "/p");
+
+    expect(response.status).toBe(404);
+    expect(response.body).toBe("Not Found");
+  });
+
+  it("re-throws a non-notFound error from a preact buffered render", async () => {
+    const boomPreact = {
+      dialect: "preact" as const,
+      renderToString: (): string => {
+        throw new Error("preact boom");
+      },
+      renderToStaticMarkup: () => "",
+    };
+
+    const app = lesto()
+      .renderer(boomPreact)
+      .page("/p", { component: () => createElement("main", null, "x") });
+
+    await expect(app.handle("GET", "/p")).rejects.toThrow("preact boom");
   });
 
   it("still STREAMS under the react dialect (a react renderer is the default path)", async () => {

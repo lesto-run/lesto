@@ -655,7 +655,7 @@ describe("applyFileRoutes — loading / error / not-found boundaries", () => {
     expect(await drain(response)).toContain("<html");
   });
 
-  it("keeps the shell intact when a page calls notFound() under a 404 boundary", async () => {
+  it("answers a real 404 when a page calls notFound(), keeping the client-recovery shell (F18)", async () => {
     const missing = page("listings", "[id]");
     const nf = notFoundFile("listings");
 
@@ -667,7 +667,9 @@ describe("applyFileRoutes — loading / error / not-found boundaries", () => {
 
     const response = await app.handle("GET", "/listings/99");
 
-    expect(response.status).toBe(200);
+    // F18: a crawler / no-JS client now sees a real 404, not an empty 200…
+    expect(response.status).toBe(404);
+    // …while the shell still streams so the JS client recovers the boundary view.
     expect(await drain(response)).toContain("<html");
   });
 

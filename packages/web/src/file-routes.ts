@@ -34,9 +34,15 @@ import type { DiscoveredFile, FileRoute } from "@lesto/router";
 import type { Context } from "./handler-context";
 import { WebError } from "./errors";
 import type { Handler, Lesto } from "./lesto";
+import { isNotFoundSignal } from "./not-found";
 import { wrap } from "./render-page";
 import type { Layout, PageDef } from "./render-page";
 import type { AnyLestoResponse } from "./types";
+
+// `notFound()` and its signal now live in `./not-found` (a module BOTH this file
+// and `render-page.ts` can import without a cycle — see there). Re-exported here so
+// the public `@lesto/web` surface (and every existing importer) is unchanged.
+export { notFound } from "./not-found";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -509,57 +515,6 @@ function toPageDef(module: LoadedRouteModule, pattern: string): PageDef {
   }
 
   return exported as PageDef;
-}
-
-/**
- * The sentinel a page throws to render its nearest `not-found` boundary instead of
- * its own output — the file-route convention's `notFound()` signal.
- *
- * A page (or a component it renders) calls `notFound()` to mean "this URL matched a
- * route, but the thing it addresses does not exist" (a `/listings/:id` for an id
- * with no row). Throwing during render unwinds to the nearest {@link NotFoundBoundary}
- * (the page's nearest `not-found.tsx`), which renders that boundary's component —
- * the per-route 404 view — rather than the generic transport 404. The signal is a
- * distinct symbol-branded class so the boundary catches ONLY this, never masking a
- * real bug as a 404 (a thrown `TypeError` still hits the `error` boundary).
- */
-const NOT_FOUND_SIGNAL = Symbol.for("lesto.file-route.notFound");
-
-/** A thrown `notFound()` signal — branded so {@link NotFoundBoundary} catches only it. */
-class NotFoundSignal extends Error {
-  readonly [NOT_FOUND_SIGNAL] = true;
-
-  constructor() {
-    super("notFound() was called");
-
-    this.name = "NotFoundSignal";
-  }
-}
-
-/**
- * Signal "this matched route addresses nothing" from inside a page (or layout)
- * component's RENDER, rendering the nearest `not-found.tsx` boundary.
- *
- * Throws the {@link NotFoundSignal} sentinel, which unwinds to the page's nearest
- * {@link NotFoundBoundary}. Use it during render where the resource a resolved
- * route names is absent — read the loaded value and call it if missing:
- * `if (props.row === undefined) notFound();`. Returns `never`, so TypeScript
- * narrows the value as present after the call.
- *
- * Two honest limits today (tracked follow-ups in docs/plans/dx-parity.md W5, NOT
- * regressions): (1) it works from RENDER, not from a `load` loader — a loader runs
- * before the boundary exists, so a `notFound()` thrown there propagates as a 500;
- * return the absence to the component and call `notFound()` there. (2) Under React's
- * streaming SSR the boundary recovers on the CLIENT, so the 404 view appears after
- * hydration and the HTTP status stays 200 (a crawler / no-JS client sees an empty 200).
- */
-export function notFound(): never {
-  throw new NotFoundSignal();
-}
-
-/** True iff `value` is the branded `notFound()` sentinel (never an ordinary error). */
-function isNotFoundSignal(value: unknown): value is NotFoundSignal {
-  return value instanceof Error && NOT_FOUND_SIGNAL in value;
 }
 
 /**

@@ -53,6 +53,13 @@ export class Context<Path extends string = string> {
   // handler downstream of it.
   private readonly vars = new Map<string, unknown>();
 
+  // The status a PAGE render should answer with, when a loader/component overrode
+  // the default 200 via {@link status}. Undefined = the render's own status stands
+  // (200, or a 404 the renderer derives from a `notFound()` signal). Read by
+  // `render-page.ts`; it has no effect on the `c.json`/`c.text`/… helpers, which
+  // already carry their own status.
+  private pageStatus: number | undefined;
+
   constructor(request: LestoRequest) {
     this.currentRequest = request;
   }
@@ -129,6 +136,27 @@ export class Context<Path extends string = string> {
   /** Read a value a middleware stashed with {@link set}, or `undefined` if unset. */
   get<T = unknown>(key: string): T | undefined {
     return this.vars.get(key) as T | undefined;
+  }
+
+  /**
+   * Set the HTTP status a PAGE render answers with — the seam a `load` loader (or a
+   * component, before it renders) uses to override the default 200 (e.g.
+   * `c.status(404)` for a resource that resolved to nothing, `c.status(410)` for a
+   * gone one). The renderer reads {@link statusOverride} after `load` runs.
+   *
+   * It governs the page-render path only; an API handler already sets its status on
+   * the response it returns (`c.json(data, 201)`), so it has no need of this.
+   */
+  status(code: number): void {
+    this.pageStatus = code;
+  }
+
+  /**
+   * The status a loader/component set via {@link status}, or `undefined` when none
+   * was set (the render's own status stands). Read by the page renderer.
+   */
+  get statusOverride(): number | undefined {
+    return this.pageStatus;
   }
 
   /**

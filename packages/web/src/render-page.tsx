@@ -28,6 +28,7 @@ import type { ServerRenderer } from "@lesto/ui/server";
 import type { ZodType } from "zod";
 
 import type { Context } from "./handler-context";
+import { isNotFoundSignal } from "./not-found";
 import type { AnyLestoResponse } from "./types";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -180,6 +181,21 @@ const badRequest = (): AnyLestoResponse => ({
   status: 400,
   headers: { "content-type": "text/plain" },
   body: "Bad Request",
+});
+
+/**
+ * A fresh 404 response for a `notFound()` signal the renderer catches OUTSIDE the
+ * client-recovering render (a loader throw, or a Preact buffered render) — a real
+ * HTTP 404 rather than a 500 (F18). A FACTORY, per the per-request-object invariant
+ * {@link badRequest} keeps. The render-time streaming case keeps the not-found
+ * boundary's client-recovery body and only flips the STATUS (see
+ * {@link renderPageResponse}); this plain body is the loader/buffered path, where
+ * no boundary can render.
+ */
+const notFoundResponse = (): AnyLestoResponse => ({
+  status: 404,
+  headers: { "content-type": "text/plain" },
+  body: "Not Found",
 });
 
 /**
@@ -390,7 +406,19 @@ export async function renderPageResponse(
   // boundary — the same erasure `.page()` makes when it stores the def.
   const load = def.load as ((c: Context, search: unknown) => MaybePromise<unknown>) | undefined;
 
-  const loaded = ((load === undefined ? undefined : await load(c, search)) ?? {}) as LoadedProps;
+  let loaded: LoadedProps;
+
+  try {
+    loaded = ((load === undefined ? undefined : await load(c, search)) ?? {}) as LoadedProps;
+  } catch (error) {
+    // `notFound()` thrown from a LOADER runs before the component (and its
+    // `not-found.tsx` boundary) exists, so it cannot render that boundary — but it
+    // must answer a real 404, not the 500 an uncaught throw would become (F18).
+    // Prefer calling `notFound()` from render for the styled boundary view.
+    if (isNotFoundSignal(error)) return notFoundResponse();
+
+    throw error;
+  }
 
   const page = wrap(layouts, createElement(def.component as ComponentType<LoadedProps>, loaded));
 
@@ -427,6 +455,11 @@ export async function renderPageResponse(
     createElement("body", null, content),
   );
 
+  // The base status: 200, or a loader/component override set via `c.status(...)`
+  // (F18 — the seam a `load` uses to answer, say, a 410 or a custom code). A
+  // render-time `notFound()` still forces a 404 below, whichever this is.
+  let status = c.statusOverride ?? 200;
+
   // The matched-pair fork (ADR 0008). React (the default, and an explicit React
   // renderer): stream shell-first through React 19's `renderToReadableStream`,
   // with the render deadline + client-disconnect abort the streaming path
@@ -435,16 +468,65 @@ export async function renderPageResponse(
   // Preact's server renderer has no streaming twin carrying the same
   // onError/abort surface, so v1 takes the simpler-correct buffered path. Both
   // produce the same document content; only React gets progressive flush.
-  const body: AnyLestoResponse["body"] =
-    options.serverRenderer !== undefined && options.serverRenderer.dialect === "preact"
-      ? options.serverRenderer.renderToString(documentElement)
-      : await renderPageStream(
-          { element: documentElement, errors: [], islands: [] },
-          {
-            renderTimeoutMs: options.renderDeadlineMs ?? DEFAULT_RENDER_DEADLINE_MS,
-            ...(c.signal === undefined ? {} : { signal: c.signal }),
-          },
-        );
+  let body: AnyLestoResponse["body"];
+
+  if (options.serverRenderer !== undefined && options.serverRenderer.dialect === "preact") {
+    // Preact renders buffered: a `notFound()` thrown in render propagates out of
+    // `renderToString` (no client-recovery twin), so catch it and answer a 404.
+    try {
+      body = options.serverRenderer.renderToString(documentElement);
+    } catch (error) {
+      if (isNotFoundSignal(error)) return notFoundResponse();
+
+      throw error;
+    }
+  } else {
+    // React streaming: a `notFound()` thrown in render reaches the stream's error
+    // sink (React switches that subtree to client recovery and keeps the shell). We
+    // flip the response STATUS to 404 — so a crawler / no-JS client sees a real 404
+    // — while the JS client still recovers the `not-found.tsx` boundary from the
+    // streamed shell (F18: the fix for the empty-200-to-crawlers bug). Any OTHER
+    // render error stays observable on the console, as the default sink did — the
+    // one seam the buffered `renderPageStreamToString` uses to detect an incomplete
+    // document does not exist on the live stream (the shell headers are already
+    // committed), so the status flip is only sound for a signal raised while the
+    // shell is still rendering (a synchronous `notFound()` in the page).
+    let notFoundSignalled = false;
+
+    const onError = (error: unknown): void => {
+      if (isNotFoundSignal(error)) {
+        notFoundSignalled = true;
+
+        return;
+      }
+
+      console.error("[lesto] streamed render error", error);
+    };
+
+    try {
+      body = await renderPageStream(
+        { element: documentElement, errors: [], islands: [] },
+        {
+          onError,
+          renderTimeoutMs: options.renderDeadlineMs ?? DEFAULT_RENDER_DEADLINE_MS,
+          ...(c.signal === undefined ? {} : { signal: c.signal }),
+        },
+      );
+    } catch (error) {
+      // A `notFound()` with NO `not-found.tsx` boundary above it escapes to the
+      // shell, so `renderPageStream` REJECTS (the shell itself errored) rather than
+      // client-recovering. There is no boundary view to stream, so answer a plain
+      // 404 — still a real 404, never the 500 the bare throw would become.
+      if (isNotFoundSignal(error)) return notFoundResponse();
+
+      throw error;
+    }
+
+    // The page threw `notFound()` under a boundary: React kept the shell (streaming
+    // it for the client to recover the boundary view) and reported the signal to
+    // `onError`. Flip the STATUS to 404 so a crawler / no-JS client sees a real 404.
+    if (notFoundSignalled) status = 404;
+  }
 
   // A dynamic page that could inline private data must not be shared-cached
   // (review 2d). Stamped here, beside the content-type, so it covers the body
@@ -456,7 +538,7 @@ export async function renderPageResponse(
   }
 
   return {
-    status: 200,
+    status,
     headers,
     body,
   };
