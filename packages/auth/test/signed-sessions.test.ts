@@ -96,6 +96,23 @@ describe("SignedSessions", () => {
     expect(sessions.verify(`${claim ?? ""}.deadbeef`)).toBeUndefined();
   });
 
+  // `verify` is documented total — it must NEVER throw. A signature with the same
+  // UTF-16 string length as the real 64-hex-char HMAC but a multi-byte char (legal
+  // in a header/cookie) is 65 UTF-8 bytes; guarding on `string.length` would pass
+  // it to `timingSafeEqual`, which throws RangeError on the byte-length mismatch.
+  // The byte-length guard must return `undefined`, not throw.
+  it("rejects a same-string-length non-ASCII signature without throwing", () => {
+    const sessions = new SignedSessions({ secret: SECRET, clock: () => 1000 });
+
+    const [claim] = sessions.issue("user_1", 60_000).split(".");
+    const sig = `ÿ${"a".repeat(63)}`; // 64 UTF-16 units, 65 UTF-8 bytes
+
+    expect(sig).toHaveLength(64);
+    expect(Buffer.byteLength(sig, "utf8")).toBe(65);
+    expect(() => sessions.verify(`${claim ?? ""}.${sig}`)).not.toThrow();
+    expect(sessions.verify(`${claim ?? ""}.${sig}`)).toBeUndefined();
+  });
+
   it("rejects a malformed token that is not two parts", () => {
     const sessions = new SignedSessions({ secret: SECRET, clock: () => 1000 });
 

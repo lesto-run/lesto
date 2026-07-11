@@ -55,13 +55,21 @@ function sign(encodedClaim: string, secret: string): string {
 
 /** True iff two hex signatures are equal, in time independent of where they differ. */
 function signaturesMatch(presented: string, expected: string): boolean {
-  // `timingSafeEqual` throws on unequal lengths, so guard first — and an honest
-  // length mismatch is already a non-match, no constant-time concern there.
-  if (presented.length !== expected.length) {
+  // `timingSafeEqual` throws on unequal BYTE lengths, so guard on the encoded
+  // buffers — NOT `string.length`. A presented signature with the same UTF-16
+  // string length but a multi-byte char (legal latin-1 in a header/cookie) has a
+  // longer UTF-8 byte length; guarding on `string.length` would let it reach
+  // `timingSafeEqual`, which then throws RangeError — breaking `verify`'s "never
+  // throws" contract and turning a tampered token into a 500. An honest length
+  // mismatch is already a non-match, so no constant-time concern there.
+  const presentedBytes = Buffer.from(presented);
+  const expectedBytes = Buffer.from(expected);
+
+  if (presentedBytes.length !== expectedBytes.length) {
     return false;
   }
 
-  return timingSafeEqual(Buffer.from(presented), Buffer.from(expected));
+  return timingSafeEqual(presentedBytes, expectedBytes);
 }
 
 /** Decode the claim half of a token, or `undefined` if it is not a well-formed claim. */
