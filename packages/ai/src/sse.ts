@@ -17,20 +17,43 @@
 
 import { AiError } from "./errors";
 
-import type { StopReason, StreamDelta, StreamFinal } from "./types";
+import type { StopReason, StreamDelta, StreamFinal, ToolCall, Usage } from "./types";
 
 /**
- * One interpreted stream frame — an ADDITIVE bag: a single frame may carry a text delta AND a
- * usage count / the stop reason together (an OpenAI chunk can; Anthropic frames happen to
+ * One fragment of a streamed tool call (finding F5). Both providers stream a tool call the same
+ * way — an ANNOUNCE fragment (the `id` + `name`, no args) followed by argument-JSON chunks — and
+ * both correlate the pieces by a small integer `index` (Anthropic's content-block index; OpenAI's
+ * tool-call index). The interpreter's only job is to project one wire frame onto this shape; the
+ * engine owns the stateful accumulation (concatenate `argsFragment`s by `index`) and the final
+ * `JSON.parse`, so the interpreters stay pure and total and a third provider is still one file.
+ */
+export interface ToolCallFragment {
+  /** The tool call this fragment belongs to; fragments sharing an `index` accumulate into one call. */
+  readonly index: number;
+  /** The provider's call id — on the announce fragment. `undefined` on the argument-chunk fragments. */
+  readonly id?: string | undefined;
+  /** The tool name — on the announce fragment. `undefined` on the argument-chunk fragments. */
+  readonly name?: string | undefined;
+  /** A chunk of the arguments-JSON string, concatenated across fragments and parsed once at drain. */
+  readonly argsFragment?: string | undefined;
+}
+
+/**
+ * One interpreted stream frame — an ADDITIVE bag: a single frame may carry a text delta, a usage
+ * count / the stop reason, AND one-or-more {@link ToolCallFragment}s together (an OpenAI chunk can
+ * carry text + finish_reason, or several tool-call fragments at once; Anthropic frames happen to
  * populate only one field-group at a time, which the bag represents identically). `parseSseStream`
- * yields the `text` and folds the rest into the {@link StreamFinal} it returns. An empty `{}`
- * (or `undefined`) is a frame that contributed nothing — both are treated as a skip.
+ * yields the `text`, accumulates the `toolCalls` fragments, and folds the rest into the
+ * {@link StreamFinal} it returns. An empty `{}` (or `undefined`) is a frame that contributed
+ * nothing — both are treated as a skip.
  */
 export interface ParsedFrame {
   readonly text?: string;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly stopReason?: StopReason;
+  /** Tool-call fragments this frame carried (F5) — accumulated by `index`, never yielded raw. */
+  readonly toolCalls?: readonly ToolCallFragment[];
 }
 
 /**
@@ -81,10 +104,28 @@ export async function* parseSseStream(
   let outputTokens: number | undefined;
   let stopReason: StopReason | undefined;
 
+  // Streamed tool calls (F5), accumulated by their `index` as the fragments arrive: the announce
+  // fragment sets id/name, the argument-JSON chunks concatenate onto `args`. Assembled into
+  // complete `ToolCall`s (id/name + parsed `input`) once the stream drains — never yielded raw.
+  const toolAccumulators = new Map<number, ToolCallAccumulator>();
+
   const absorb = (parsed: ParsedFrame): void => {
     if (parsed.inputTokens !== undefined) inputTokens = parsed.inputTokens;
     if (parsed.outputTokens !== undefined) outputTokens = parsed.outputTokens;
     if (parsed.stopReason !== undefined) stopReason = parsed.stopReason;
+
+    if (parsed.toolCalls !== undefined) {
+      for (const fragment of parsed.toolCalls) {
+        let accumulator = toolAccumulators.get(fragment.index);
+        if (accumulator === undefined) {
+          accumulator = { id: "", name: "", args: "" };
+          toolAccumulators.set(fragment.index, accumulator);
+        }
+        if (fragment.id !== undefined) accumulator.id = fragment.id;
+        if (fragment.name !== undefined) accumulator.name = fragment.name;
+        if (fragment.argsFragment !== undefined) accumulator.args += fragment.argsFragment;
+      }
+    }
   };
 
   try {
@@ -145,19 +186,37 @@ export async function* parseSseStream(
       absorb(last);
     }
 
+    // Assemble any streamed tool calls from their accumulated fragments — id/name from the announce
+    // fragment, the arguments concatenated across the JSON-delta fragments and parsed once here (the
+    // engine owns JSON parsing for tool args as it does for the frame body). A tool call whose args
+    // never form valid JSON fails LOUD as AI_STREAM_MALFORMED rather than fabricating `{}` or being
+    // dropped silently (F5): a partial tool call is useless — and unsafe — to run. Each complete
+    // call is yielded inline as its own delta (`text: ""`) so a `for-await` consumer sees it without
+    // reassembling fragments, and all of them ride on the returned `toolCalls`.
+    const toolCalls = assembleToolCalls(toolAccumulators);
+
+    for (const toolCall of toolCalls) {
+      yield { text: "", toolCall };
+    }
+
     // Surface the final accounting as the generator's RETURN value (`streamText` reads it via
     // `yield*`). `usage` is reported ONLY when BOTH counts genuinely arrived — never a fabricated
     // zero: a stream torn before both landed reports no usage, exactly the "never received" case
-    // `ai.streaming = true` marks as expected. When nothing meaningful arrived, the whole value is
-    // `undefined`.
+    // `ai.streaming = true` marks as expected. When nothing meaningful arrived — no usage, no stop
+    // reason, and no tool call — the whole value is `undefined`.
+    const final: { usage?: Usage; stopReason?: StopReason; toolCalls?: readonly ToolCall[] } = {};
+
     if (inputTokens !== undefined && outputTokens !== undefined) {
-      return {
-        usage: { inputTokens, outputTokens },
-        ...(stopReason === undefined ? {} : { stopReason }),
-      };
+      final.usage = { inputTokens, outputTokens };
+    }
+    if (stopReason !== undefined) {
+      final.stopReason = stopReason;
+    }
+    if (toolCalls.length > 0) {
+      final.toolCalls = toolCalls;
     }
 
-    return stopReason === undefined ? undefined : { stopReason };
+    return Object.keys(final).length === 0 ? undefined : final;
   } finally {
     // Release the reader / cancel the upstream body on EVERY exit — a normal drain, a thrown frame,
     // AND an early `for-await` `break` (which resumes the generator here via its `return()`).
@@ -206,4 +265,62 @@ function parseFrame(frame: string, interpret: FrameInterpreter): ParsedFrame | u
   }
 
   return interpret(json);
+}
+
+/** The growing state of one streamed tool call, keyed by its `index` while fragments arrive. */
+interface ToolCallAccumulator {
+  id: string;
+  name: string;
+  args: string;
+}
+
+/**
+ * Assemble the accumulated tool-call fragments into complete {@link ToolCall}s, in `index` order —
+ * the streamed counterpart to the non-streamed providers' tool-call parsing. The concatenated
+ * argument string is parsed here (empty → `{}`, a legitimate no-arg call); anything that is not a
+ * JSON object fails LOUD as `AI_STREAM_MALFORMED` (F5).
+ */
+function assembleToolCalls(accumulators: Map<number, ToolCallAccumulator>): ToolCall[] {
+  return [...accumulators.entries()]
+    .toSorted(([a], [b]) => a - b)
+    .map(([, accumulator]) => ({
+      id: accumulator.id,
+      name: accumulator.name,
+      input: parseToolArgs(accumulator.args),
+    }));
+}
+
+/**
+ * Parse a streamed tool call's concatenated `arguments` string into the normalized object `input`.
+ *
+ * An empty string is a no-arg call → `{}` (legitimate; both wire formats emit `""` for a tool that
+ * takes none). A non-empty string that is not a JSON object is a malformed/torn tool-call stream →
+ * `AI_STREAM_MALFORMED`, never a silent `{}` or a dropped call: a partial tool call is unusable.
+ */
+function parseToolArgs(raw: string): Record<string, unknown> {
+  if (raw === "") {
+    return {};
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new AiError("AI_STREAM_MALFORMED", "Streamed tool call arguments were not valid JSON.", {
+      arguments: raw,
+    });
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new AiError(
+      "AI_STREAM_MALFORMED",
+      "Streamed tool call arguments were not a JSON object.",
+      {
+        arguments: raw,
+      },
+    );
+  }
+
+  return parsed as Record<string, unknown>;
 }

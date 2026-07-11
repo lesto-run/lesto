@@ -56,6 +56,9 @@ const baseOptions = (m: ReturnType<typeof createOpenAICompatible>): GenerateOpti
   messages: [{ role: "user", content: "Hello" }],
 });
 
+/** Build one SSE `data:` frame from a JSON payload — avoids hand-escaping nested tool-call JSON. */
+const data = (obj: unknown): string => `data: ${JSON.stringify(obj)}\n\n`;
+
 describe("createOpenAICompatible — request assembly", () => {
   it("posts to <baseURL>/chat/completions, sets content-type, and defaults the model id", async () => {
     const m = model();
@@ -711,6 +714,223 @@ describe("parseStream", () => {
     }
 
     expect(deltas).toEqual(["Hi"]);
+  });
+
+  it("accumulates delta.tool_calls fragments into a complete tool call in the deltas AND the final (finding F5)", async () => {
+    // A real OpenAI tool-call stream: the first tool_calls delta carries id + name (+ empty args);
+    // subsequent deltas carry argument-JSON fragments under the same tool-call index; a later chunk
+    // sets finish_reason "tool_calls", then the terminal include_usage chunk lands. Before F5 the
+    // delta.tool_calls were ignored, so a streamed tool turn silently produced nothing.
+    const frames = [
+      data({
+        choices: [
+          {
+            delta: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "get_weather", arguments: "" },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      data({
+        choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"city":' } }] } }],
+      }),
+      data({
+        choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"Paris"}' } }] } }],
+      }),
+      data({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+      data({ choices: [], usage: { prompt_tokens: 8, completion_tokens: 12 } }),
+      "data: [DONE]\n\n",
+    ];
+
+    const deltas: StreamDelta[] = [];
+    const stream = model().parseStream(sseResponse(frames));
+    let next = await stream.next();
+    while (!next.done) {
+      deltas.push(next.value);
+      next = await stream.next();
+    }
+    const final = next.value;
+
+    const expectedCall = { id: "call_1", name: "get_weather", input: { city: "Paris" } };
+
+    expect(deltas).toEqual([{ text: "", toolCall: expectedCall }]);
+    expect(final).toEqual({
+      usage: { inputTokens: 8, outputTokens: 12 },
+      stopReason: "tool_use",
+      toolCalls: [expectedCall],
+    });
+  });
+
+  it("assembles two parallel tool calls carried under distinct tool_calls indices", async () => {
+    // OpenAI streams parallel tool calls under distinct `index` values; a single chunk can even
+    // carry fragments for more than one index. They must accumulate independently and surface in
+    // index order.
+    const frames = [
+      data({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_a",
+                  type: "function",
+                  function: { name: "alpha", arguments: "" },
+                },
+                {
+                  index: 1,
+                  id: "call_b",
+                  type: "function",
+                  function: { name: "beta", arguments: "" },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      data({
+        choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"a":1}' } }] } }],
+      }),
+      data({
+        choices: [{ delta: { tool_calls: [{ index: 1, function: { arguments: '{"b":2}' } }] } }],
+      }),
+      data({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+      "data: [DONE]\n\n",
+    ];
+
+    const deltas: StreamDelta[] = [];
+    const stream = model().parseStream(sseResponse(frames));
+    let next = await stream.next();
+    while (!next.done) {
+      deltas.push(next.value);
+      next = await stream.next();
+    }
+    const final = next.value;
+
+    expect(deltas).toEqual([
+      { text: "", toolCall: { id: "call_a", name: "alpha", input: { a: 1 } } },
+      { text: "", toolCall: { id: "call_b", name: "beta", input: { b: 2 } } },
+    ]);
+    expect(final).toEqual({
+      stopReason: "tool_use",
+      toolCalls: [
+        { id: "call_a", name: "alpha", input: { a: 1 } },
+        { id: "call_b", name: "beta", input: { b: 2 } },
+      ],
+    });
+  });
+
+  it("treats a no-arg streamed tool call (empty accumulated arguments) as input {}", async () => {
+    const frames = [
+      data({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_x",
+                  type: "function",
+                  function: { name: "now", arguments: "" },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      data({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+      "data: [DONE]\n\n",
+    ];
+
+    const stream = model().parseStream(sseResponse(frames));
+    const deltas: StreamDelta[] = [];
+    let next = await stream.next();
+    while (!next.done) {
+      deltas.push(next.value);
+      next = await stream.next();
+    }
+
+    expect(deltas).toEqual([{ text: "", toolCall: { id: "call_x", name: "now", input: {} } }]);
+  });
+
+  it("fails LOUD with AI_STREAM_MALFORMED when accumulated tool-call arguments are not valid JSON (never a silent partial call)", async () => {
+    // A tool call whose accumulated argument fragments never form valid JSON (a torn/garbled args
+    // stream). Partial args are useless — and dangerous — to a caller, so the engine refuses loud
+    // rather than fabricating `{}` or dropping the call silently.
+    const frames = [
+      data({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_y",
+                  type: "function",
+                  function: { name: "f", arguments: '{"a":' },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      data({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+      "data: [DONE]\n\n",
+    ];
+
+    const iterate = async (): Promise<void> => {
+      for await (const _ of model().parseStream(sseResponse(frames))) {
+        // drain
+      }
+    };
+
+    const error = await iterate().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AiError);
+    expect((error as AiError).code).toBe("AI_STREAM_MALFORMED");
+  });
+
+  it("fails LOUD with AI_STREAM_MALFORMED when accumulated tool-call arguments parse but are not an object", async () => {
+    const frames = [
+      data({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_z",
+                  type: "function",
+                  function: { name: "f", arguments: "[1,2]" },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      data({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+      "data: [DONE]\n\n",
+    ];
+
+    const iterate = async (): Promise<void> => {
+      for await (const _ of model().parseStream(sseResponse(frames))) {
+        // drain
+      }
+    };
+
+    const error = await iterate().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AiError);
+    expect((error as AiError).code).toBe("AI_STREAM_MALFORMED");
   });
 
   it("refuses a non-2xx stream with AI_HTTP_ERROR", async () => {

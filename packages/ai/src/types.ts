@@ -76,8 +76,18 @@ export interface GenerateResult {
 
 /** One delta off a streamed generation. */
 export interface StreamDelta {
-  /** The incremental text for this frame. */
+  /** The incremental text for this frame — `""` on a delta that carried a completed tool call rather than text. */
   readonly text: string;
+  /**
+   * A tool call the model finished emitting, surfaced inline in the delta stream (ADR 0021). A
+   * streamed tool call arrives as fragments — an announce (id + name) followed by argument-JSON
+   * chunks — which the shared stream engine accumulates and hands back here as ONE complete
+   * {@link ToolCall} once the stream drains, so a tool-driven consumer reads it without reassembling
+   * fragments itself and a text-only consumer simply ignores it. Present ONLY on the tool-call
+   * deltas (which carry `text: ""`), never on a text delta; the same calls also ride on
+   * {@link StreamFinal.toolCalls} for a consumer that only reads the return value.
+   */
+  readonly toolCall?: ToolCall;
 }
 
 /**
@@ -95,6 +105,14 @@ export interface StreamFinal {
   readonly usage?: Usage;
   /** Why the model stopped, once the provider reports it. */
   readonly stopReason?: StopReason;
+  /**
+   * The tool calls the model emitted this stream, fully assembled from their streamed fragments —
+   * the streamed counterpart to {@link GenerateResult.toolCalls}. Present (and non-empty) ONLY when
+   * the model asked for tools; omitted entirely otherwise, so a text-only stream's final accounting
+   * is byte-unchanged. This is the field `runAgent` reads to drive the tool loop off a streamed turn
+   * without falling back to a non-streamed `generateText` (finding F5).
+   */
+  readonly toolCalls?: readonly ToolCall[];
 }
 
 /**

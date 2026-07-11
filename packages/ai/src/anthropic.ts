@@ -202,9 +202,13 @@ export function parseStream(
 
 /**
  * Map one parsed Anthropic stream event to a {@link ParsedFrame}: a text token
- * (`content_block_delta`/`text_delta`), the input tokens (`message_start`), or the output tokens +
- * stop reason (`message_delta`). Any other event (`content_block_start`, `ping`, `message_stop`, …)
- * contributes nothing (`{}`/`undefined`). Pure and total; never throws (the engine owns JSON parsing).
+ * (`content_block_delta`/`text_delta`), a tool-call fragment (`content_block_start` announces a
+ * `tool_use` block's id + name; `content_block_delta`/`input_json_delta` carries its argument-JSON
+ * chunks — F5), the input tokens (`message_start`), or the output tokens + stop reason
+ * (`message_delta`). Any other event (a text-block `content_block_start`, `content_block_stop`,
+ * `ping`, `message_stop`, …) contributes nothing (`{}`/`undefined`). The tool-call FRAGMENTS are
+ * accumulated (and their args parsed) by the shared engine, so this stays pure and total; never
+ * throws (the engine owns JSON parsing).
  */
 function interpretFrame(json: unknown): ParsedFrame | undefined {
   const event = json as AnthropicStreamEvent;
@@ -215,6 +219,27 @@ function interpretFrame(json: unknown): ParsedFrame | undefined {
     event.delta.text !== undefined
   ) {
     return { text: event.delta.text };
+  }
+
+  // A tool_use block is announced on `content_block_start` (its id + name; the `input` here is an
+  // empty placeholder — the real arguments stream as `input_json_delta` frames below). A text-block
+  // `content_block_start` and every other block kind contribute nothing here.
+  if (event.type === "content_block_start" && event.content_block?.type === "tool_use") {
+    return {
+      toolCalls: [
+        { index: event.index ?? 0, id: event.content_block.id, name: event.content_block.name },
+      ],
+    };
+  }
+
+  // The tool arguments stream as partial-JSON chunks on `content_block_delta`/`input_json_delta`,
+  // under the SAME block `index` as the announce above — concatenated (and parsed once) by the engine.
+  if (
+    event.type === "content_block_delta" &&
+    event.delta?.type === "input_json_delta" &&
+    event.delta.partial_json !== undefined
+  ) {
+    return { toolCalls: [{ index: event.index ?? 0, argsFragment: event.delta.partial_json }] };
   }
 
   // The prompt (input) token count arrives up front on `message_start`. Its `usage` ALSO carries a
@@ -292,11 +317,23 @@ interface AnthropicMessage {
 
 interface AnthropicStreamEvent {
   readonly type: string;
-  /** `text_delta` carries the token text; `message_delta` carries the final `stop_reason`. */
+  /** On `content_block_*` events: which content block this frame belongs to (0-based). */
+  readonly index?: number;
+  /**
+   * `text_delta` carries the token text; `input_json_delta` carries a `partial_json` chunk of a
+   * tool call's arguments; `message_delta` carries the final `stop_reason`.
+   */
   readonly delta?: {
     readonly type?: string;
     readonly text?: string;
+    readonly partial_json?: string;
     readonly stop_reason?: string | null;
+  };
+  /** On `content_block_start`: the block being opened — a `tool_use` block carries its id + name. */
+  readonly content_block?: {
+    readonly type?: string;
+    readonly id?: string;
+    readonly name?: string;
   };
   /** On `message_start`: the opening message, whose `usage` carries the prompt (input) token count. */
   readonly message?: { readonly usage?: AnthropicUsage };

@@ -37,6 +37,9 @@ const baseOptions = (model: ReturnType<typeof createAnthropic>): GenerateOptions
   messages: [{ role: "user", content: "Hello" }],
 });
 
+/** Build one SSE `data:` frame from a JSON payload — avoids hand-escaping nested tool-call JSON. */
+const data = (obj: unknown): string => `data: ${JSON.stringify(obj)}\n\n`;
+
 describe("createAnthropic — request assembly", () => {
   it("defaults the model id to claude-opus-4-8 and sets the auth + version headers", async () => {
     const model = createAnthropic({ apiKey: "sk-test" });
@@ -500,22 +503,166 @@ describe("parseStream", () => {
     expect(deltas).toEqual(["partial"]);
   });
 
-  it("ignores a [DONE] sentinel and a non-text delta", async () => {
+  it("ignores a [DONE] sentinel, a comment line, a ping, and a text-block content_block_start (no text, no tool call)", async () => {
     const model = createAnthropic({ apiKey: "sk-test" });
 
+    // Frames the interpreter must contribute nothing for: the [DONE] sentinel, a comment line with
+    // no data, a keep-alive ping, and a TEXT-block content_block_start (only a tool_use block opens
+    // a tool-call fragment — F5). None yield a text delta or a tool call.
     const frames = [
-      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n',
       "data: [DONE]\n\n",
       ": a comment line with no data\n\n",
+      'event: ping\ndata: {"type":"ping"}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
     ];
 
-    const deltas: string[] = [];
+    const deltas: StreamDelta[] = [];
 
     for await (const delta of model.parseStream(sseResponse(frames))) {
-      deltas.push(delta.text);
+      deltas.push(delta);
     }
 
     expect(deltas).toEqual([]);
+  });
+
+  it("assembles a streamed tool call from content_block_start + input_json_delta and surfaces it in the deltas AND the final (finding F5)", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    // A real Anthropic tool-use stream: the block is announced (id + name) on content_block_start,
+    // its arguments arrive as input_json_delta partial-JSON chunks under the same index, and the
+    // turn closes with stop_reason "tool_use". None of this is a text delta — before F5 it was
+    // dropped entirely, forcing runAgent off streaming onto the non-streamed fallback.
+    const frames = [
+      data({ type: "message_start", message: { usage: { input_tokens: 10 } } }),
+      data({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_1", name: "get_weather", input: {} },
+      }),
+      data({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"city":' },
+      }),
+      data({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '"Paris"}' },
+      }),
+      data({ type: "content_block_stop", index: 0 }),
+      data({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { output_tokens: 15 },
+      }),
+      data({ type: "message_stop" }),
+    ];
+
+    const deltas: StreamDelta[] = [];
+    const stream = model.parseStream(sseResponse(frames));
+    let next = await stream.next();
+    while (!next.done) {
+      deltas.push(next.value);
+      next = await stream.next();
+    }
+    const final = next.value;
+
+    const expectedCall = { id: "toolu_1", name: "get_weather", input: { city: "Paris" } };
+
+    // The completed tool call rides inline as its own delta (text ""), not lost between text frames.
+    expect(deltas).toEqual([{ text: "", toolCall: expectedCall }]);
+    // ...and on the final accounting, alongside usage + the tool_use stop reason.
+    expect(final).toEqual({
+      usage: { inputTokens: 10, outputTokens: 15 },
+      stopReason: "tool_use",
+      toolCalls: [expectedCall],
+    });
+  });
+
+  it("defaults a tool-call block index to 0 when a frame omits it (defensive: a relay that strips index still assembles)", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    // Anthropic always sends `index`, but a lenient relay/proxy could strip it. Both the announce and
+    // the argument chunk omit it here — they still correlate (default 0) into one assembled call.
+    const frames = [
+      data({
+        type: "content_block_start",
+        content_block: { type: "tool_use", id: "toolu_0", name: "noop" },
+      }),
+      data({
+        type: "content_block_delta",
+        delta: { type: "input_json_delta", partial_json: '{"ok":true}' },
+      }),
+      data({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { output_tokens: 2 },
+      }),
+    ];
+
+    const deltas: StreamDelta[] = [];
+    const stream = model.parseStream(sseResponse(frames));
+    let next = await stream.next();
+    while (!next.done) {
+      deltas.push(next.value);
+      next = await stream.next();
+    }
+
+    expect(deltas).toEqual([
+      { text: "", toolCall: { id: "toolu_0", name: "noop", input: { ok: true } } },
+    ]);
+  });
+
+  it("interleaves a text block with a streamed tool call — text yields as deltas, the tool call assembles at the end", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    // Index 0 is a text block; index 1 is a tool_use block. The text streams as ordinary deltas;
+    // the tool call accumulates under index 1 and surfaces once, after the text.
+    const frames = [
+      data({ type: "message_start", message: { usage: { input_tokens: 4 } } }),
+      data({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+      data({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Let me check. " },
+      }),
+      data({ type: "content_block_stop", index: 0 }),
+      data({
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "toolu_9", name: "lookup", input: {} },
+      }),
+      data({
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"q":"x"}' },
+      }),
+      data({ type: "content_block_stop", index: 1 }),
+      data({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { output_tokens: 8 },
+      }),
+    ];
+
+    const deltas: StreamDelta[] = [];
+    const stream = model.parseStream(sseResponse(frames));
+    let next = await stream.next();
+    while (!next.done) {
+      deltas.push(next.value);
+      next = await stream.next();
+    }
+    const final = next.value;
+
+    expect(deltas).toEqual([
+      { text: "Let me check. " },
+      { text: "", toolCall: { id: "toolu_9", name: "lookup", input: { q: "x" } } },
+    ]);
+    expect(final).toEqual({
+      usage: { inputTokens: 4, outputTokens: 8 },
+      stopReason: "tool_use",
+      toolCalls: [{ id: "toolu_9", name: "lookup", input: { q: "x" } }],
+    });
   });
 
   it("refuses a non-2xx stream with AI_HTTP_ERROR", async () => {

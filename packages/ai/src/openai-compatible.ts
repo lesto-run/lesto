@@ -43,7 +43,7 @@
 import { AiError } from "./errors";
 import { parseSseStream } from "./sse";
 
-import type { ParsedFrame } from "./sse";
+import type { ParsedFrame, ToolCallFragment } from "./sse";
 import type {
   ContentBlock as MessageBlock,
   GenerateOptions,
@@ -349,11 +349,15 @@ function parseStream(response: Response): AsyncGenerator<StreamDelta, StreamFina
 
 /**
  * Map one parsed chat-completions chunk to a {@link ParsedFrame}: any combination of a text token
- * (`choices[0].delta.content`), the stop reason (`choices[0].finish_reason`), and the token usage
- * (the terminal `stream_options.include_usage` chunk whose `choices` is empty). Unlike Anthropic's
- * text-XOR-meta frames, an OpenAI chunk can legitimately carry a content delta AND a `finish_reason`
- * together, so every meaningful field is captured additively. A frame that carries nothing (a
- * role-only opening delta) returns an empty bag the engine skips. Pure and total; never throws.
+ * (`choices[0].delta.content`), tool-call fragments (`choices[0].delta.tool_calls` — the first
+ * fragment per tool-call `index` carries id + name, later ones carry `arguments` JSON chunks; F5),
+ * the stop reason (`choices[0].finish_reason`), and the token usage (the terminal
+ * `stream_options.include_usage` chunk whose `choices` is empty). Unlike Anthropic's text-XOR-meta
+ * frames, an OpenAI chunk can legitimately carry a content delta AND a `finish_reason` together (and
+ * a single chunk can carry fragments for more than one tool-call index), so every meaningful field
+ * is captured additively. A frame that carries nothing (a role-only opening delta) returns an empty
+ * bag the engine skips. The tool-call fragments are accumulated (and their args parsed) by the shared
+ * engine, so this stays pure and total; never throws.
  */
 function interpretFrame(json: unknown): ParsedFrame | undefined {
   const chunk = json as ChatCompletionChunk;
@@ -364,6 +368,7 @@ function interpretFrame(json: unknown): ParsedFrame | undefined {
     inputTokens?: number;
     outputTokens?: number;
     stopReason?: StopReason;
+    toolCalls?: ToolCallFragment[];
   } = {};
 
   // The incremental text token. Only a non-empty string is a delta worth yielding — the
@@ -371,6 +376,19 @@ function interpretFrame(json: unknown): ParsedFrame | undefined {
   const content = choice?.delta?.content;
   if (typeof content === "string" && content !== "") {
     parsed.text = content;
+  }
+
+  // Tool-call fragments: project each `delta.tool_calls[]` element onto a normalized fragment keyed
+  // by its tool-call `index`. `id`/`name`/`arguments` are each present only on some frames — passing
+  // `undefined` through is fine, the engine's accumulator applies a field only when it arrives.
+  const toolCallDeltas = choice?.delta?.tool_calls;
+  if (toolCallDeltas !== undefined) {
+    parsed.toolCalls = toolCallDeltas.map((call) => ({
+      index: call.index,
+      id: call.id,
+      name: call.function?.name,
+      argsFragment: call.function?.arguments,
+    }));
   }
 
   // The stop reason lands on the last content-bearing chunk; the usage on a later terminal
@@ -468,9 +486,23 @@ interface ChatCompletion {
   readonly usage?: ChatUsage;
 }
 
+/**
+ * One `delta.tool_calls[]` element in a stream chunk. The first fragment for a given `index` carries
+ * `id` + `function.name`; subsequent fragments for that index carry `function.arguments` chunks.
+ */
+interface ChatToolCallDelta {
+  readonly index: number;
+  readonly id?: string;
+  readonly type?: string;
+  readonly function?: { readonly name?: string; readonly arguments?: string };
+}
+
 interface ChatCompletionChunk {
   readonly choices?: readonly {
-    readonly delta?: { readonly content?: string | null };
+    readonly delta?: {
+      readonly content?: string | null;
+      readonly tool_calls?: readonly ChatToolCallDelta[];
+    };
     readonly finish_reason?: string | null;
   }[];
   readonly usage?: ChatUsage | null;
