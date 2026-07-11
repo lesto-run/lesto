@@ -19,7 +19,8 @@ import { assertHeaders, assertNoInjection, type MailTransport, type RenderedEmai
 export type SmtpErrorCode =
   | "MAIL_TRANSPORT_SMTP_PROTOCOL"
   | "MAIL_TRANSPORT_SMTP_AUTH"
-  | "MAIL_TRANSPORT_SMTP_CONNECTION";
+  | "MAIL_TRANSPORT_SMTP_CONNECTION"
+  | "MAIL_TRANSPORT_SMTP_TIMEOUT";
 
 export class SmtpTransportError extends LestoError<SmtpErrorCode> {
   constructor(code: SmtpErrorCode, message: string, details?: Record<string, unknown>) {
@@ -57,6 +58,19 @@ export interface SmtpTransportConfig {
   readonly ehloName?: string;
 
   /**
+   * Fail the send if the server does not reply to a step of the dialogue within
+   * this many ms. Defaults to 20_000.
+   *
+   * Keep it comfortably below the queue's job visibility window (30_000ms by
+   * default in `@lesto/queue`): a stalled server must fail the send — and
+   * release the worker — BEFORE the visibility deadline lapses, or the queue
+   * reclaims the still-"running" job and delivers it a SECOND time. The timeout
+   * is what turns an at-least-once stall into a clean retry instead of a
+   * guaranteed duplicate send.
+   */
+  readonly timeoutMs?: number;
+
+  /**
    * Opens the initial (plaintext) connection. Injectable so tests drive a fake
    * socket; defaults to `node:net`.
    */
@@ -75,13 +89,14 @@ export function createSmtpTransport(config: SmtpTransportConfig): MailTransport 
   const ehloName = config.ehloName ?? "localhost";
   const connect = config.connect ?? nodeConnect;
   const upgrade = config.upgrade ?? nodeUpgrade;
+  const timeoutMs = config.timeoutMs ?? 20_000;
 
   return {
     async send(email: RenderedEmail): Promise<void> {
       validate(email);
 
       let socket = await connect(config.host, config.port);
-      const conn = new SmtpConnection(socket);
+      const conn = new SmtpConnection(socket, timeoutMs);
 
       try {
         await conn.expect(220);
@@ -147,12 +162,21 @@ class SmtpConnection {
 
   private buffer = "";
 
-  private pending: { resolve: (line: string) => void; reject: (error: Error) => void } | undefined;
+  private pending:
+    | {
+        resolve: (line: string) => void;
+        reject: (error: Error) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }
+    | undefined;
 
   private failure: Error | undefined;
 
-  constructor(socket: SmtpSocket) {
+  private readonly timeoutMs: number;
+
+  constructor(socket: SmtpSocket, timeoutMs: number) {
     this.socket = socket;
+    this.timeoutMs = timeoutMs;
     this.bind();
   }
 
@@ -167,25 +191,52 @@ class SmtpConnection {
     this.socket.on("data", (chunk) => {
       this.buffer += chunk.toString();
 
-      // A reply is complete once a final `NNN <text>` status line lands and a
-      // reader is waiting for it. SMTP is strictly request-response, so a reply
-      // only ever arrives after a command set `pending`.
-      if (!this.pending || !/(^|\n)(\d{3}) [^\n]*\r?\n$/.test(this.buffer)) {
+      // SMTP is strictly request-response, so a reply is only consumed once a
+      // reader is waiting for it. With no reader pending the bytes stay buffered
+      // for the next `readLine` to drain — never dropped (that is what makes the
+      // lost-wakeup guard in `readLine` sound).
+      if (!this.pending) {
         return;
       }
 
-      const line = this.buffer;
-      this.buffer = "";
+      const line = this.takeReply();
+
+      if (line === undefined) {
+        return;
+      }
+
       const settle = this.pending;
       this.pending = undefined;
+      clearTimeout(settle.timer);
       settle.resolve(line);
     });
 
     this.socket.on("error", (error) => {
       this.failure = error;
-      this.pending?.reject(error);
-      this.pending = undefined;
+
+      if (this.pending) {
+        clearTimeout(this.pending.timer);
+        this.pending.reject(error);
+        this.pending = undefined;
+      }
     });
+  }
+
+  /**
+   * Take a complete reply off the buffer, or `undefined` if one has not fully
+   * landed. A reply is complete once a final `NNN <text>` status line ends the
+   * buffer; the whole buffer (including any earlier continuation lines of a
+   * multiline reply) is returned and cleared.
+   */
+  private takeReply(): string | undefined {
+    if (!/(^|\n)(\d{3}) [^\n]*\r?\n$/.test(this.buffer)) {
+      return undefined;
+    }
+
+    const line = this.buffer;
+    this.buffer = "";
+
+    return line;
   }
 
   /** Wait for the next complete reply line and return it. */
@@ -194,8 +245,35 @@ class SmtpConnection {
       throw new SmtpTransportError("MAIL_TRANSPORT_SMTP_CONNECTION", this.failure.message);
     }
 
+    // A reply may already be sitting in the buffer: a fast server can put its
+    // next line on the wire the instant it sees our command, so the `data`
+    // event that carried it can fire while no reader is pending (buffered, not
+    // dropped). Drain that first — parking a waiter for a reply that has already
+    // arrived is the lost-wakeup deadlock, a wait that nothing ever wakes.
+    const buffered = this.takeReply();
+
+    if (buffered !== undefined) {
+      return buffered;
+    }
+
     return new Promise<string>((resolve, reject) => {
-      this.pending = { resolve, reject };
+      // Bound the wait. A server that accepts the connection then stalls must
+      // not hold us open indefinitely: a queued send runs inside the worker's
+      // visibility window, and a dialogue that hangs past it gets reclaimed and
+      // delivered a second time. Failing the read with a coded error releases
+      // the worker first, so a stall is a clean retry, never a duplicate send.
+      const timer = setTimeout(() => {
+        this.pending = undefined;
+        reject(
+          new SmtpTransportError(
+            "MAIL_TRANSPORT_SMTP_TIMEOUT",
+            `SMTP server did not reply within ${this.timeoutMs}ms.`,
+            { timeoutMs: this.timeoutMs },
+          ),
+        );
+      }, this.timeoutMs);
+
+      this.pending = { resolve, reject, timer };
     });
   }
 
@@ -223,6 +301,13 @@ class SmtpConnection {
   }
 }
 
+// DEFERRED (out of scope for the F15 data-integrity pass; tracked for a
+// follow-up — see docs/reviews/2026-07-10-build-vs-buy-portfolio-review.md):
+// this builder does not yet do RFC 2047 encoded-words for non-ASCII headers,
+// declare a Content-Transfer-Encoding / negotiate 8BITMIME, wrap lines at the
+// 998-octet limit (RFC 5321 §4.5.3.1.6), support implicit TLS on :465, or emit
+// a Date header. A relay generally supplies its own Date, but the rest are real
+// interop gaps that a Nodemailer-backed transport behind this facade would close.
 function buildMessage(email: RenderedEmail, from: string): string {
   const headers: string[] = [
     `From: ${from}`,

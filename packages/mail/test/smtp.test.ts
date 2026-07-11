@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createSmtpTransport,
@@ -87,8 +87,8 @@ const base = (): Omit<RenderedEmail, "from"> => ({
 });
 
 // A reply per command, delivered as Buffers and optionally split into partial
-// chunks. Exposes hooks to inject an unsolicited line (no pending reader).
-function scriptedSocket(options: { split?: boolean; strayBefore?: boolean }): {
+// chunks (the first chunk lacks a complete status line).
+function scriptedSocket(options: { split?: boolean }): {
   socket: SmtpSocket;
 } {
   let dataListener: ((chunk: Buffer | string) => void) | undefined;
@@ -116,16 +116,7 @@ function scriptedSocket(options: { split?: boolean; strayBefore?: boolean }): {
     write(): void {
       const reply = replies[writes] ?? "250 ok\r\n";
       writes += 1;
-      queueMicrotask(() => {
-        deliver(reply);
-
-        // After the first command's reply resolved (pending now cleared), fire
-        // an unsolicited complete line synchronously — exercises the
-        // `!pending` early-return without corrupting the next read.
-        if (options.strayBefore && writes === 1) {
-          dataListener?.(Buffer.from("250 unsolicited\r\n"));
-        }
-      });
+      queueMicrotask(() => deliver(reply));
     },
     on(event: string, listener: (arg: never) => void): void {
       if (event === "data") {
@@ -522,9 +513,70 @@ describe("SmtpConnection data handling", () => {
 
     await transport.send({ ...base(), from: "f@app.com" });
   });
+});
 
-  it("discards a complete line that arrives with no reader pending", async () => {
-    const { socket } = scriptedSocket({ strayBefore: true });
+/**
+ * A fake that puts every server reply into the client's buffer BEFORE a reader
+ * parks: the banner fires synchronously the instant the data listener binds
+ * (inside the connection constructor, before the first `readLine`), and each
+ * command's reply fires synchronously inside `write`, i.e. before `command`
+ * gets to park its `readLine` waiter. This is the ordering that reproduces the
+ * lost-wakeup — a reply already sitting in the buffer when a reader arrives.
+ */
+class PrebufferedSocket implements SmtpSocket {
+  written: string[] = [];
+
+  ended = false;
+
+  private listener: ((chunk: string) => void) | undefined;
+
+  private queue: string[];
+
+  constructor(replies: string[]) {
+    this.queue = [...replies];
+  }
+
+  write(data: string): void {
+    this.written.push(data);
+    this.emit();
+  }
+
+  on(event: "data" | "error" | "close", listener: (arg: never) => void): void {
+    if (event === "data") {
+      this.listener = listener as (chunk: string) => void;
+      // Banner delivered synchronously, before the connection calls readLine.
+      this.emit();
+    }
+  }
+
+  removeAllListeners(): void {
+    this.listener = undefined;
+  }
+
+  end(): void {
+    this.ended = true;
+  }
+
+  private emit(): void {
+    const next = this.queue.shift();
+
+    if (next !== undefined) {
+      this.listener?.(next);
+    }
+  }
+}
+
+describe("SmtpConnection lost-wakeup and dialogue timeout (F15)", () => {
+  it("resolves a reply already buffered before readLine parks", async () => {
+    const socket = new PrebufferedSocket([
+      "220 ready\r\n",
+      "250 ok\r\n", // EHLO
+      "250 ok\r\n", // MAIL FROM
+      "250 ok\r\n", // RCPT TO
+      "354 go\r\n", // DATA
+      "250 queued\r\n", // body
+      "221 bye\r\n", // QUIT
+    ]);
     const transport = createSmtpTransport({
       host: "h",
       port: 25,
@@ -532,7 +584,56 @@ describe("SmtpConnection data handling", () => {
       connect: async () => socket,
     });
 
+    // Pre-fix this hangs forever: the banner lands in the buffer before the
+    // first readLine parks a waiter, and no further data event ever wakes it,
+    // so the promise never settles and the test times out. The fix drains the
+    // buffered reply on entry to readLine, so the whole dialogue completes.
     await transport.send({ ...base(), from: "f@app.com" });
+
+    expect(socket.written.some((l) => l.startsWith("EHLO"))).toBe(true);
+    expect(socket.written.some((l) => l.startsWith("QUIT"))).toBe(true);
+    expect(socket.ended).toBe(true);
+  });
+
+  it("fails a stalled dialogue with a coded timeout instead of hanging", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // Accepts the connection but never sends a byte — the very first read
+      // (the 220 banner) stalls, standing in for any mid-dialogue hang.
+      const silent: SmtpSocket = {
+        write(): void {},
+        on(): void {},
+        removeAllListeners(): void {},
+        end(): void {},
+      };
+      const transport = createSmtpTransport({
+        host: "h",
+        port: 25,
+        secure: false,
+        timeoutMs: 1000,
+        connect: async () => silent,
+      });
+
+      const sending = transport.send({ ...base(), from: "f@app.com" });
+
+      // Attach the rejection expectation up front so the pending rejection has a
+      // handler before the timer fires (no unhandled-rejection window).
+      const settled = expect(sending).rejects.toMatchObject({
+        code: "MAIL_TRANSPORT_SMTP_TIMEOUT",
+        details: { timeoutMs: 1000 },
+      });
+
+      // Let send() reach the parked readLine and register its timer, then blow
+      // the deadline. A stalled server must fail — releasing the queue worker —
+      // rather than holding it past visibility into a duplicate send.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
