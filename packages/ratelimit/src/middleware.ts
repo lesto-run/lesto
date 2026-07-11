@@ -181,6 +181,16 @@ export function rateLimit(options: RateLimitOptions): Middleware {
   // tests. A fleet that must share limits injects a `limiter` over a SQL/Redis
   // store. Either way the limiter is built once, so its buckets outlive a single
   // request (the whole point of a bucket).
+  //
+  // The store is DELIBERATELY uncapped (we pass it explicitly rather than let the
+  // RateLimiter default a capacity-matched one). Handing this per-IP store a
+  // `capacity` would be false confidence: eviction-on-full only ever drops a
+  // bucket the moment it sits AT the ceiling, but this middleware spends cost 1 on
+  // every request, so an IP's bucket is always stored below the ceiling and never
+  // qualifies — a cap here would look like a memory bound while bounding nothing.
+  // (Eviction earns its keep on identity's cost-0 *peek* path, where a full bucket
+  // does get written.) The real per-IP memory bound is a separate tracked task
+  // (L-976b4302); until then this store is honestly unbounded.
   const limiter =
     options.limiter ??
     new RateLimiter({

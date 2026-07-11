@@ -41,8 +41,15 @@ export class MemoryRateLimitStore implements RateLimitStore {
    * many tokens is full == a first-seen key, so it is evicted rather than retained
    * (see the class doc). Left `undefined`, the store never self-evicts — the
    * original always-persist behavior, kept so an existing caller is not broken.
+   *
+   * Public and read-only so the paired {@link RateLimiter} can ENFORCE that this
+   * ceiling equals its own spend ceiling: eviction fires at *this* number and the
+   * limiter spends against *its* `capacity`, so the two are one value that must
+   * agree — a drift breaks self-eviction silently (see the RateLimiter ctor). It
+   * is exposed for that guard, not as a mutation seam; the store sets it once at
+   * construction and never again.
    */
-  private readonly capacity: number | undefined;
+  readonly capacity: number | undefined;
 
   constructor(options: { readonly capacity?: number } = {}) {
     this.capacity = options.capacity;

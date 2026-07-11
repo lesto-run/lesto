@@ -1,9 +1,21 @@
+import { RateLimitError } from "./errors";
+import { MemoryRateLimitStore } from "./store";
 import { systemClock } from "./time";
 
 import type { BucketState, Clock, RateLimitResult, RateLimitStore } from "./types";
 
 export interface RateLimiterOptions {
-  readonly store: RateLimitStore;
+  /**
+   * Where buckets live between checks. OPTIONAL: omit it and the limiter builds
+   * its own {@link MemoryRateLimitStore} at *its own* `capacity`, so the store's
+   * eviction ceiling can never drift from the limiter's spend ceiling — the
+   * common path is drift-proof by construction. Inject one to share a store
+   * across limiters or to back the limiter with SQL/Redis. An injected
+   * {@link MemoryRateLimitStore} whose `capacity` is set MUST equal `capacity`
+   * below; the limiter refuses a mismatch LOUDLY at construction rather than let
+   * eviction misfire in production (see the ctor).
+   */
+  readonly store?: RateLimitStore;
 
   /** The bucket's ceiling — the most tokens it can ever hold. */
   readonly capacity: number;
@@ -36,10 +48,38 @@ export class RateLimiter {
   private readonly clock: Clock;
 
   constructor(options: RateLimiterOptions) {
-    this.store = options.store;
     this.capacity = options.capacity;
     this.refillPerSecond = options.refillPerSecond;
     this.clock = options.clock ?? systemClock;
+
+    // The limiter OWNS the store↔limiter capacity pairing, because a drift breaks
+    // self-eviction SILENTLY — the one thing eviction was built never to do:
+    //   • store ceiling ABOVE the limiter's → buckets never reach the eviction
+    //     point, so the unbounded-Map leak quietly returns; and
+    //   • store ceiling BELOW the limiter's → a partially-drained, actively-
+    //     throttled bucket whose tokens sit in [storeCap, limiterCap) reads as
+    //     "full", is evicted, and re-materializes full on the next check — the
+    //     limiter silently WEAKENED / bypassed.
+    // So, with no store injected, we build one at our OWN capacity (the common
+    // path cannot drift); and an INJECTED MemoryRateLimitStore whose capacity is
+    // set must MATCH ours, or we refuse LOUD with a coded error at construction
+    // rather than degrade unnoticed. A store with no capacity (uncapped, or a
+    // SQL/Redis store that self-eviction does not apply to) has nothing to drift,
+    // so it is left alone.
+    if (
+      options.store instanceof MemoryRateLimitStore &&
+      options.store.capacity !== undefined &&
+      options.store.capacity !== this.capacity
+    ) {
+      throw new RateLimitError(
+        "RATELIMIT_STORE_CAPACITY_MISMATCH",
+        `The injected MemoryRateLimitStore's capacity (${options.store.capacity}) must equal the ` +
+          `RateLimiter's capacity (${this.capacity}) — a mismatch breaks self-eviction silently.`,
+        { storeCapacity: options.store.capacity, limiterCapacity: this.capacity },
+      );
+    }
+
+    this.store = options.store ?? new MemoryRateLimitStore({ capacity: this.capacity });
   }
 
   async check(key: string, cost = 1): Promise<RateLimitResult> {

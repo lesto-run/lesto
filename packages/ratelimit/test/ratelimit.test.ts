@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { MemoryRateLimitStore, RateLimiter, systemClock } from "../src/index";
+import { MemoryRateLimitStore, RateLimitError, RateLimiter, systemClock } from "../src/index";
 
 import type { BucketState, RateLimitStore } from "../src/index";
 
@@ -249,5 +249,112 @@ describe("MemoryRateLimitStore self-eviction (bounded Map)", () => {
     advance(10_000);
     await limiter.check("login:ada", 0);
     expect(uncapped.size).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RateLimiter owns the store↔limiter capacity pairing — L-e2d3493b
+//
+// Self-eviction fires at the STORE's capacity, and the limiter spends against
+// ITS capacity: the two are one number that must agree. A drift breaks eviction
+// SILENTLY (store cap > limiter cap → the Map leak returns; store cap < limiter
+// cap → an actively-throttled bucket reads "full" and is evicted → limiter
+// bypass). These tests defend the guard that makes that drift LOUD, not silent.
+// ---------------------------------------------------------------------------
+
+describe("RateLimiter store-capacity ownership", () => {
+  it("refuses an injected MemoryRateLimitStore whose capacity differs from the limiter's", () => {
+    // A store ceiling below the limiter's is the dangerous drift — a throttled
+    // bucket in [storeCap, limiterCap) would read "full" and be evicted (a
+    // bypass). The limiter must refuse LOUD at construction, not degrade silently.
+    const construct = (): RateLimiter =>
+      new RateLimiter({
+        store: new MemoryRateLimitStore({ capacity: 3 }),
+        capacity: 5,
+        refillPerSecond: 1,
+        clock,
+      });
+
+    expect(construct).toThrow(RateLimitError);
+
+    let thrown: unknown;
+    try {
+      construct();
+    } catch (error) {
+      thrown = error;
+    }
+
+    // Branch on the stable code, never the prose.
+    expect((thrown as RateLimitError).code).toBe("RATELIMIT_STORE_CAPACITY_MISMATCH");
+    // The mismatched numbers ride the details so an operator sees both ceilings.
+    expect((thrown as RateLimitError).details).toMatchObject({
+      storeCapacity: 3,
+      limiterCapacity: 5,
+    });
+  });
+
+  it("also refuses a store ceiling ABOVE the limiter's (the never-evicts / leak drift)", () => {
+    expect(
+      () =>
+        new RateLimiter({
+          store: new MemoryRateLimitStore({ capacity: 9 }),
+          capacity: 5,
+          refillPerSecond: 1,
+          clock,
+        }),
+    ).toThrow(RateLimitError);
+  });
+
+  it("accepts an injected MemoryRateLimitStore whose capacity matches", async () => {
+    const capped = new MemoryRateLimitStore({ capacity: 5 });
+    const limiter = new RateLimiter({ store: capped, capacity: 5, refillPerSecond: 1, clock });
+
+    // A matched pair works AND still evicts a fully-refilled bucket (the paired
+    // behavior the invariant protects).
+    await limiter.check("login:ada", 0);
+    expect(capped.size).toBe(0);
+  });
+
+  it("accepts an injected uncapped MemoryRateLimitStore — no capacity to drift", () => {
+    expect(
+      () =>
+        new RateLimiter({
+          store: new MemoryRateLimitStore(),
+          capacity: 5,
+          refillPerSecond: 1,
+          clock,
+        }),
+    ).not.toThrow();
+  });
+
+  it("accepts a non-MemoryRateLimitStore store (a SQL/Redis store has no capacity to enforce)", () => {
+    // Only a MemoryRateLimitStore carries the eviction ceiling the guard pairs
+    // against; a bare RateLimitStore implementation is left untouched.
+    const custom: RateLimitStore = {
+      update: async (_key, mutate) => mutate(undefined),
+    };
+
+    expect(
+      () => new RateLimiter({ store: custom, capacity: 5, refillPerSecond: 1, clock }),
+    ).not.toThrow();
+  });
+
+  it("defaults to a capacity-matched MemoryRateLimitStore when none is injected", async () => {
+    // No `store`: the limiter builds its own at its OWN capacity (drift-proof by
+    // construction — the internal store is not observable, but its ceiling can
+    // only be the limiter's). Prove the default-store path works end-to-end:
+    // spend the bucket down and confirm the throttle engages at capacity 2.
+    const limiter = new RateLimiter({ capacity: 2, refillPerSecond: 1, clock });
+
+    expect((await limiter.check("login:ada")).allowed).toBe(true); // 2 -> 1
+    expect((await limiter.check("login:ada")).allowed).toBe(true); // 1 -> 0
+
+    const denied = await limiter.check("login:ada"); // drained
+    expect(denied.allowed).toBe(false);
+    expect(denied.retryAfterMs).toBe(1000); // deficit of 1 token at 1/sec
+
+    // A distinct first-seen key is independently full — proof the default store
+    // is a real per-key bucket store, not a shared/degenerate one.
+    expect((await limiter.check("login:ghost", 0)).remaining).toBe(2);
   });
 });
