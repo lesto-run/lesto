@@ -10,6 +10,14 @@
   review — see the **Amendment trail** at the end. The 100k-PBKDF2 pin this supersedes is
   **correct and stays** until the replacement lands **and its mandatory two-stage rollout
   completes** — 100k that works beats 600k that throws on every deployed-Worker login.
+  - **Phase-0 spike DONE (2026-07-10, board `L-557c95dd`) — backend resolved: A-wasm** (see
+    the **Phase-0 spike outcome** section below and `spikes/adr-0046-edge-kdf/FINDINGS.md`).
+    A-js measured **~10–16× slower per derive on a deployed Worker** (≈0.5–0.8 s vs A-wasm's
+    ≈40–50 ms) and busts the R4 enrollment budget → the ratified decision procedure falls to
+    **A-wasm**; Option C is not triggered. IT4 (wasm code-gen restriction) is **confirmed** on
+    current workerd. This flip of the Q1 *default* + its wasm-pipeline cost, and the
+    **Stage-2-only Workers-Paid re-run gate**, are the two items awaiting **owner ratification**;
+    the fable chief-architect + opus red-team amendments **A11–A17** are folded into the text.
 - **Date:** 2026-07-10.
 - **Deciders:** tech lead + owner (authored under board task `L-cea1370e`); **ratified
   2026-07-10** by the delegated red-team + chief-architect review the owner directed.
@@ -403,6 +411,46 @@ cost, it does not decide whether they exist.
   parameters (`split_part(password_hash, '$', 1)`), watch `argon2id$…` share rise; no action is
   *required* on the tail.
 
+## Phase-0 spike outcome (2026-07-10 — board `L-557c95dd`; awaiting owner ratification of the flip)
+
+Ran the hard gate: a real deployed Cloudflare Worker (`*.workers.dev`, compat 2026-06-01, colo
+EWR), both routes at m=19456/t=2/p=1, timed by `wrangler tail` `cpuTime` (authoritative — workerd
+freezes `Date.now()` during sync compute) plus client end-to-end. Harness + full data +
+caveats: `spikes/adr-0046-edge-kdf/` (`FINDINGS.md`, `REVIEW-chief-architect.md`). Reviewed by a
+fable chief-architect + an opus red-team (which corrected an over-stated first-draft A-js number).
+
+- **CPU / derive:** A-wasm **~40–50 ms** (tight, 37–76 ms) vs A-js **~0.5–0.8 s** (uncontended
+  floor ~0.5 s; typical ~0.78 s; ≤1.8 s under Free-plan CPU contention) — a **~10–16× gap**. The
+  ADR's A-js estimate (200–500 ms) was 1.5–4× optimistic vs the floor; A-wasm (50–150 ms est.)
+  confirmed. PBKDF2-100k incumbent baseline **~25 ms** → argon2id-wasm is only ~1.6–2× the
+  incumbent (near-parity; narrows R2/M6).
+- **Recovery enrollment (10 serialized):** A-wasm ~0.47 s CPU / ~0.75 s e2e; A-js **~5–8 s** —
+  at/over the R4 "2–5 s" budget even at the floor.
+- **DECISION (per the ratified procedure): A-js busts the budget → fall to A-wasm.** The
+  rejection rests on plan-independent facts (the ~10–16× CPU gap, the ~5–8 s enrollment vs R4,
+  and A-js's single-threaded event-loop blocking), NOT the Free-plan 503s (a burst-throttle
+  artifact). **Option C is NOT triggered** — an argon2 route passes on workerd; and it stays
+  closed (noble-scrypt is the same pure-JS memory-hard class the spike clocked ~10–16× slower).
+- **IT4 CONFIRMED** on current workerd: deploy-time module-import instantiate works; runtime
+  `new WebAssembly.Module(bytes)` and `WebAssembly.compile(bytes)` are **blocked**
+  (`CompileError: Wasm code generation disallowed by embedder`, catchable). A-wasm must consume
+  wasm as a module import — no `nodejs_compat` needed; wrangler's `CompiledWasm` rule bundles it.
+- **Memory ceiling measured ~250 MiB, NOT 128 MB** (authoritative `exceededMemory` at 14×19 MiB =
+  266 MiB; 12×19 = 228 MiB ok), on Free/workers.dev. The **design keeps assuming 128 MB** until a
+  paid re-run confirms (A12); the semaphore at 2–3 (38–57 MiB) is safe under either figure.
+- **Gate status:** the **backend-selection** half is **passed** (the eliminating measurement is
+  plan-independent). The **operational-envelope** half (a clean sustained-combined-load p95 under
+  the *shared per-isolate* semaphore; the production memory ceiling; cold start) is **confounded by
+  the Free-plan burst throttle** and must be **re-run on Workers Paid before Stage 2 (the mint-
+  default flip)** — it does **not** block Stage-1 facade/verify-support work (format, params, and
+  cross-runtime byte-identity are confirmed, so no later finding can strand a minted row).
+- **Supply chain (IT3):** ship a **vendored first-party wasm build** from the reference C (pinned
+  commit, reproducible/containerized recipe, checked-in `.wasm` + recorded SHA-256, CI rebuild/
+  verify, a **differential CI gate** byte-comparing wasm output to `@noble/hashes` over RFC 9106
+  vectors + a property corpus, and a **pack-boot gate OUTSIDE the repo**). `@phi-ag/argon2@0.5.24`
+  (MIT — the spike's measurement proxy) is the **sanctioned fallback only** if the toolchain proves
+  impractical, recorded as a deviation with a follow-up task, never silently.
+
 ## Consequences & risks
 
 - **Security:** edge posture returns to at-or-above OWASP; the offline-crack economics move from
@@ -527,14 +575,57 @@ cutover + downgrade warning (M7, guards Q2); **A8** concrete `describeHashCost` 
 `:294-300`/`:302`; grounding `~:961`→`:969`); **A10** corrected the "~6× headroom under concurrency"
 over-claim.
 
+## Amendment trail (Phase-0 spike + delegated review, 2026-07-10 — board `L-557c95dd`)
+
+Folded in from the deployed-Worker spike and its fable-chief-architect + opus-red-team review
+(the review corrected an over-stated first-draft A-js figure; see `spikes/adr-0046-edge-kdf/`).
+These invert the Q1 *default* and touch load-bearing claims — **awaiting owner ratification**.
+
+- **A11 — gate outcome recorded:** backend = **A-wasm**, inverting the Q1 A-js default; perf
+  figures move from "Claims not verified" to measured-with-caveat (Free plan; envelope re-run
+  pending). See **Phase-0 spike outcome**.
+- **A12 — memory ceiling:** measured ~250–260 MiB on Free/workers.dev (documented limit 128 MB);
+  **keep designing to 128 MB** until a paid re-run; the semaphore at 2–3 (38–57 MiB) is safe under
+  either figure. Do **not** bank 256.
+- **A13 — B1/IT1 rationale restated:** the "190 MiB simultaneous" fan-out holds only for an
+  async/buffer-across-yield derive (noble `argon2idAsync`), **not** the chosen sync backend (peak
+  1×19 MiB, code-grounded + measured). **IT1 stays mandatory** — justification becomes CPU-fairness
+  / bounded-queue backpressure + future-proofing any swap to an async derive that would re-arm the OOM.
+- **A14 — B2/A2 mechanism restated:** with a sync ~45 ms derive the decoy vector is event-loop
+  blocking + CPU/billing EDoS, not memory exhaustion; the controls (admission cap before the decoy;
+  `loginRateLimiter` as a documented production precondition) are unchanged; the shared semaphore's
+  real job is **bounded-queue load-shedding**.
+- **A15 — R2/M6 shrinks (good direction):** the "~10×" mixed-corpus timing delta was on A-js
+  estimates; measured argon2id-wasm ~45 ms vs PBKDF2-100k ~25 ms is near-parity → materially smaller
+  enumeration residual.
+- **A16 — NEW cross-runtime consequence of A-wasm:** A-js's "identical bytes, runs everywhere for
+  free" property is **lost**. Node/Bun tiers verifying `argon2id$…` must load the wasm backend too
+  (bytes-compile, legal off-workerd) — noble-JS at ~0.5–0.8 s/verify is not an acceptable Node
+  verify path; noble is the **degrade-to-secure-and-alive** fallback preserving "never strands a
+  user." State this in Integration design when the facade lands.
+- **A17 — housekeeping:** R4 closed with the measured ~0.47 s wasm enrollment (the code-count/cost
+  knob is moot); **IT4 marked confirmed** (measured `CompileError` behavior); IT3 ruling recorded
+  (vendored first-party wasm; `@phi-ag/argon2` sanctioned fallback only).
+- **Gate-scope ruling:** the paid re-run is a blocker for **Stage 2 (mint flip) only**; Stage-1
+  facade/verify-support work proceeds now (`L-93f03791`).
+
 ## Claims not verified against the codebase or a live system (do not ratify these as facts)
 
+> **Phase-0 spike update (2026-07-10):** the first two bullets below are now **MEASURED** on a
+> deployed Worker — the wasm code-gen restriction is **confirmed** (blocked, catchable
+> `CompileError`), and the perf/bundle figures are **replaced** by measurements (A-wasm ~40–50 ms,
+> A-js ~0.5–0.8 s, PBKDF2-100k ~25 ms; wasm asset 28 KiB raw / 11 KiB gzip). Caveat: all on the
+> Free plan — the operational envelope (clean sustained p95, production memory ceiling, cold start)
+> awaits a Workers-Paid re-run. The remaining bullets stay unverified.
+
 - The workerd **wasm code-generation restriction** (module imports required; runtime
-  `WebAssembly.compile` from bytes blocked) — high confidence from platform knowledge, unverified
-  here; it is the spike's first checkpoint.
+  `WebAssembly.compile` from bytes blocked) — ~~high confidence from platform knowledge, unverified
+  here~~ **CONFIRMED at the spike** (`spikes/adr-0046-edge-kdf/FINDINGS.md` §IT4).
 - All **performance estimates** (wasm ≈ 50–150 ms, pure-JS ≈ 200–500 ms per 19 MiB/t=2 derive on
-  workerd; PBKDF2-100k ≈ 30–60 ms) and **bundle-size** figures (wasm "tens of KiB") — estimates,
-  to be replaced by deployed-Worker measurements.
+  workerd; PBKDF2-100k ≈ 30–60 ms) and **bundle-size** figures (wasm "tens of KiB") — ~~estimates,
+  to be replaced by deployed-Worker measurements~~ **MEASURED (Free plan): wasm ~40–50 ms, pure-JS
+  ~0.5–0.8 s, PBKDF2-100k ~25 ms; wasm asset 28 KiB raw / 11 KiB gzip. Paid re-run pending for the
+  sustained-load envelope.**
 - **Licenses and audit status** of `@noble/hashes`' argon2 module specifically, `@phi-ag/argon2`,
   `hash-wasm`, `argon2-browser`.
 - workerd `nodejs_compat` **`node:crypto` scrypt availability and memory limits** (Option C's native

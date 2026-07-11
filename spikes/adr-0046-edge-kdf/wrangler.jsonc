@@ -1,0 +1,18 @@
+{
+  // ADR 0046 Phase-0 spike — throwaway benchmark Worker. Deployed to live
+  // Cloudflare, measured, then DELETED (`wrangler delete`). Not a shipped app.
+  "name": "lesto-adr0046-kdf-spike",
+  "main": "worker.js",
+  "compatibility_date": "2026-06-01",
+  // Deliberately NO nodejs_compat: the edge KDF path is pure WebCrypto + wasm by
+  // design (the property @lesto/auth's edge backend preserves). If the bundle
+  // needs a node builtin, that itself is a finding.
+  "workers_dev": true,
+  // NOTE: a `limits.cpu_ms` field is REJECTED on the Free plan (code 100328) —
+  // the account this spike ran against is Free. On a paid plan this would be
+  // raised to 30000. Left out so the Worker deploys; the free-plan CPU cap is
+  // itself a spike finding (see FINDINGS.md).
+  "observability": {
+    "enabled": true
+  }
+}

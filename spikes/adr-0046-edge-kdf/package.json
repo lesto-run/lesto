@@ -1,0 +1,10 @@
+{
+  "name": "adr-0046-edge-kdf-spike",
+  "private": true,
+  "type": "module",
+  "description": "ADR 0046 Phase-0 hard-gate spike: benchmark argon2id A-js (@noble/hashes) vs A-wasm (@phi-ag/argon2) on a DEPLOYED Cloudflare Worker. Throwaway; NOT part of the @lesto workspace.",
+  "dependencies": {
+    "@noble/hashes": "2.2.0",
+    "@phi-ag/argon2": "0.5.24"
+  }
+}
