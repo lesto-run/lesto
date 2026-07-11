@@ -12,7 +12,7 @@
  */
 
 export { PubSub } from "./pubsub";
-export type { Listener } from "./pubsub";
+export type { Listener, PublishResult } from "./pubsub";
 
 export { FanoutRegistry, encodeFrame, fanout, parsePublishBody } from "./fanout";
 export type {

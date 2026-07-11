@@ -27,9 +27,9 @@ describe("PubSub", () => {
       calls.push(["second", message, channel]);
     });
 
-    const notified = await hub.publish("orders", { id: 1 });
+    const result = await hub.publish("orders", { id: 1 });
 
-    expect(notified).toBe(2);
+    expect(result).toEqual({ delivered: 2, failed: [] });
 
     expect(calls).toEqual([
       ["first", { id: 1 }, "orders"],
@@ -40,9 +40,9 @@ describe("PubSub", () => {
   it("publishing to a channel with no subscribers returns 0 and is a no-op", async () => {
     const hub = new PubSub();
 
-    const notified = await hub.publish("empty", "hello");
+    const result = await hub.publish("empty", "hello");
 
-    expect(notified).toBe(0);
+    expect(result).toEqual({ delivered: 0, failed: [] });
 
     expect(hub.subscriberCount("empty")).toBe(0);
   });
@@ -62,9 +62,9 @@ describe("PubSub", () => {
 
     off();
 
-    const notified = await hub.publish("c", null);
+    const result = await hub.publish("c", null);
 
-    expect(notified).toBe(1);
+    expect(result).toEqual({ delivered: 1, failed: [] });
 
     expect(seen).toEqual(["removed"]);
   });
@@ -91,7 +91,7 @@ describe("PubSub", () => {
 
     expect(hub.subscriberCount("c")).toBe(0);
 
-    expect(await hub.publish("c", null)).toBe(0);
+    expect(await hub.publish("c", null)).toEqual({ delivered: 0, failed: [] });
   });
 
   it("unsubscribe on an unknown channel is a no-op", () => {
@@ -113,11 +113,91 @@ describe("PubSub", () => {
       completed = true;
     });
 
-    const notified = await hub.publish("c", null);
+    const result = await hub.publish("c", null);
 
     expect(completed).toBe(true);
 
-    expect(notified).toBe(1);
+    expect(result).toEqual({ delivered: 1, failed: [] });
+  });
+
+  it("a listener that throws does not abort delivery to the rest — it is isolated and reported", async () => {
+    const hub = new PubSub();
+
+    const seen: string[] = [];
+    const boom = new Error("first listener is dead");
+
+    // The FIRST of three listeners throws synchronously. The regression this pins: a
+    // single dead subscriber must not abort delivery to the second and third — the exact
+    // invariant `fanout()` enforces for a dead socket.
+    hub.subscribe("c", () => {
+      seen.push("first");
+
+      throw boom;
+    });
+
+    hub.subscribe("c", () => {
+      seen.push("second");
+    });
+
+    hub.subscribe("c", () => {
+      seen.push("third");
+    });
+
+    const result = await hub.publish("c", { id: 1 });
+
+    // The survivors still received the message, in subscription order.
+    expect(seen).toEqual(["first", "second", "third"]);
+
+    // The throw is reported, not swallowed, and `publish` itself never rejected.
+    expect(result).toEqual({ delivered: 2, failed: [boom] });
+  });
+
+  it("an async listener that rejects is isolated exactly like a synchronous throw", async () => {
+    const hub = new PubSub();
+
+    const seen: string[] = [];
+    const boom = new Error("async subscriber rejected");
+
+    hub.subscribe("c", async () => {
+      await tick();
+
+      seen.push("first");
+
+      throw boom;
+    });
+
+    hub.subscribe("c", async () => {
+      await tick();
+
+      seen.push("second");
+    });
+
+    const result = await hub.publish("c", null);
+
+    expect(seen).toEqual(["first", "second"]);
+
+    expect(result).toEqual({ delivered: 1, failed: [boom] });
+  });
+
+  it("collects the errors of every failed listener in delivery order", async () => {
+    const hub = new PubSub();
+
+    const first = new Error("first");
+    const third = new Error("third");
+
+    hub.subscribe("c", () => {
+      throw first;
+    });
+
+    hub.subscribe("c", noop);
+
+    hub.subscribe("c", () => {
+      throw third;
+    });
+
+    const result = await hub.publish("c", null);
+
+    expect(result).toEqual({ delivered: 1, failed: [first, third] });
   });
 
   it("subscriberCount reflects subscribe and unsubscribe", () => {
