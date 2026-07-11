@@ -28,6 +28,7 @@ import { bunBuildClientDeps } from "./bun";
 import type { BuildClientDeps, BundleArtifact, BundleRequest } from "./build-client";
 import { collectArtifacts } from "./collect-artifacts";
 import { AssetsError } from "./errors";
+import { shouldSwallowMissingExport } from "./missing-export";
 import { dialectRuntimeDeps, preactAliases } from "./vite-alias";
 
 /** Bundle the synthesized entry with Vite, applying the preact alias for the preact dialect. */
@@ -87,15 +88,23 @@ async function bundle(request: BundleRequest, appRoot: string): Promise<readonly
           // Bun parity for namespace-member access to a missing export. Rollup classifies
           // `ns.missing` (an `import * as ns` member that the module doesn't export) as a
           // NON-FATAL `MISSING_EXPORT` warning — the access is `undefined` at runtime, which
-          // is exactly how `Bun.build` bundles it. Vite's build escalates that warning to a
-          // fatal error by default; downgrade it back so the prod Vite bundle does not
-          // REGRESS apps the Bun build accepts today. The contained live case is
+          // is exactly how `Bun.build` bundles it. The ONE contained live case is
           // `@lesto/ui`'s `React.use` under the preact dialect (`preact/compat` exports no
           // `use`; it is only ever CALLED server-side where React is real — see
-          // `define-island.tsx`). A genuine missing NAMED import (`import { x }`) is a hard
-          // Rollup ERROR, not this warning, so it still fails the build loud.
+          // `define-island.tsx`).
+          //
+          // `shouldSwallowMissingExport` (extracted, unit-tested to 100%: `missing-export.ts`)
+          // narrows the swallow to EXACTLY that case (`binding: "use"` off an `exporter`
+          // resolving into `preact/compat`) — NOT every `MISSING_EXPORT`. Rollup reports the
+          // identical warning shape for a genuine user typo of the same form (`ns.typo`, or an
+          // unreferenced `import { typo }`), which used to be swallowed right along with the
+          // contained hack and ship to prod as `undefined`. Every other `MISSING_EXPORT` is
+          // forwarded to `defaultHandler` so it is surfaced exactly as an unhandled build would
+          // report it, instead of vanishing silently. (A genuine missing NAMED import that is
+          // actually REFERENCED in code is a hard Rollup ERROR thrown before `onwarn` is ever
+          // reached, so it already fails the build loud regardless of this hook.)
           onwarn(warning, defaultHandler) {
-            if (warning.code === "MISSING_EXPORT") {
+            if (shouldSwallowMissingExport(warning)) {
               console.warn(`lesto: ${warning.message}`);
 
               return;
