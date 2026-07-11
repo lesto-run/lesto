@@ -77,7 +77,7 @@ import {
 import type { Clock, PasswordHashCost, Session, SessionStore } from "@lesto/auth";
 import type { Db } from "@lesto/db";
 import { hasCode } from "@lesto/errors";
-import { MemoryRateLimitStore, RateLimiter } from "@lesto/ratelimit";
+import { isUniqueViolation, MemoryRateLimitStore, RateLimiter } from "@lesto/ratelimit";
 
 import { assertStrongSecret, IdentityError } from "./errors";
 import {
@@ -605,8 +605,22 @@ export interface Identity {
   /**
    * Verify credentials and either mint a session or — when the account has a
    * confirmed second factor — withhold it and return a challenge to complete via
-   * {@link Identity.completeTotpChallenge}. See {@link LoginResult}. Throws the
-   * same credential/verification/throttle errors as before on the failure paths.
+   * {@link Identity.completeTotpChallenge}. See {@link LoginResult}.
+   *
+   * **Requires the `totp_factors` table.** Every call reads the caller's
+   * confirmed-factor state (to decide `"authenticated"` vs `"totp_required"`),
+   * so the `totp_factors` migration must be installed even for a deployment
+   * that never enrolls anyone in 2FA. Install {@link totpMigration} (or the
+   * {@link identityMigrations} bundle, which is the recommended "install these"
+   * set) alongside {@link usersMigration} — a DB missing that table throws a
+   * raw, uncoded driver error ("no such table: totp_factors") the first time a
+   * password verifies, NOT one of the coded credential/verification/throttle
+   * `IdentityError`s below.
+   *
+   * Coded failures on the credential/verification/throttle paths:
+   * `IDENTITY_INVALID_CREDENTIALS`, `IDENTITY_EMAIL_NOT_VERIFIED`,
+   * `IDENTITY_LOGIN_THROTTLED`, and (when {@link IdentityOptions.onUnverifiableHash}
+   * is `"require_reset"`) `IDENTITY_PASSWORD_RESET_REQUIRED`.
    */
   login(email: string, password: string): Promise<LoginResult>;
 
@@ -965,10 +979,18 @@ export function createIdentity(options: IdentityOptions): Identity {
           passwordHash: await hasher.hashPassword(password),
           emailVerifiedAt: null,
         });
-      } catch {
-        // A parallel register raced us through the pre-check and hit the
-        // UNIQUE constraint. Treat it as the conflict path so we never leak
-        // a 500 for an enumeration probe.
+      } catch (error) {
+        // This try also wraps `hasher.hashPassword`, so a bare catch-all here
+        // swallowed EVERY failure on this path — not just the one it was
+        // written for. A parallel register racing us through the pre-check and
+        // hitting the UNIQUE constraint is the ONLY case that belongs to the
+        // conflict shape (enumeration-safe: no 500 that would betray the
+        // collision). Anything else — a hasher outage (the edge PBKDF2 bug that
+        // motivated this fix, L-f6fbfce8), a transient DB error — must surface
+        // as a real failure, never a fake "verification_sent" masking a silent
+        // no-op with no row inserted.
+        if (!isUniqueViolation(error)) throw error;
+
         return { status: "verification_sent", user: undefined };
       }
 

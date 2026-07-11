@@ -25,7 +25,45 @@
  * Mail is injected as an interface so the package itself stays decoupled
  * from `@lesto/mail`'s queue + worker boot; a two-line adapter wires the two
  * together at app boot.
+ *
+ * **Install {@link identityMigrations}, not a hand-picked subset.** `login()`
+ * reads the caller's confirmed-factor state on every call, so a deployment
+ * that installs only `usersMigration` gets a raw, uncoded "no such table:
+ * totp_factors" driver error the first time a password verifies. The
+ * individual migration exports remain available for a caller composing its
+ * own ordered set, but {@link identityMigrations} is the one array a fresh
+ * install should hand its `Migrator`.
  */
+
+import type { MigrationEntry } from "@lesto/migrate";
+
+import { grantRole, revokeRole, rolesOf, userRoles, userRolesMigration } from "./roles";
+import {
+  confirmFactor,
+  findTotpFactor,
+  findUnusedRecoveryCodes,
+  markRecoveryCodeUsed,
+  recoveryCodes,
+  replaceRecoveryCodes,
+  totpFactors,
+  totpMigration,
+  upsertUnconfirmedFactor,
+} from "./totp";
+import {
+  deleteUser,
+  findUserByEmail,
+  findUserById,
+  insertUser,
+  isEmailVerified,
+  markEmailVerified,
+  normalizeEmail,
+  setPasswordHash,
+  users,
+  usersMigration,
+} from "./user";
+
+import type { RecoveryCode, TotpFactor } from "./totp";
+import type { User, UserInput } from "./user";
 
 export { createIdentity, pbkdf2MigrationHasher } from "./identity";
 export type {
@@ -49,8 +87,8 @@ export {
   setPasswordHash,
   users,
   usersMigration,
-} from "./user";
-export type { User, UserInput } from "./user";
+};
+export type { User, UserInput };
 
 export {
   confirmFactor,
@@ -62,10 +100,10 @@ export {
   totpFactors,
   totpMigration,
   upsertUnconfirmedFactor,
-} from "./totp";
-export type { RecoveryCode, TotpFactor } from "./totp";
+};
+export type { RecoveryCode, TotpFactor };
 
-export { grantRole, revokeRole, rolesOf, userRoles, userRolesMigration } from "./roles";
+export { grantRole, revokeRole, rolesOf, userRoles, userRolesMigration };
 
 export {
   clearSessionCookie,
@@ -77,3 +115,32 @@ export {
 
 export { IdentityError, LestoError } from "./errors";
 export type { IdentityErrorCode } from "./errors";
+
+/**
+ * The complete, correctly ordered migration set `@lesto/identity` requires —
+ * the canonical "install these" bundle for a fresh app, so a consumer cannot
+ * forget a table `login()` (or roles) silently depends on:
+ *
+ *   1. {@link usersMigration}      — the `users` table.
+ *   2. {@link totpMigration}       — `totp_factors` + `recovery_codes`.
+ *      `login()` reads confirmed-factor state on EVERY call (not just for
+ *      apps that use 2FA), so skipping this migration throws a raw, uncoded
+ *      "no such table: totp_factors" driver error the first time a password
+ *      verifies.
+ *   3. {@link userRolesMigration}  — `user_roles`, for apps resolving
+ *      principal roles from this store (ADR 0028).
+ *
+ * This is purely ADDITIVE: the individual exports above remain available for
+ * a caller that wants to compose its own ordered set (e.g. interleaving app
+ * migrations between them). Hand this array straight to a `Migrator`:
+ *
+ *   import { identityMigrations } from "@lesto/identity";
+ *   import { Migrator } from "@lesto/migrate";
+ *
+ *   await new Migrator(db, identityMigrations).migrate();
+ */
+export const identityMigrations: readonly MigrationEntry[] = [
+  usersMigration,
+  totpMigration,
+  userRolesMigration,
+];

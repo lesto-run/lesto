@@ -12,6 +12,7 @@ import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@lesto/r
 import {
   clearSessionCookie,
   createIdentity,
+  identityMigrations,
   IdentityError,
   normalizeEmail,
   readCookie,
@@ -19,6 +20,7 @@ import {
   SESSION_COOKIE,
   sessionCookie,
   totpMigration,
+  userRolesMigration,
   users,
   usersMigration,
 } from "../src/index";
@@ -28,7 +30,13 @@ import * as userRepo from "../src/user";
 import { expectAuthenticated } from "./authed";
 import { cheapHasher } from "./cheap-hasher";
 
-import type { Identity, IdentityEvent, IdentityMailer, IdentityOptions } from "../src/index";
+import type {
+  Identity,
+  IdentityEvent,
+  IdentityMailer,
+  IdentityOptions,
+  PasswordHasher,
+} from "../src/index";
 
 // ---------------------------------------------------------------------------
 // Test rig
@@ -281,6 +289,36 @@ describe("register", () => {
     await expect(identity.register("ada@example.com", "x".repeat(129))).rejects.toMatchObject({
       code: "IDENTITY_WEAK_PASSWORD",
     });
+  });
+
+  // The insert's catch exists ONLY to swallow the parallel-registration
+  // UNIQUE-constraint race (see "a UNIQUE-constraint race on insert is treated
+  // as a silent conflict" below) — but a bare `catch {}` swallowed EVERY error
+  // the try produced, including `hasher.hashPassword`. When the edge PBKDF2 bug
+  // made `hashPassword` throw, this masked it as a `verification_sent` SUCCESS
+  // with no row inserted: a 200 with an empty users table and no diagnostic
+  // (L-f6fbfce8). Assert the actual failure surfaces instead of the fake
+  // success shape.
+  it("rethrows a non-unique-violation failure instead of a fake success (L-f6fbfce8)", async () => {
+    const boom = new Error("hasher unavailable — not a unique violation");
+    const throwingHasher: PasswordHasher = {
+      ...cheapHasher,
+      hashPassword: async () => {
+        throw boom;
+      },
+    };
+
+    const { identity } = buildIdentity({ hasher: throwingHasher });
+
+    // Exact-identity match (not a loose message/code pattern): the ORIGINAL
+    // error must reach the caller unchanged, not a swallowed/replaced one.
+    await expect(identity.register("nobody-yet@example.com", "correct horse staple")).rejects.toBe(
+      boom,
+    );
+
+    // No row was left behind — the failure surfaced instead of silently
+    // no-opping with an unusable, half-registered account.
+    expect(await userRepo.findUserByEmail(db, "nobody-yet@example.com")).toBeUndefined();
   });
 });
 
@@ -785,6 +823,60 @@ describe("user model + migration", () => {
     expect(() => localRaw.prepare("SELECT * FROM users").all()).toThrow();
 
     localRaw.close();
+  });
+
+  // L-250c1cdf: `login()` reads confirmed-factor state from `totp_factors` on
+  // EVERY call, so a deployment that installs only `usersMigration` is missing
+  // a table `login` silently depends on. `identityMigrations` is the ordered,
+  // "install these" bundle meant to make that impossible to forget — assert its
+  // exact contents and order rather than just its length, so a future reorder
+  // or omission fails loudly here.
+  it("identityMigrations bundles users, totp, and user-roles migrations in order", () => {
+    expect(identityMigrations).toEqual([usersMigration, totpMigration, userRolesMigration]);
+  });
+
+  // Documents the trap `identityMigrations` exists to prevent: a DB that only
+  // ran `usersMigration` throws a RAW, uncoded driver error the moment `login`
+  // consults the missing `totp_factors` table — not one of the coded
+  // credential/verification/throttle `IdentityError`s. (Detecting this
+  // driver-specific "missing table" shape robustly across sqlite/pg/D1 was
+  // judged too fragile to convert into a coded error — see the identity.ts
+  // `login` docstring and the PR notes; this test locks in the documented,
+  // as-is behavior instead.)
+  it("login throws a raw, uncoded error when totp_factors is missing (not installing totpMigration)", async () => {
+    const bareRaw = new Database(":memory:");
+    const bareSql = adapt(bareRaw);
+    const bareDb = createDb(bareSql);
+
+    // Deliberately incomplete: only the users table, mirroring the trap.
+    await new Migrator(bareSql, [usersMigration]).migrate();
+
+    const { mailer, sent } = captureMailer();
+    const identity = createIdentity({
+      db: bareDb,
+      secret: "test-secret-0123456789abcdefghij",
+      mailer,
+      verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+      resetUrl: (token) => `https://app.test/reset?token=${token}`,
+      hasher: cheapHasher,
+      clock: () => clock(),
+    });
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+
+    let caught: unknown;
+    try {
+      await identity.login("ada@example.com", "correct horse staple");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).not.toBeInstanceOf(IdentityError);
+    expect((caught as Error).message).toMatch(/totp_factors/);
+
+    bareRaw.close();
   });
 });
 

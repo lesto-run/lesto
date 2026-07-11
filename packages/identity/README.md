@@ -9,7 +9,11 @@ bun add @lesto/identity
 ```
 
 ```ts
-import { createIdentity } from "@lesto/identity";
+import { createIdentity, identityMigrations } from "@lesto/identity";
+import { Migrator } from "@lesto/migrate";
+
+// Install the REQUIRED migration set — see the callout below.
+await new Migrator(db, identityMigrations).migrate();
 
 const identity = createIdentity({
   db,
@@ -32,9 +36,14 @@ if (result.status === "authenticated") {
 }
 ```
 
-> `login()` reads the caller's confirmed-factor state on every call, so install
-> `totpMigration` alongside `usersMigration` — a deployment missing the
-> `totp_factors` table errors once the password verifies.
+> **Always install `identityMigrations`, not a hand-picked subset.** `login()`
+> reads the caller's confirmed-factor state on *every* call — even for an app
+> that never enrolls anyone in 2FA — so a deployment missing the
+> `totp_factors` table gets a raw, uncoded driver error ("no such table:
+> totp_factors") the first time a password verifies. `identityMigrations` is
+> the ordered `[usersMigration, totpMigration, userRolesMigration]` bundle
+> that makes forgetting a required table impossible; the individual exports
+> remain available for composing a custom migration order.
 
 Composes `@lesto/auth` (scrypt hashing, store-backed sessions, signed tokens),
 `@lesto/db` + `@lesto/migrate` (the `users` schema), and `@lesto/csrf`. Mail is
