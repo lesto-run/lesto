@@ -2,9 +2,11 @@
  * Custom oxlint rule: forbid `instanceof LestoError` on the BASE class.
  *
  * oxlint (unlike ESLint) ships no generic `no-restricted-syntax` rule, so this
- * hand-rolls the one AST shape that matters: a `BinaryExpression` whose
- * operator is `instanceof` and whose right-hand side is the bare identifier
- * `LestoError`.
+ * hand-rolls the AST shape that matters: a `BinaryExpression` whose operator is
+ * `instanceof` and whose right-hand side names the base `LestoError` — either as
+ * the bare identifier `LestoError` or as a namespace member `errors.LestoError`
+ * (`import * as errors`). An aliased import (`import { LestoError as Base }`)
+ * would need binding resolution and is a documented, accepted blind spot.
  *
  * Why this matters: a monorepo install can end up with two copies of
  * `@lesto/errors` (a version mispin, a transitive-dep dedupe miss). An error
@@ -42,13 +44,24 @@ const noBaseInstanceofLestoError: Rule = {
   create(context) {
     return {
       BinaryExpression(node) {
-        if (
-          node.operator !== "instanceof" ||
-          node.right.type !== "Identifier" ||
-          node.right.name !== "LestoError"
-        ) {
-          return;
-        }
+        if (node.operator !== "instanceof") return;
+
+        // The base-class check appears as either `x instanceof LestoError` (a bare
+        // identifier) or `x instanceof errors.LestoError` (a namespace import,
+        // `import * as errors`). Match both — matching only the identifier left a
+        // silent bypass. An ALIASED import (`import { LestoError as Base }`) is NOT
+        // caught: that needs scope/binding resolution this AST-shape rule does not
+        // do, and is a deliberate, documented limitation — nobody aliases the base
+        // error just to `instanceof` it, whereas a namespace import is idiomatic.
+        const right = node.right;
+        const namesBaseClass =
+          (right.type === "Identifier" && right.name === "LestoError") ||
+          (right.type === "MemberExpression" &&
+            !right.computed &&
+            right.property.type === "Identifier" &&
+            right.property.name === "LestoError");
+
+        if (!namesBaseClass) return;
 
         context.report({
           node,
