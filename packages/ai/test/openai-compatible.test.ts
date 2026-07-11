@@ -341,6 +341,9 @@ describe("max_tokens field-name policy — reasoning models need max_completion_
     ["olmo2", "max_tokens"], // id-initial `o`, but no digit follows — not a substring match
     ["o3de", "max_tokens"], // digit not on a hyphen/end boundary — not `o3`
     ["openai/o3", "max_tokens"], // `o3` mid-id, not anchored — OpenRouter normalizes upstream
+    ["gpt-50", "max_tokens"], // gpt-5 RIGHT boundary: `0` is not `.`/`-`/end, so not `gpt-5`
+    ["O3", "max_tokens"], // CASE-SENSITIVE: an uppercase id is not an OpenAI reasoning id
+    ["ft:o4-mini-2025-04-16:acme::abc", "max_tokens"], // fine-tune: un-anchored → deliberate miss (pin maxTokensField)
   ])("chooses the right field for %s", async (modelId, expectedField) => {
     const otherField = expectedField === "max_tokens" ? "max_completion_tokens" : "max_tokens";
     const body = await bodyOf({ defaultModelId: modelId });

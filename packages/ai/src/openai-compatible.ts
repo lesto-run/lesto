@@ -70,9 +70,11 @@ const DEFAULT_MAX_TOKENS = 1024;
  * NOT match) and CASE-SENSITIVE (OpenAI ids are lowercase). The bias is intentional and asymmetric:
  * an unrecognized future reasoning id fails LOUD (a 400 → `AI_HTTP_ERROR`, fixed by pinning
  * `maxTokensField`), whereas an over-match would SILENTLY uncap a local model on a server that just
- * ignores the unknown field — the fail-open this package forbids. When it rots, it rots loud. The
- * one case the heuristic can't see: a local model deliberately aliased to a bare reasoning id (e.g. a
- * vLLM fine-tune served as `o3`) on such a server — that needs an explicit `maxTokensField: "max_tokens"`.
+ * ignores the unknown field — the fail-open this package forbids. When it rots, it rots loud. Two
+ * ids the anchor deliberately misses, both pinned with an explicit `maxTokensField`: an OpenAI
+ * fine-tune of a reasoning model (`ft:o4-mini-…`, un-anchored → sent `max_tokens` → a loud 400 on
+ * OpenAI), and a local model aliased to a bare reasoning id (e.g. a vLLM fine-tune served as `o3`)
+ * on a lenient server that ignores `max_completion_tokens` → silently uncapped.
  */
 const REASONING_MODEL_ID = /^(?:o\d+(?:-|$)|gpt-5(?:[.-]|$))/;
 
@@ -105,15 +107,13 @@ export interface OpenAICompatibleConfig {
   /** The HTTP transport. Defaults to global `fetch`; inject a fake in tests. */
   readonly transport?: Transport;
   /**
-   * Force the output-cap wire field NAME, overriding the built-in per-model heuristic. `max_tokens`
-   * is what chat-completions models and every local target (LM Studio/Ollama/vLLM/LiteLLM) want;
-   * OpenAI's reasoning models (o-series, gpt-5 family) require `max_completion_tokens`. Leave it
-   * unset and the effective model id picks the field automatically (see {@link REASONING_MODEL_ID});
-   * set it when the heuristic can't see the truth — a renaming proxy, a self-hosted reasoning model
-   * on a nonstandard id, or a local model aliased to a reasoning-shaped id. Applies to every call on
-   * this instance and wins unconditionally over the heuristic (explicit beats inferred). The two
-   * literals are the wire field names verbatim, so a typo is a compile error, never a silently
-   * ignored field. Only the field NAME changes — the token value (`maxTokens`) is untouched.
+   * Force the output-cap wire field NAME, overriding the per-model heuristic
+   * ({@link REASONING_MODEL_ID}) — set it when that heuristic can't see the truth: a renaming
+   * proxy, a self-hosted reasoning model on a nonstandard id, or a local model aliased to a
+   * reasoning-shaped id. Unset → the effective model id picks the field automatically; set →
+   * applies to every call on this instance and wins unconditionally (explicit beats inferred).
+   * The two literals are the wire field names verbatim, so a typo is a compile error for a TS
+   * caller (a `string`-cast override at runtime is on the caller — same as every config field).
    */
   readonly maxTokensField?: "max_tokens" | "max_completion_tokens";
 }
@@ -150,12 +150,9 @@ export function createOpenAICompatible(config: OpenAICompatibleConfig): Language
       stream,
     };
 
-    // The output cap rides under one of two field names. OpenAI's reasoning models (o-series and
-    // the gpt-5 family) REJECT `max_tokens` with a 400 and require `max_completion_tokens`;
-    // chat-completions models and every local target (LM Studio/Ollama/vLLM/LiteLLM) want
-    // `max_tokens`. Pick the NAME per effective model id — an explicit `maxTokensField` override
-    // wins, else the `REASONING_MODEL_ID` heuristic — and send exactly ONE of the two (OpenAI 400s
-    // on the pair). The VALUE is identical either way; only the key it rides under changes.
+    // Pick the output-cap field NAME per effective model id — an explicit `maxTokensField` wins,
+    // else the `REASONING_MODEL_ID` heuristic (rationale lives on that constant). Send exactly ONE
+    // of the two (OpenAI 400s on the pair); the VALUE is the same either way, only the key changes.
     const maxTokensField =
       config.maxTokensField ??
       (REASONING_MODEL_ID.test(modelId) ? "max_completion_tokens" : "max_tokens");
