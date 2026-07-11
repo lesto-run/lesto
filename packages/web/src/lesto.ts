@@ -24,6 +24,8 @@
  * the edge adapter both feed.
  */
 
+import { use } from "react";
+
 import { formatTraceparent } from "@lesto/observability";
 import { RouteTable } from "@lesto/router";
 import type { Match } from "@lesto/router";
@@ -814,7 +816,7 @@ export class Lesto {
           }
 
           return loader(c);
-        });
+        }, use);
       }
 
       return renderPageResponse(payload.def, c, payload.layouts, options);

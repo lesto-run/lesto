@@ -30,6 +30,14 @@ import type { FC, ReactNode } from "react";
 /** Resolve a bound data source by name, memoized — one loader run per source per request. */
 export interface SourceResolver {
   resolve(source: string): PromiseLike<unknown>;
+
+  /**
+   * React's `use`, threaded in by the (server-only) caller that built this
+   * resolver — never imported by `@lesto/ui` itself, so no `react` specifier
+   * rides the client island graph. `defineIsland` calls it to read a resolved
+   * thenable during the server render; the client never renders that wrapper.
+   */
+  use<T>(thenable: PromiseLike<T>): T;
 }
 
 /**
@@ -75,9 +83,18 @@ function fulfilled<T>(value: T): FulfilledThenable<T> {
  * it the way React expects. A loader that returns a plain VALUE is stored as a
  * pre-fulfilled tracked thenable so `use()` reads it synchronously — keeping sync
  * loaders compatible with the buffered renderers and the tests simple.
+ *
+ * `use` is React's `use` handed in by the caller (server-only: `@lesto/web`
+ * builds the resolver; `defineIsland` calls `resolver.use` during the server
+ * render). Threading it through the seam — rather than importing `react` here —
+ * keeps every `react` specifier off the client island graph, so the preact
+ * dialect's `react → preact/compat` alias (which exports no `use`) never trips a
+ * bundle-time `MISSING_EXPORT`. This module imports no `react` at all beyond the
+ * `createContext` the context needs.
  */
 export function createSourceResolver(
   load: (source: string) => Promise<unknown> | unknown,
+  use: <T>(thenable: PromiseLike<T>) => T,
 ): SourceResolver {
   const memo = new Map<string, PromiseLike<unknown>>();
 
@@ -98,6 +115,7 @@ export function createSourceResolver(
 
       return thenable;
     },
+    use,
   };
 }
 

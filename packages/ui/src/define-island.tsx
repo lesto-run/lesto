@@ -45,7 +45,6 @@
  */
 
 import { createElement, Fragment, useContext, useId } from "react";
-import * as React from "react";
 import type { ComponentType, ReactElement, ReactNode } from "react";
 
 import { dataPrimerScript } from "./data";
@@ -76,21 +75,19 @@ export interface IslandComponent<Rest extends Record<string, unknown> = Record<s
  * bag to inline (and so omit each resolved source's `bind`), or `undefined` to
  * keep the static bind + primer behavior.
  *
- * `React.use()` may be called here in a loop and conditionally — it is the one
- * React Hook that may. A real promise suspends the render (Suspense + the
- * stream's 10s deadline own that); a sync loader's pre-fulfilled thenable reads
- * synchronously.
- *
- * `use` is read off the React namespace, NOT a named import: under the
- * preact-dialect client alias (`react → preact/compat`, ADR 0007) `preact/compat`
- * exports no `use`, and a named `import { use }` would fail the client bundle —
- * `define-island` rides the client graph via the `@lesto/ui` barrel. It is only
- * ever *called* here, server-side (a resolver is in scope only under
- * `renderPageResponse`'s provider; the client mounts the registered component
- * directly and never renders this wrapper), where React is real and `use`
- * exists. The proper fix is splitting the `@lesto/ui` barrel so server-only
- * machinery leaves the client graph entirely (chief-architect review 2a); this
- * namespace access is the contained unbreak until then.
+ * `use` here is React's `use`, threaded in on the resolver by the server-only
+ * caller (`@lesto/web`) rather than imported by this module — so no `react`
+ * specifier rides the client island graph, and the preact dialect's
+ * `react → preact/compat` alias (which exports no `use`) never trips a
+ * bundle-time `MISSING_EXPORT`. It may be called here in a loop and
+ * conditionally — `use` is the one React Hook that may, and React's dispatcher
+ * permits reaching it through an alias, so suspension, memoized sharing, and the
+ * pre-fulfilled sync-thenable path all behave identically. A real promise
+ * suspends the render (Suspense + the stream's 10s deadline own that); a sync
+ * loader's pre-fulfilled thenable reads synchronously. This wrapper is only ever
+ * rendered server-side (a resolver is in scope only under `renderPageResponse`'s
+ * provider; the client mounts the registered component directly and never renders
+ * it), where React is real and `use` exists.
  */
 function resolveData(
   def: ClientComponentDef,
@@ -118,7 +115,7 @@ function resolveData(
   const inlined: Record<string, unknown> = {};
 
   for (const [prop, source] of Object.entries(def.data)) {
-    inlined[prop] = React.use(resolver.resolve(source.name));
+    inlined[prop] = resolver.use(resolver.resolve(source.name));
   }
 
   return inlined;

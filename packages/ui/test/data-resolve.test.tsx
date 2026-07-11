@@ -1,3 +1,4 @@
+import { use } from "react";
 import { describe, expect, it } from "vitest";
 
 import { createSourceResolver } from "../src/index";
@@ -10,7 +11,7 @@ describe("createSourceResolver", () => {
       calls.push(source);
 
       return `v:${source}`;
-    });
+    }, use);
 
     const a1 = resolver.resolve("session");
     const a2 = resolver.resolve("session");
@@ -23,7 +24,7 @@ describe("createSourceResolver", () => {
   });
 
   it("wraps a sync value as a pre-fulfilled thenable read synchronously", async () => {
-    const resolver = createSourceResolver(() => ({ id: "ada" }));
+    const resolver = createSourceResolver(() => ({ id: "ada" }), use);
 
     const thenable = resolver.resolve("session") as {
       status: string;
@@ -41,7 +42,7 @@ describe("createSourceResolver", () => {
   });
 
   it("wraps a sync value with no onFulfilled and resolves to the value", async () => {
-    const resolver = createSourceResolver(() => 7);
+    const resolver = createSourceResolver(() => 7, use);
 
     const thenable = resolver.resolve("n") as PromiseLike<unknown>;
 
@@ -53,7 +54,7 @@ describe("createSourceResolver", () => {
   it("passes a real promise through untouched", async () => {
     const promised = Promise.resolve("async-value");
 
-    const resolver = createSourceResolver(() => promised);
+    const resolver = createSourceResolver(() => promised, use);
 
     expect(resolver.resolve("session")).toBe(promised);
     await expect(resolver.resolve("session")).resolves.toBe("async-value");
@@ -66,7 +67,7 @@ describe("createSourceResolver", () => {
       runs += 1;
 
       return Promise.resolve("x");
-    });
+    }, use);
 
     resolver.resolve("session");
     resolver.resolve("session");
@@ -81,7 +82,7 @@ describe("createSourceResolver", () => {
       runs += 1;
 
       return null;
-    });
+    }, use);
 
     const first = resolver.resolve("session");
     const second = resolver.resolve("session");

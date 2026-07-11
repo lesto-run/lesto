@@ -28,7 +28,7 @@ import { bunBuildClientDeps } from "./bun";
 import type { BuildClientDeps, BundleArtifact, BundleRequest } from "./build-client";
 import { collectArtifacts } from "./collect-artifacts";
 import { AssetsError } from "./errors";
-import { shouldSwallowMissingExport } from "./missing-export";
+import { failOnMissingExport } from "./missing-export";
 import { dialectRuntimeDeps, preactAliases } from "./vite-alias";
 
 /** Bundle the synthesized entry with Vite, applying the preact alias for the preact dialect. */
@@ -85,30 +85,29 @@ async function bundle(request: BundleRequest, appRoot: string): Promise<readonly
         modulePreload: { polyfill: false },
         rollupOptions: {
           input: entryFile,
-          // Bun parity for namespace-member access to a missing export. Rollup classifies
-          // `ns.missing` (an `import * as ns` member that the module doesn't export) as a
-          // NON-FATAL `MISSING_EXPORT` warning — the access is `undefined` at runtime, which
-          // is exactly how `Bun.build` bundles it. The ONE contained live case is
-          // `@lesto/ui`'s `React.use` under the preact dialect (`preact/compat` exports no
-          // `use`; it is only ever CALLED server-side where React is real — see
-          // `define-island.tsx`).
+          // Make a missing export FATAL. Rollup classifies `ns.missing` (an `import * as ns`
+          // member the module doesn't export, or an unreferenced `import { missing }`) as a
+          // NON-FATAL `MISSING_EXPORT` warning and compiles the access to `undefined` — and
+          // Vite's default handler only WARNS it (only `UNRESOLVED_IMPORT` throws), so a
+          // genuine user typo (`ns.typo`) would otherwise ship to prod silently as `undefined`.
           //
-          // `shouldSwallowMissingExport` (extracted, unit-tested to 100%: `missing-export.ts`)
-          // narrows the swallow to EXACTLY that case (`binding: "use"` off an `exporter`
-          // resolving into `preact/compat`) — NOT every `MISSING_EXPORT`. Rollup reports the
-          // identical warning shape for a genuine user typo of the same form (`ns.typo`, or an
-          // unreferenced `import { typo }`), which used to be swallowed right along with the
-          // contained hack and ship to prod as `undefined`. Every other `MISSING_EXPORT` is
-          // forwarded to `defaultHandler` so it is surfaced exactly as an unhandled build would
-          // report it, instead of vanishing silently. (A genuine missing NAMED import that is
-          // actually REFERENCED in code is a hard Rollup ERROR thrown before `onwarn` is ever
-          // reached, so it already fails the build loud regardless of this hook.)
+          // `failOnMissingExport` (extracted, unit-tested to 100%: `missing-export.ts`) THROWS
+          // a coded `AssetsError` naming the missing binding + exporter for EVERY
+          // `MISSING_EXPORT`; the throw rides out of Rollup's build and is caught below (which
+          // `console.error`s the cause, so the user sees which binding/module missed) and
+          // re-wrapped as `ASSETS_BUNDLE_FAILED`. There is no longer any contained case to
+          // swallow: the one historical live producer — `@lesto/ui`'s `React.use` off the
+          // `react → preact/compat` namespace under the preact dialect — is gone (the resolver
+          // now carries React's `use` through a server-only seam, so no `react` specifier rides
+          // the client island graph). Every other warning code is forwarded to `defaultHandler`
+          // unchanged.
+          //
+          // This DELIBERATELY diverges from `Bun.build`, which silently ships the same access
+          // as `undefined` — that silence is the bug, not a parity target. (A missing NAMED
+          // import actually REFERENCED in code is already a hard Rollup ERROR thrown before
+          // `onwarn` is reached, so it fails loud regardless of this hook.)
           onwarn(warning, defaultHandler) {
-            if (shouldSwallowMissingExport(warning)) {
-              console.warn(`lesto: ${warning.message}`);
-
-              return;
-            }
+            failOnMissingExport(warning);
 
             defaultHandler(warning);
           },

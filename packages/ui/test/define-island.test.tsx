@@ -11,7 +11,7 @@
  * the manifest path. The two are proven to meet in the middle.
  */
 
-import { act, Suspense } from "react";
+import { act, Suspense, use } from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -128,7 +128,7 @@ function stubResolver(value: unknown): { resolver: SourceResolver; loaded: strin
     loaded.push(source);
 
     return value;
-  });
+  }, use);
 
   return { resolver, loaded };
 }
@@ -259,7 +259,7 @@ describe("defineIsland — render-time resolver (ADR 0012)", () => {
     });
 
     // An async loader — resolved through React's `use()` + Suspense + the stream.
-    const resolver = createSourceResolver(() => Promise.resolve({ likes: 77 }));
+    const resolver = createSourceResolver(() => Promise.resolve({ likes: 77 }), use);
 
     const element = createElement(
       "div",

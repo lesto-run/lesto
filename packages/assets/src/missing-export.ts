@@ -1,57 +1,61 @@
 /**
- * Classifies a Rollup `MISSING_EXPORT` warning so the prod Vite build (`vite-build.ts`)
- * can swallow ONLY the one contained hack it exists to paper over, instead of the
- * blanket "swallow every `MISSING_EXPORT`" that used to also hide a user's genuine typo
- * (an `import { typo } from "..."` or a `ns.typo` namespace-member read of a name that
- * doesn't exist) — which Rollup ALSO reports as a non-fatal `MISSING_EXPORT` warning and
- * compiles to a literal `undefined`, exactly like the contained case, so a blanket
- * swallow could not tell the two apart.
+ * `failOnMissingExport` — turns a Rollup `MISSING_EXPORT` build warning into a
+ * FATAL, coded `AssetsError` for the prod Vite build (`vite-build.ts`).
  *
- * The contained case is `@lesto/ui`'s `define-island.tsx` reading `React.use` off the
- * React namespace (a namespace-member access, not a named import) — under the preact
- * dialect's `react → preact/compat` alias (ADR 0007), `preact/compat` exports no `use`;
- * it is only ever CALLED server-side, where React is real (see `define-island.tsx`'s own
- * doc). Extracted here (out of the coverage-excluded bundler edge) so the classification
- * is unit-tested directly, the same reason `collect-artifacts.ts` exists.
+ * Rollup classifies a namespace-member read of a name a module does not export
+ * (`ns.typo`, or an unreferenced `import { typo }`) as a NON-FATAL `MISSING_EXPORT`
+ * warning and compiles the access to a literal `undefined` at runtime — exactly
+ * how `Bun.build` ships the same code. Vite's default `onLog`/`onwarn` only WARNS
+ * `MISSING_EXPORT` (only `UNRESOLVED_IMPORT` throws), so before this escalation a
+ * genuine user typo shipped to prod silently as `undefined`.
  *
- * Confirmed against a real warning object (not just the `.d.ts`): building a throwaway
- * entry with `import * as React from "preact/compat"; React.use` and logging the
- * `onwarn` argument yields
- * `{ binding: "use", code: "MISSING_EXPORT", exporter: "<abs path>/preact/compat/dist/compat.module.js", ... }`
- * — matching rollup@4's shipped `RollupLog` type (`binding`/`exporter` are both real,
- * populated fields, per its `logMissingExport` source) and the same shape Rollup uses for
- * ANY namespace-member miss, contained or not: a throwaway repro of
- * `import * as mod from "./mod"; mod.typo` (where `mod` has no `typo` export) produced
- * `{ binding: "typo", code: "MISSING_EXPORT", exporter: "<abs path>/mod.mjs" }` through the
- * exact same `onwarn` hook — proving `binding` + `exporter` are what distinguish the
- * contained hack from a real typo of the same shape.
+ * There is no longer any legitimate producer to contain. The one historical live
+ * case — `@lesto/ui`'s `define-island.tsx` reading `React.use` off the
+ * `react → preact/compat` namespace under the preact dialect (`preact/compat`
+ * exports no `use`) — is gone: the resolver now carries React's `use` through a
+ * server-only seam (`@lesto/web` builds it, `defineIsland` calls `resolver.use`),
+ * so no `react` specifier rides the client island graph and nothing reads `use`
+ * off the aliased namespace. Every `MISSING_EXPORT` that now reaches the build is
+ * a real miss, so this escalates ALL of them (superseding the earlier narrowed
+ * `shouldSwallowMissingExport` swallow, whose one contained shape no longer
+ * exists).
  *
- * `exporter` is Rollup's RESOLVED absolute module id (later rendered relative for the
- * warning's own message), not a bare specifier — so matching on the `preact/compat`
- * package subpath (present in the resolved path regardless of which conditional export,
- * `.mjs`/`.js`/`.module.js`, was resolved) identifies the module without caring where
- * `node_modules` is rooted.
+ * Extracted out of the coverage-excluded bundler edge (`vite-build.ts`) so the
+ * escalation is unit-tested directly, the same reason `collect-artifacts.ts`
+ * exists. `warning.binding` (the missing name) and `warning.exporter` (Rollup's
+ * RESOLVED absolute module id) are both real, populated fields on rollup@4's
+ * `RollupLog` for this code — confirmed against a real warning object, not just
+ * the `.d.ts` — so the thrown error names exactly which binding missed from which
+ * module.
  */
 
 import type { Rollup } from "vite";
 
-/** The one missing binding the contained hack ever produces (`define-island.tsx`). */
-const CONTAINED_BINDING = "use";
-
-/** Matches `exporter` paths resolving into the `preact/compat` package subpath. */
-const PREACT_COMPAT_EXPORTER = /(?:^|[/\\])preact[/\\]compat(?:[/\\]|$)/;
+import { AssetsError } from "./errors";
 
 /**
- * True iff `warning` is EXACTLY the contained `React.use`-off-`preact/compat` case — the
- * only `MISSING_EXPORT` the prod build may swallow. Every other warning (a different
- * `code` entirely, a different `binding`, or a `binding: "use"` whose `exporter` is NOT
- * `preact/compat`) is a real miss and must escalate to `defaultHandler`.
+ * THROW a fatal `AssetsError` when `warning` is a Rollup `MISSING_EXPORT` — a
+ * `ns.missing` namespace-member miss Rollup would otherwise only warn about and
+ * compile to `undefined`. Every other warning code returns untouched, so
+ * `vite-build.ts` forwards it to Rollup's `defaultHandler` unchanged.
+ *
+ * The thrown error carries the missing `binding` + `exporter` module id (in both
+ * the message and `details`) so the build failure names the exact typo. It rides
+ * out of Rollup's build and is caught + re-wrapped as `ASSETS_BUNDLE_FAILED` by
+ * `vite-build.ts` (which `console.error`s this cause first), so the user sees
+ * which binding/module missed instead of a silent `undefined`.
+ *
+ * Deliberately DIVERGES from `Bun.build`, which ships the same access as a silent
+ * `undefined` — that silence is the bug, not a parity target.
  */
-export function shouldSwallowMissingExport(warning: Rollup.RollupLog): boolean {
-  return (
-    warning.code === "MISSING_EXPORT" &&
-    warning.binding === CONTAINED_BINDING &&
-    warning.exporter !== undefined &&
-    PREACT_COMPAT_EXPORTER.test(warning.exporter)
+export function failOnMissingExport(warning: Rollup.RollupLog): void {
+  if (warning.code !== "MISSING_EXPORT") return;
+
+  throw new AssetsError(
+    "ASSETS_BUNDLE_FAILED",
+    `missing export ${JSON.stringify(warning.binding)} from ${JSON.stringify(warning.exporter)} — ` +
+      "a namespace-member access of a name the module does not export would ship as `undefined`; " +
+      "check the import or access for a typo",
+    { binding: warning.binding, exporter: warning.exporter },
   );
 }
