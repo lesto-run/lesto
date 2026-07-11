@@ -14,7 +14,9 @@
  */
 
 import { AiError } from "./errors";
+import { parseSseStream } from "./sse";
 
+import type { ParsedFrame } from "./sse";
 import type {
   ContentBlock as MessageBlock,
   GenerateOptions,
@@ -168,149 +170,35 @@ export async function parseResponse(response: Response): Promise<GenerateResult>
  * Parse the Messages SSE stream into normalized text deltas, returning the final
  * {@link StreamFinal} (usage + stop reason) once the stream drains.
  *
- * The stream is a sequence of `event: <type>\n data: <json>\n\n` frames. Text rides on
- * `content_block_delta`/`text_delta` frames (yielded); the token accounting rides out-of-band on
- * `message_start` (input tokens) and `message_delta` (output tokens + stop reason), which are
- * folded into the returned value rather than yielded — so a `for-await` consumer sees only text.
- * The parser is a pure async transform over the response's `ReadableStream<Uint8Array>` — fed a
- * canned stream in tests, asserting the exact deltas AND the final accounting, with no network.
- *
- * A non-2xx fails loud as `AI_HTTP_ERROR`; a frame whose `data:` is not JSON
- * fails as `AI_STREAM_MALFORMED` rather than silently dropping tokens.
+ * The stream lifecycle — HTTP/body refusal, the `\n\n` frame loop, `data:` extraction, the
+ * `[DONE]` skip, `JSON.parse`→`AI_STREAM_MALFORMED`, torn-final tolerance, the both-counts return
+ * discipline, and reader cleanup — lives in the shared {@link parseSseStream} engine. This provider
+ * supplies only {@link interpretFrame}. Text rides on `content_block_delta`/`text_delta` frames;
+ * the token accounting rides out-of-band on `message_start` (input tokens) and `message_delta`
+ * (output tokens + stop reason), folded into the returned value rather than yielded — so a
+ * `for-await` consumer sees only text.
  */
-export async function* parseStream(
+export function parseStream(
   response: Response,
 ): AsyncGenerator<StreamDelta, StreamFinal | undefined> {
-  if (!response.ok) {
-    throw new AiError("AI_HTTP_ERROR", `Anthropic responded ${response.status}.`, {
-      status: response.status,
-    });
-  }
-
-  if (response.body === null) {
-    throw new AiError("AI_STREAM_MALFORMED", "Streaming response had no body.");
-  }
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  const reader = response.body.getReader();
-
-  // The token accounting Anthropic reports out-of-band, folded in as the meta frames arrive. Left
-  // undefined until seen, so a torn stream that never delivered them is distinguishable from a
-  // reported zero (the former returns `undefined`; the latter, real zeros).
-  let inputTokens: number | undefined;
-  let outputTokens: number | undefined;
-  let stopReason: StopReason | undefined;
-
-  const absorb = (meta: Extract<ParsedFrame, { kind: "meta" }>): void => {
-    if (meta.inputTokens !== undefined) inputTokens = meta.inputTokens;
-    if (meta.outputTokens !== undefined) outputTokens = meta.outputTokens;
-    if (meta.stopReason !== undefined) stopReason = meta.stopReason;
-  };
-
-  try {
-    // Read chunks, accumulate, and emit one delta per complete `\n\n`-terminated
-    // frame. A partial frame stays in the buffer until the next chunk completes it,
-    // so a token split across two network reads is never lost or double-counted.
-    for (;;) {
-      const { done, value } = await reader.read();
-
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      let boundary = buffer.indexOf("\n\n");
-
-      while (boundary !== -1) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-
-        const parsed = parseFrame(frame);
-
-        if (parsed?.kind === "text") yield { text: parsed.text };
-        else if (parsed?.kind === "meta") absorb(parsed);
-
-        boundary = buffer.indexOf("\n\n");
-      }
-    }
-
-    // Flush a final frame the stream closed WITHOUT a trailing blank line — recovering a
-    // complete-but-unterminated last delta the loop's `\n\n` scan would otherwise drop.
-    // Unlike a mid-stream frame, this trailing remainder can also be a TORN frame from an
-    // aborted/dropped connection (incomplete JSON): tolerate that quietly — the stream just
-    // ended early, so end with the deltas already yielded rather than raising
-    // AI_STREAM_MALFORMED on a truncation. A malformed frame mid-stream still throws (above).
-    buffer += decoder.decode();
-
-    let last: ParsedFrame | undefined;
-    try {
-      last = parseFrame(buffer);
-    } catch {
-      last = undefined;
-    }
-
-    if (last?.kind === "text") yield { text: last.text };
-    else if (last?.kind === "meta") absorb(last);
-
-    // Surface the final accounting as the generator's RETURN value (`streamText` reads it via
-    // `yield*`). `usage` is reported ONLY when BOTH counts genuinely arrived — never a fabricated
-    // zero: a stream torn after `message_start` (input seen) but before `message_delta` (output
-    // lost) reports no usage, exactly the "never received" case `ai.streaming = true` marks as
-    // expected. When nothing meaningful arrived at all, the whole value is `undefined`.
-    if (inputTokens !== undefined && outputTokens !== undefined) {
-      return {
-        usage: { inputTokens, outputTokens },
-        ...(stopReason === undefined ? {} : { stopReason }),
-      };
-    }
-
-    return stopReason === undefined ? undefined : { stopReason };
-  } finally {
-    // Release the reader / cancel the upstream body on EVERY exit — a normal drain, a thrown
-    // frame, AND an early `for-await` `break` (which resumes the generator here via its
-    // `return()`). Without this the locked reader and its underlying socket leak whenever a
-    // consumer stops early — a common pattern for streamed output. `cancel()` on an
-    // already-closed stream is a no-op; swallow any rejection so cleanup never masks the result.
-    await reader.cancel().catch(() => {});
-  }
+  return parseSseStream(response, interpretFrame, "Anthropic");
 }
 
 /**
- * Turn one SSE frame into a {@link ParsedFrame}: a `text` token, a `meta` frame (`message_start`
- * → input tokens; `message_delta` → output tokens + stop reason), or `undefined` for a frame we
- * ignore (`content_block_start`, `ping`, `message_stop`, …).
- *
- * A `data:` line that is present but not valid JSON is malformed — refused
- * loudly. The terminal `data: [DONE]` sentinel some providers send is ignored.
+ * Map one parsed Anthropic stream event to a {@link ParsedFrame}: a text token
+ * (`content_block_delta`/`text_delta`), the input tokens (`message_start`), or the output tokens +
+ * stop reason (`message_delta`). Any other event (`content_block_start`, `ping`, `message_stop`, …)
+ * contributes nothing (`{}`/`undefined`). Pure and total; never throws (the engine owns JSON parsing).
  */
-function parseFrame(frame: string): ParsedFrame | undefined {
-  const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
-
-  if (dataLine === undefined) {
-    return undefined;
-  }
-
-  const raw = dataLine.slice("data:".length).trim();
-
-  if (raw === "" || raw === "[DONE]") {
-    return undefined;
-  }
-
-  let event: AnthropicStreamEvent;
-
-  try {
-    event = JSON.parse(raw) as AnthropicStreamEvent;
-  } catch {
-    throw new AiError("AI_STREAM_MALFORMED", "Stream frame data was not valid JSON.", { frame });
-  }
+function interpretFrame(json: unknown): ParsedFrame | undefined {
+  const event = json as AnthropicStreamEvent;
 
   if (
     event.type === "content_block_delta" &&
     event.delta?.type === "text_delta" &&
     event.delta.text !== undefined
   ) {
-    return { kind: "text", text: event.delta.text };
+    return { text: event.delta.text };
   }
 
   // The prompt (input) token count arrives up front on `message_start`. Its `usage` ALSO carries a
@@ -320,14 +208,13 @@ function parseFrame(frame: string): ParsedFrame | undefined {
   // instead of withholding usage), so `message_start` contributes input tokens only.
   if (event.type === "message_start") {
     const inputTokens = event.message?.usage?.input_tokens;
-    return inputTokens === undefined ? { kind: "meta" } : { kind: "meta", inputTokens };
+    return inputTokens === undefined ? {} : { inputTokens };
   }
 
   // The final cumulative output count + the stop reason arrive on `message_delta`.
   if (event.type === "message_delta") {
     const outputTokens = event.usage?.output_tokens;
     return {
-      kind: "meta",
       ...(outputTokens === undefined ? {} : { outputTokens }),
       ...(event.delta?.stop_reason == null
         ? {}
@@ -400,18 +287,3 @@ interface AnthropicStreamEvent {
   /** On `message_delta`: the final cumulative `usage` (output token count). */
   readonly usage?: AnthropicUsage;
 }
-
-/**
- * One interpreted stream frame: a text token to yield, or a `meta` frame carrying the token/stop
- * accounting Anthropic reports out-of-band (`message_start` → input tokens; `message_delta` →
- * output tokens + stop reason). {@link parseStream} yields the text and folds the meta into the
- * {@link StreamFinal} it returns. Frames we don't care about parse to `undefined`.
- */
-type ParsedFrame =
-  | { readonly kind: "text"; readonly text: string }
-  | {
-      readonly kind: "meta";
-      readonly inputTokens?: number;
-      readonly outputTokens?: number;
-      readonly stopReason?: StopReason;
-    };

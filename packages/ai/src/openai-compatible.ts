@@ -39,7 +39,9 @@
  */
 
 import { AiError } from "./errors";
+import { parseSseStream } from "./sse";
 
+import type { ParsedFrame } from "./sse";
 import type {
   ContentBlock as MessageBlock,
   GenerateOptions,
@@ -312,138 +314,20 @@ async function parseResponse(response: Response): Promise<GenerateResult> {
  * fails as `AI_STREAM_MALFORMED` rather than silently dropping tokens. A torn final frame
  * (a dropped connection mid-frame) is tolerated quietly — the stream just ended early.
  */
-async function* parseStream(
-  response: Response,
-): AsyncGenerator<StreamDelta, StreamFinal | undefined> {
-  if (!response.ok) {
-    throw new AiError("AI_HTTP_ERROR", `OpenAI-compatible endpoint responded ${response.status}.`, {
-      status: response.status,
-    });
-  }
-
-  if (response.body === null) {
-    throw new AiError("AI_STREAM_MALFORMED", "Streaming response had no body.");
-  }
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  const reader = response.body.getReader();
-
-  // Left undefined until seen, so a torn stream that never delivered usage/stop is
-  // distinguishable from a reported zero (the former returns `undefined`; the latter, real zeros).
-  let inputTokens: number | undefined;
-  let outputTokens: number | undefined;
-  let stopReason: StopReason | undefined;
-
-  const absorb = (parsed: ParsedFrame): void => {
-    if (parsed.inputTokens !== undefined) inputTokens = parsed.inputTokens;
-    if (parsed.outputTokens !== undefined) outputTokens = parsed.outputTokens;
-    if (parsed.stopReason !== undefined) stopReason = parsed.stopReason;
-  };
-
-  try {
-    // Read chunks, accumulate, and emit one delta per complete `\n\n`-terminated frame.
-    // A partial frame stays buffered until the next chunk completes it, so a token split
-    // across two network reads is never lost or double-counted.
-    for (;;) {
-      const { done, value } = await reader.read();
-
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      let boundary = buffer.indexOf("\n\n");
-
-      while (boundary !== -1) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-
-        const parsed = parseFrame(frame);
-
-        if (parsed !== undefined) {
-          if (parsed.text !== undefined) yield { text: parsed.text };
-          absorb(parsed);
-        }
-
-        boundary = buffer.indexOf("\n\n");
-      }
-    }
-
-    // Flush a final frame the stream closed WITHOUT a trailing blank line — recovering a
-    // complete-but-unterminated last delta the `\n\n` scan would otherwise drop. A TORN frame
-    // from an aborted connection (incomplete JSON) is tolerated quietly here: the stream just
-    // ended early, so end with the deltas already yielded rather than raising AI_STREAM_MALFORMED
-    // (which is reserved for a malformed frame mid-stream, thrown above).
-    buffer += decoder.decode();
-
-    let last: ParsedFrame | undefined;
-    try {
-      last = parseFrame(buffer);
-    } catch {
-      last = undefined;
-    }
-
-    if (last !== undefined) {
-      if (last.text !== undefined) yield { text: last.text };
-      absorb(last);
-    }
-
-    // Surface the final accounting as the generator's RETURN value (`streamText` reads it via
-    // `yield*`). `usage` is reported ONLY when BOTH counts genuinely arrived — never a fabricated
-    // zero: a stream torn before the terminal usage chunk reports no usage, exactly the "never
-    // received" case `ai.streaming = true` marks as expected. When nothing meaningful arrived at
-    // all, the whole value is `undefined`.
-    if (inputTokens !== undefined && outputTokens !== undefined) {
-      return {
-        usage: { inputTokens, outputTokens },
-        ...(stopReason === undefined ? {} : { stopReason }),
-      };
-    }
-
-    return stopReason === undefined ? undefined : { stopReason };
-  } finally {
-    // Release the reader / cancel the upstream body on EVERY exit — a normal drain, a thrown
-    // frame, AND an early `for-await` `break` (which resumes the generator here via its
-    // `return()`). Without this the locked reader and its socket leak whenever a consumer stops
-    // early. `cancel()` on an already-closed stream is a no-op; swallow any rejection so cleanup
-    // never masks the result.
-    await reader.cancel().catch(() => {});
-  }
+function parseStream(response: Response): AsyncGenerator<StreamDelta, StreamFinal | undefined> {
+  return parseSseStream(response, interpretFrame, "OpenAI-compatible endpoint");
 }
 
 /**
- * Turn one SSE frame into a {@link ParsedFrame}: any combination of a `text` token, the
- * `stopReason` (from `finish_reason`), and the token `usage` (from the terminal usage
- * chunk) — or `undefined` for a frame we ignore (`[DONE]`, a comment, a role-only delta).
- *
- * Unlike Anthropic's strictly text-XOR-meta frames, an OpenAI chunk can legitimately carry
- * a content delta AND a `finish_reason` together, so the parsed shape is additive rather
- * than a discriminated union — every meaningful field on the chunk is captured.
- *
- * A `data:` line present but not valid JSON is malformed — refused loudly. The terminal
- * `data: [DONE]` sentinel is ignored.
+ * Map one parsed chat-completions chunk to a {@link ParsedFrame}: any combination of a text token
+ * (`choices[0].delta.content`), the stop reason (`choices[0].finish_reason`), and the token usage
+ * (the terminal `stream_options.include_usage` chunk whose `choices` is empty). Unlike Anthropic's
+ * text-XOR-meta frames, an OpenAI chunk can legitimately carry a content delta AND a `finish_reason`
+ * together, so every meaningful field is captured additively. A frame that carries nothing (a
+ * role-only opening delta) returns an empty bag the engine skips. Pure and total; never throws.
  */
-function parseFrame(frame: string): ParsedFrame | undefined {
-  const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
-
-  if (dataLine === undefined) {
-    return undefined;
-  }
-
-  const raw = dataLine.slice("data:".length).trim();
-
-  if (raw === "" || raw === "[DONE]") {
-    return undefined;
-  }
-
-  let chunk: ChatCompletionChunk;
-
-  try {
-    chunk = JSON.parse(raw) as ChatCompletionChunk;
-  } catch {
-    throw new AiError("AI_STREAM_MALFORMED", "Stream frame data was not valid JSON.", { frame });
-  }
+function interpretFrame(json: unknown): ParsedFrame | undefined {
+  const chunk = json as ChatCompletionChunk;
 
   const choice = chunk.choices?.[0];
   const parsed: {
@@ -473,14 +357,9 @@ function parseFrame(frame: string): ParsedFrame | undefined {
     }
   }
 
-  // A frame that told us nothing (a role-only opening delta) collapses to `undefined` so the
-  // loop skips it, rather than a hollow object the caller must re-check.
-  return parsed.text === undefined &&
-    parsed.inputTokens === undefined &&
-    parsed.outputTokens === undefined &&
-    parsed.stopReason === undefined
-    ? undefined
-    : parsed;
+  // A role-only opening delta yields an empty bag; the shared engine treats `{}` as a skip
+  // (identical to `undefined`), so no explicit collapse is needed here.
+  return parsed;
 }
 
 /**
@@ -566,17 +445,4 @@ interface ChatCompletionChunk {
     readonly finish_reason?: string | null;
   }[];
   readonly usage?: ChatUsage | null;
-}
-
-/**
- * One interpreted stream frame — an additive bag (not a discriminated union, unlike Anthropic's):
- * an OpenAI chunk can carry a text token AND a `finish_reason` together, and usage arrives on its
- * own terminal chunk. {@link parseStream} yields the text and folds the rest into the
- * {@link StreamFinal} it returns. A frame that carries nothing meaningful parses to `undefined`.
- */
-interface ParsedFrame {
-  readonly text?: string;
-  readonly inputTokens?: number;
-  readonly outputTokens?: number;
-  readonly stopReason?: StopReason;
 }
