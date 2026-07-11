@@ -9,14 +9,18 @@ bun add @lesto/identity
 ```
 
 ```ts
+import { createDb } from "@lesto/db";
 import { createIdentity, identityMigrations } from "@lesto/identity";
 import { Migrator } from "@lesto/migrate";
 
-// Install the REQUIRED migration set — see the callout below.
-await new Migrator(db, identityMigrations).migrate();
+// `sql` is your SqlDatabase driver handle — e.g. `openSqlite()` from
+// @lesto/runtime, or a Cloudflare D1 binding adapted via @lesto/cloudflare.
+// The Migrator runs raw DDL, so it takes `sql`; `createIdentity` takes the
+// query builder `createDb(sql)` wraps around it.
+await new Migrator(sql, identityMigrations).migrate(); // REQUIRED set — see callout
 
 const identity = createIdentity({
-  db,
+  db: createDb(sql),
   secret: env.LESTO_AUTH_SECRET,
   mailer: { sendVerificationEmail, sendPasswordResetEmail },
   verificationUrl: (token) => `https://app.com/verify?token=${token}`,

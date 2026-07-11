@@ -614,7 +614,8 @@ export interface Identity {
    * {@link identityMigrations} bundle, which is the recommended "install these"
    * set) alongside {@link usersMigration} — a DB missing that table throws a
    * raw, uncoded driver error ("no such table: totp_factors") the first time a
-   * password verifies, NOT one of the coded credential/verification/throttle
+   * login gets past the password + email-verification checks (those throw their
+   * coded errors first), NOT one of the coded credential/verification/throttle
    * `IdentityError`s below.
    *
    * Coded failures on the credential/verification/throttle paths:

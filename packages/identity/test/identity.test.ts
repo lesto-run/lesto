@@ -835,6 +835,41 @@ describe("user model + migration", () => {
     expect(identityMigrations).toEqual([usersMigration, totpMigration, userRolesMigration]);
   });
 
+  // The behavioral proof the tautology above can't give: the bundle, handed
+  // straight to a `Migrator` exactly as the docs tell a consumer to, installs
+  // every table `login` depends on — so a full register → verify → login round
+  // trip succeeds with NO "no such table" error. This also pins that
+  // `identityMigrations` (a `readonly` array) is assignable to `Migrator` — the
+  // one call the bundle exists to make must compile.
+  it("identityMigrations, run through a Migrator, satisfies a full login round trip", async () => {
+    const fullRaw = new Database(":memory:");
+    const fullSql = adapt(fullRaw);
+
+    await new Migrator(fullSql, identityMigrations).migrate();
+
+    const { mailer, sent } = captureMailer();
+    const identity = createIdentity({
+      db: createDb(fullSql),
+      secret: "test-secret-0123456789abcdefghij",
+      mailer,
+      verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+      resetUrl: (token) => `https://app.test/reset?token=${token}`,
+      hasher: cheapHasher,
+      clock: () => clock(),
+    });
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+
+    const result = await identity.login("ada@example.com", "correct horse staple");
+
+    // No confirmed factor → a real session, no missing-table error.
+    expect(result.status).toBe("authenticated");
+    expectAuthenticated(result);
+
+    fullRaw.close();
+  });
+
   // Documents the trap `identityMigrations` exists to prevent: a DB that only
   // ran `usersMigration` throws a RAW, uncoded driver error the moment `login`
   // consults the missing `totp_factors` table — not one of the coded

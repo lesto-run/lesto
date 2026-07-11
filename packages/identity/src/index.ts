@@ -132,12 +132,20 @@ export type { IdentityErrorCode } from "./errors";
  *
  * This is purely ADDITIVE: the individual exports above remain available for
  * a caller that wants to compose its own ordered set (e.g. interleaving app
- * migrations between them). Hand this array straight to a `Migrator`:
+ * migrations between them). Hand this array straight to a `Migrator` (whose
+ * `sql` is the raw `SqlDatabase` handle, NOT the `createDb` query builder
+ * `createIdentity` takes):
  *
  *   import { identityMigrations } from "@lesto/identity";
  *   import { Migrator } from "@lesto/migrate";
  *
- *   await new Migrator(db, identityMigrations).migrate();
+ *   await new Migrator(sql, identityMigrations).migrate();
+ *
+ * These are the table migrations `@lesto/identity` itself owns. A deployment
+ * using the DURABLE session / rate-limit stores (not the in-memory defaults)
+ * also installs those stores' schemas via `installSessionSchema` /
+ * `installRateLimitSchema` from `@lesto/auth` / `@lesto/ratelimit` — those are
+ * schema installers, not `MigrationEntry`s, so they live outside this bundle.
  */
 export const identityMigrations: readonly MigrationEntry[] = [
   usersMigration,
