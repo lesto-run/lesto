@@ -147,10 +147,13 @@ const THROWAWAY_BASE = "http://localhost";
  *     diverge from its routed path.
  *
  * The gate is belt-and-braces: the raw target must start with a single `/` (which
- * rejects absolute-form and the `//`/`/\` authority shapes syntactically), AND the
+ * rejects absolute-form and the `//`/`/\` authority shapes syntactically), the
  * parsed authority must still be the throwaway base's — so any parser trick that
- * smuggled a different host through is caught semantically too. Callers that need
- * only the pathname (`pathOf`) share this so the reject is identical on every path.
+ * smuggled a different host through is caught semantically too — AND the RESOLVED
+ * `url.pathname` must not itself begin `//`: a raw `/..//evil` slips the prefix
+ * checks (it begins `/..`) yet normalizes to the `//evil` path the edge twin
+ * refuses, so we refuse it too and both tiers route the same targets. Callers that
+ * need only the pathname (`pathOf`) share this so the reject is identical everywhere.
  */
 export function parseRequestTarget(target: string): URL {
   const url = new URL(target, THROWAWAY_BASE);
@@ -159,7 +162,14 @@ export function parseRequestTarget(target: string): URL {
     target.startsWith("/") &&
     !target.startsWith("//") &&
     !target.startsWith("/\\") &&
-    url.host === "localhost";
+    url.host === "localhost" &&
+    // A raw target like `/..//evil` slips every check above — it begins `/..`, not
+    // `//` or `/\`, and resolves to host localhost — yet `new URL` normalizes it to a
+    // `//evil` PATHNAME. The edge twin (`fetch-handler.ts`) rejects on
+    // `url.pathname.startsWith("//")`; match it on the resolved path so a target a
+    // front proxy ACL-matched as `/..//evil` can't route as `//evil` on one tier and
+    // be refused on the other.
+    !url.pathname.startsWith("//");
 
   if (!originForm) {
     throw new RuntimeError(

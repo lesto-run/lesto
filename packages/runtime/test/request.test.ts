@@ -38,6 +38,23 @@ describe("parseRequestTarget (authority confusion — F19)", () => {
     );
   });
 
+  it("refuses a raw target that RESOLVES to a `//`-prefixed pathname (node/edge parity)", () => {
+    // `/..//evil` slips every raw-prefix check — it begins `/..`, not `//` or `/\` —
+    // yet `new URL` normalizes it to host localhost + pathname `//evil`, the exact
+    // `//`-prefixed path the edge twin (`fetch-handler.ts`) already rejects. Node must
+    // reject it too, or a front proxy that ACL-matched the raw `/..//evil` while the
+    // app routes `//evil` is a path-confusion mismatch and the tiers diverge.
+    expect(() => parseRequestTarget("/..//evil")).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_INVALID_REQUEST_TARGET" }),
+    );
+  });
+
+  it("still accepts a dot-segment path that normalizes to a single-slash pathname", () => {
+    // The resolved-pathname guard rejects only a `//`-prefixed result, never every
+    // target that used `..`: `/a/../b` normalizes to the ordinary `/b` and routes.
+    expect(parseRequestTarget("/a/../b").pathname).toBe("/b");
+  });
+
   it("carries the offending target in the error details", () => {
     try {
       parseRequestTarget("//evil/admin");
