@@ -80,6 +80,17 @@ describe("Context readers", () => {
     expect(withoutAll.queries("nope")).toEqual([]);
   });
 
+  it("does not leak Object.prototype members when a key names one", () => {
+    // `query` is a plain object, so `query.toString` is the inherited function.
+    // Both accessors must treat that as absent — never return a non-string.
+    const c = new Context(requestOf({ query: {}, queryAll: {} }));
+
+    for (const proto of ["toString", "constructor", "hasOwnProperty", "__proto__"]) {
+      expect(c.query(proto)).toBeUndefined();
+      expect(c.queries(proto)).toEqual([]);
+    }
+  });
+
   it("reads a header case-insensitively", () => {
     const c = new Context(requestOf({ headers: { "content-type": "application/json" } }));
 

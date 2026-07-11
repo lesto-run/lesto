@@ -110,15 +110,25 @@ export class Context<Path extends string = string> {
 
   /** A query-string value by key, or `undefined` when absent. */
   query(name: string): string | undefined {
-    return this.currentRequest.query[name];
+    // `query` is a plain object, so a key that names an Object.prototype member
+    // (`toString`, `constructor`, `hasOwnProperty`, …) would read the inherited
+    // FUNCTION rather than a real value — a violation of this `string | undefined`
+    // contract. Gate on the value's type so only an actual own string surfaces.
+    const value = this.currentRequest.query[name];
+    return typeof value === "string" ? value : undefined;
   }
 
   /** Every value a repeated query key carried, in order; [] when absent. */
   queries(name: string): readonly string[] {
+    // `Array.isArray`, not `!== undefined`: the transports build `queryAll` with a
+    // null prototype, but this accessor is public and must not trust that — a
+    // key naming an Object.prototype member (`toString`, `constructor`, …) reads
+    // an inherited FUNCTION on a plain-object map, and only a real own array is a
+    // value. The same gate on the `query` fallback keeps a non-string from leaking.
     const all = this.currentRequest.queryAll?.[name];
-    if (all !== undefined) return all;
+    if (Array.isArray(all)) return all;
     const single = this.currentRequest.query[name];
-    return single === undefined ? [] : [single];
+    return typeof single === "string" ? [single] : [];
   }
 
   /** A request header by name (case-insensitive), or `undefined` when absent. */
