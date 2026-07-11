@@ -207,7 +207,7 @@ function assertLimitBound(value: unknown, clause: "limit" | "offset"): void {
 
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     throw new DbError(
-      "DB_INVALID_LIMIT",
+      "DB_INVALID_BOUND",
       `\`${clause}\` must be a non-negative integer, received ${JSON.stringify(value)}.`,
       { clause, value },
     );

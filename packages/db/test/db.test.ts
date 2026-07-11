@@ -1096,7 +1096,7 @@ describe("limit/offset injection guard (F1)", () => {
     expect(params).toEqual([3]);
   });
 
-  it("rejects a non-numeric (injection) limit with DB_INVALID_LIMIT — payload never reaches SQL", async () => {
+  it("rejects a non-numeric (injection) limit with DB_INVALID_BOUND — payload never reaches SQL", async () => {
     const { db: cdb, last } = captureQuery();
     let thrown: unknown;
     try {
@@ -1110,12 +1110,12 @@ describe("limit/offset injection guard (F1)", () => {
     }
 
     expect(thrown).toBeInstanceOf(DbError);
-    expect((thrown as DbError).code).toBe("DB_INVALID_LIMIT");
+    expect((thrown as DbError).code).toBe("DB_INVALID_BOUND");
     // Nothing was ever prepared — the payload never made it into a statement.
     expect(last().sql).toBe("");
   });
 
-  it("rejects a non-numeric offset with DB_INVALID_LIMIT", async () => {
+  it("rejects a non-numeric offset with DB_INVALID_BOUND", async () => {
     const { db: cdb } = captureQuery();
     let thrown: unknown;
     try {
@@ -1129,7 +1129,7 @@ describe("limit/offset injection guard (F1)", () => {
     }
 
     expect(thrown).toBeInstanceOf(DbError);
-    expect((thrown as DbError).code).toBe("DB_INVALID_LIMIT");
+    expect((thrown as DbError).code).toBe("DB_INVALID_BOUND");
   });
 
   it("rejects a negative limit", async () => {
@@ -1141,7 +1141,7 @@ describe("limit/offset injection guard (F1)", () => {
       thrown = error;
     }
 
-    expect((thrown as DbError).code).toBe("DB_INVALID_LIMIT");
+    expect((thrown as DbError).code).toBe("DB_INVALID_BOUND");
   });
 
   it("rejects a non-integer limit (float and NaN)", async () => {
@@ -1153,7 +1153,7 @@ describe("limit/offset injection guard (F1)", () => {
     } catch (error) {
       floatThrown = error;
     }
-    expect((floatThrown as DbError).code).toBe("DB_INVALID_LIMIT");
+    expect((floatThrown as DbError).code).toBe("DB_INVALID_BOUND");
 
     let nanThrown: unknown;
     try {
@@ -1161,7 +1161,7 @@ describe("limit/offset injection guard (F1)", () => {
     } catch (error) {
       nanThrown = error;
     }
-    expect((nanThrown as DbError).code).toBe("DB_INVALID_LIMIT");
+    expect((nanThrown as DbError).code).toBe("DB_INVALID_BOUND");
   });
 
   it("guards the join renderer through the same chokepoint", async () => {
@@ -1179,7 +1179,7 @@ describe("limit/offset injection guard (F1)", () => {
     }
 
     expect(thrown).toBeInstanceOf(DbError);
-    expect((thrown as DbError).code).toBe("DB_INVALID_LIMIT");
+    expect((thrown as DbError).code).toBe("DB_INVALID_BOUND");
   });
 });
 
