@@ -40,7 +40,9 @@ export type CorsOriginPredicate = (origin: string) => boolean;
  *   - `"*"` (the default) — any origin. Cannot be paired with credentials.
  *   - a string — one exact origin.
  *   - a string[] — an allow-list of exact origins.
- *   - a `RegExp` — echo the origin when the pattern matches it.
+ *   - a `RegExp` — echo the origin when the pattern matches it. ⚠️ ANCHOR it
+ *     (`/^https:\/\/app\.example\.com$/`): an unanchored `/example\.com/` matches
+ *     the SUBSTRING, so `https://evil-example.com.attacker.io` is approved.
  *   - a {@link CorsOriginPredicate} — echo the origin when the callback approves.
  *
  * Every non-wildcard form echoes back only an origin it approved, so the
