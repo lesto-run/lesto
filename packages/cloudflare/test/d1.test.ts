@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { d1ToSqlDatabase } from "../src/index";
+import { CloudflareError, d1ToSqlDatabase } from "../src/index";
 import type { D1Database, D1PreparedStatement } from "../src/index";
 
 /**
@@ -115,16 +115,34 @@ describe("d1ToSqlDatabase", () => {
     expect(rows).toEqual([]);
   });
 
-  it("transaction runs the body on the same handle and returns its value", async () => {
+  it("transaction REFUSES with a coded error — D1 has no interactive transaction — without running the body", async () => {
     const { d1, prepared } = makeD1({ all: [{ id: 9 }] });
     const db = d1ToSqlDatabase(d1);
 
-    const count = await db.transaction(async (tx) => {
+    let bodyRan = false;
+    const body = async (tx: typeof db): Promise<number> => {
+      bodyRan = true;
       const rows = await tx.prepare("SELECT 1").all();
       return rows.length;
+    };
+
+    // A no-op passthrough would run `body` on the shared handle and RESOLVE — that
+    // is the fail-OPEN bug (F3): a read-modify-write there loses updates under
+    // concurrent isolates. The adapter must instead REJECT with a coded error so a
+    // store that needs cross-statement atomicity fails CLOSED.
+    await expect(db.transaction(body)).rejects.toMatchObject({
+      code: "CLOUDFLARE_D1_TRANSACTION_UNSUPPORTED",
     });
 
-    expect(count).toBe(1);
-    expect(prepared).toContain("SELECT 1");
+    // Non-vacuous: `body` was never invoked (no statement prepared through it), so
+    // no read-modify-write ever ran non-atomically on the shared handle.
+    expect(bodyRan).toBe(false);
+    expect(prepared).not.toContain("SELECT 1");
+  });
+
+  it("transaction refusal is the coded CloudflareError class (branchable on code, not prose)", async () => {
+    const db = d1ToSqlDatabase(makeD1().d1);
+
+    await expect(db.transaction(async () => 1)).rejects.toBeInstanceOf(CloudflareError);
   });
 });

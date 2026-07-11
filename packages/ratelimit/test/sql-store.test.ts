@@ -261,6 +261,50 @@ describe("sqlRateLimitStore.update", () => {
 
     await expect(store.update("k", fullThenSpend(1000))).rejects.toThrow("disk full");
   });
+
+  it("fails CLOSED when the transaction seam cannot serialize the read-modify-write (D1)", async () => {
+    // A backend with no real interactive transaction — Cloudflare D1 — must NOT
+    // silently degrade to a passthrough. Its adapter refuses `transaction()` with a
+    // coded rejection (see @lesto/cloudflare `CLOUDFLARE_D1_TRANSACTION_UNSUPPORTED`).
+    // The store must propagate that refusal so a rate check on D1 ERRORS (fails
+    // closed → the request is denied), never silently returns a lost-update verdict
+    // that lets the caller through (fail open). This is the second half of F3.
+    const prepared: string[] = [];
+    const stmt: SqlStatement = {
+      run: async () => ({ changes: 1 }),
+      get: async () => undefined,
+      all: async () => [],
+    };
+    const refusingDb: SqlDatabase = {
+      prepare: (sql) => {
+        prepared.push(sql);
+        return stmt;
+      },
+      exec: async () => {},
+      transaction: () =>
+        Promise.reject(
+          Object.assign(new Error("D1 has no interactive transaction"), {
+            code: "CLOUDFLARE_D1_TRANSACTION_UNSUPPORTED",
+          }),
+        ),
+    };
+    const store = sqlRateLimitStore(refusingDb);
+
+    let mutateCalls = 0;
+    await expect(
+      store.update("k", (current) => {
+        mutateCalls += 1;
+        return { tokens: current === undefined ? 4 : current.tokens - 1, updatedAt: 1000 };
+      }),
+    ).rejects.toMatchObject({ code: "CLOUDFLARE_D1_TRANSACTION_UNSUPPORTED" });
+
+    // Non-vacuous fail-OPEN guard: the refusal is neither swallowed nor re-coded as
+    // a store conflict, and NO statement ever reached the handle — so no bucket
+    // read-modify-write ran outside a real transaction (which is exactly the
+    // lost-update / fail-open path the refusal prevents).
+    expect(prepared).toEqual([]);
+    expect(mutateCalls).toBe(0);
+  });
 });
 
 describe("sqlRateLimitStore.sweep", () => {

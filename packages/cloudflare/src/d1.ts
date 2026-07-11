@@ -12,13 +12,27 @@
  * type local means a consumer that hand-types its Worker env (the common case) needs
  * no extra dependency.
  *
- * D1 has no interactive transactions (its atomic primitive is `batch()`), so
- * `transaction` degrades to running `fn` directly on the same handle — sound for the
- * read + one-shot-seed workloads `@lesto/db` drives on the edge. A writer that needs
- * cross-statement atomicity should reach for `d1.batch` directly.
+ * D1 has no interactive transactions (its only atomic primitive is `batch()`). The
+ * `SqlDatabase.transaction(fn)` contract is *interactive* — `fn` reads intermediate
+ * results and computes in JS between statements (the rate limiter reads a row, refills
+ * it in JS, then writes; the queue reads `RETURNING` ids to wire dependency edges) —
+ * which a `batch()` (all statements fixed up front, no JS in between) cannot express.
+ *
+ * So this adapter does NOT fake a transaction. A no-op passthrough (`fn(adapted)` on
+ * the same handle) provides ZERO isolation yet lies that it does: two concurrent
+ * isolates read-modify-writing one row lose an update, and a store that trusts the
+ * contract (the rate limiter's `must never fail open`) silently fails OPEN. Instead
+ * `transaction()` REFUSES with the coded `CLOUDFLARE_D1_TRANSACTION_UNSUPPORTED`, so a
+ * caller that needs cross-statement atomicity fails CLOSED (loud, coded) rather than
+ * silently corrupting. This mirrors the mature comparator (Drizzle's D1 driver refuses
+ * `transaction()` the same way). A writer that wants an atomic multi-statement write
+ * reaches for `d1.batch` directly; a workload that needs a real interactive transaction
+ * runs on the Node leg (`openSqlite`/pg), where one is available.
  */
 
 import type { SqlDatabase } from "@lesto/db";
+
+import { CloudflareError } from "./errors";
 
 /** The slice of D1's prepared-statement API this adapter uses. */
 export interface D1PreparedStatement {
@@ -73,9 +87,23 @@ export function d1ToSqlDatabase(d1: D1Database): SqlDatabase {
         ).results,
     }),
 
-    // D1 has no interactive transaction; the edge workloads need none (read +
-    // one-shot seed). Run the body directly on the same handle.
-    transaction: async (fn) => fn(adapted),
+    // D1 has no interactive transaction, and a no-op passthrough would silently
+    // strip the atomicity its caller depends on (a read-modify-write would lose
+    // updates → a rate limiter fails OPEN). Refuse loudly with a coded rejection
+    // so the caller fails CLOSED instead. `fn` is never run — running it on the
+    // shared handle is exactly the unsafe behavior this refusal prevents. A
+    // rejected promise (not a sync throw) honors the `Promise<T>` contract for
+    // every call shape (`await`, `.catch`, or a bare return).
+    transaction: () =>
+      Promise.reject(
+        new CloudflareError(
+          "CLOUDFLARE_D1_TRANSACTION_UNSUPPORTED",
+          "D1 has no interactive transaction (its only atomic primitive is batch()); " +
+            "@lesto/cloudflare refuses transaction() so a caller needing cross-statement " +
+            "atomicity fails closed, never silently loses updates. Use d1.batch for an " +
+            "atomic multi-statement write, or run the workload on the Node leg.",
+        ),
+      ),
   };
 
   return adapted;
