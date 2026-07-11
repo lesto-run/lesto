@@ -862,6 +862,43 @@ describe("parseStream", () => {
     expect(deltas).toEqual([{ text: "", toolCall: { id: "call_x", name: "now", input: {} } }]);
   });
 
+  it("defaults a missing tool-call index to 0 (a lenient local provider may omit it on a single call)", async () => {
+    // Strict OpenAI always sends `index`, but LM Studio / Ollama / vLLM may omit it
+    // on a single tool call. Without a default, the accumulator would key it under
+    // `undefined`; defaulting to 0 keeps the call assembling, mirroring Anthropic.
+    const frames = [
+      data({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_z",
+                  type: "function",
+                  function: { name: "ping", arguments: '{"n":1}' },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      data({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+      "data: [DONE]\n\n",
+    ];
+
+    const stream = model().parseStream(sseResponse(frames));
+    const deltas: StreamDelta[] = [];
+    let next = await stream.next();
+    while (!next.done) {
+      deltas.push(next.value);
+      next = await stream.next();
+    }
+
+    expect(deltas).toEqual([
+      { text: "", toolCall: { id: "call_z", name: "ping", input: { n: 1 } } },
+    ]);
+  });
+
   it("fails LOUD with AI_STREAM_MALFORMED when accumulated tool-call arguments are not valid JSON (never a silent partial call)", async () => {
     // A tool call whose accumulated argument fragments never form valid JSON (a torn/garbled args
     // stream). Partial args are useless — and dangerous — to a caller, so the engine refuses loud

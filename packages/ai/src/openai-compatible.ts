@@ -384,7 +384,11 @@ function interpretFrame(json: unknown): ParsedFrame | undefined {
   const toolCallDeltas = choice?.delta?.tool_calls;
   if (toolCallDeltas !== undefined) {
     parsed.toolCalls = toolCallDeltas.map((call) => ({
-      index: call.index,
+      // A conformant OpenAI stream always sends `index`, but a lenient
+      // OpenAI-compatible provider (LM Studio / Ollama / vLLM) may omit it on a
+      // single tool call — default to 0 so the accumulator still keys it, mirroring
+      // the Anthropic interpreter's `event.index ?? 0`.
+      index: call.index ?? 0,
       id: call.id,
       name: call.function?.name,
       argsFragment: call.function?.arguments,

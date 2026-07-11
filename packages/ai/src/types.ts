@@ -109,8 +109,9 @@ export interface StreamFinal {
    * The tool calls the model emitted this stream, fully assembled from their streamed fragments —
    * the streamed counterpart to {@link GenerateResult.toolCalls}. Present (and non-empty) ONLY when
    * the model asked for tools; omitted entirely otherwise, so a text-only stream's final accounting
-   * is byte-unchanged. This is the field `runAgent` reads to drive the tool loop off a streamed turn
-   * without falling back to a non-streamed `generateText` (finding F5).
+   * is byte-unchanged. This is the field a future streamed `runAgent` will read to drive the tool
+   * loop off a streamed turn (finding F5); the current `runAgent` still uses non-streamed
+   * `generateText`, so this field is produced and exposed but not yet consumed internally.
    */
   readonly toolCalls?: readonly ToolCall[];
 }
