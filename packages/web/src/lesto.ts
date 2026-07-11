@@ -709,8 +709,7 @@ export class Lesto {
       // `RouteTable.match`) so `c.param("constructor")` is `undefined`, not a method.
       // A HEAD fallback carries the matched GET route's params.
       params:
-        (match ?? headMatch)?.params ??
-        (Object.create(null) as Record<string, string | string[]>),
+        (match ?? headMatch)?.params ?? (Object.create(null) as Record<string, string | string[]>),
       query: options?.query ?? {},
       headers: options?.headers ?? {},
       body: options?.body,
@@ -738,9 +737,7 @@ export class Lesto {
 
       chain = [
         ...this.useChain,
-        allowed.length === 0
-          ? notFoundHandler
-          : methodNotAllowedHandler(allowHeaderValue(allowed)),
+        allowed.length === 0 ? notFoundHandler : methodNotAllowedHandler(allowHeaderValue(allowed)),
       ];
     }
 
