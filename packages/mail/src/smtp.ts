@@ -315,6 +315,11 @@ class SmtpConnection {
   rebind(socket: SmtpSocket): void {
     this.socket = socket;
     this.buffer = "";
+    // A fresh socket carries no failure yet: clear anything the pre-upgrade socket
+    // recorded (its 'error'/'close' handlers stay attached — they cannot be removed
+    // without also stripping the TLS transport's own listeners) so a stale close on
+    // the old socket can never make the first post-upgrade read throw spuriously.
+    this.failure = undefined;
     this.bind();
   }
 
@@ -344,13 +349,42 @@ class SmtpConnection {
 
     this.socket.on("error", (error) => {
       this.failure = error;
-
-      if (this.pending) {
-        clearTimeout(this.pending.timer);
-        this.pending.reject(error);
-        this.pending = undefined;
-      }
+      this.wakePending(error);
     });
+
+    // A graceful FIN (the peer calls `end()`) closes the connection WITHOUT an
+    // 'error' — e.g. a relay that hangs up the instant it accepts the DATA body,
+    // withholding its 221. With only the 'error' handler above, the pending
+    // reply-wait would then sit idle until the whole-dialogue deadline fires (a
+    // needless multi-second stall on a send that has ALREADY committed). Settle it
+    // the moment the socket closes, using the same `_CONNECTION` signal the RST
+    // path already produces: `send()`'s post-commit QUIT/221 catch swallows it and
+    // resolves at once, and a close mid-dialogue fails fast into a clean retry
+    // instead of waiting out the budget. Ordering is benign in both races: an RST
+    // fires 'error' first (recording that more-specific failure, which `??=`
+    // keeps), and a normal QUIT/221 close cannot reach here at all — `send()`'s
+    // finally removes these listeners before it ends the socket.
+    this.socket.on("close", () => {
+      this.failure ??= new SmtpTransportError(
+        "MAIL_TRANSPORT_SMTP_CONNECTION",
+        "SMTP connection closed before the dialogue completed.",
+      );
+      this.wakePending(this.failure);
+    });
+  }
+
+  /**
+   * Wake a parked {@link readLine} with a transport failure — a no-op when none
+   * is parked (a close/error that lands between reads; the recorded `failure`
+   * then fails the NEXT read fast). Shared by the 'error' and 'close' handlers so
+   * the settle path is written, and covered, once.
+   */
+  private wakePending(error: Error): void {
+    if (this.pending) {
+      clearTimeout(this.pending.timer);
+      this.pending.reject(error);
+      this.pending = undefined;
+    }
   }
 
   /**

@@ -398,18 +398,32 @@ describe("createSmtpTransport — real loopback SMTP e2e", () => {
   // hangs up (FIN) in the QUIT window rather than merely stalling. The client's
   // QUIT wait sees no 221 and the connection go away; the best-effort QUIT must
   // still resolve the delivered message, never reject it into a duplicate.
-  it("resolves an already-committed send when the peer drops the connection (FIN) right after the body-250", async () => {
+  //
+  // Also the LATENCY proof for the `close` handler: a graceful FIN emits no
+  // 'error' (unlike an RST), so WITHOUT a 'close' listener the pending QUIT/221
+  // read had nothing to settle it and sat idle until the whole-dialogue deadline
+  // — resolving correctly but only after burning the entire budget. Here the
+  // budget is 30s, so if the send resolved by outliving it this test would take
+  // ~30s (and trip its own 15s timeout); the `close` handler settles the read the
+  // instant the peer FINs, so it resolves in milliseconds. The elapsed ceiling
+  // (6× below the deadline, orders of magnitude above the real ~ms close latency)
+  // is the non-flaky RED/GREEN witness: drop the 'close' handler and it fails.
+  it("resolves an already-committed send PROMPTLY on a post-250 FIN — via close, not the whole-dialogue deadline", async () => {
     server = await startSmtpServer({ finAfterBodyReply: true });
     const transport = createSmtpTransport({
       host: "127.0.0.1",
       port: server.port,
       secure: false,
-      timeoutMs: 500,
+      timeoutMs: 30_000,
     });
 
+    const started = Date.now();
     await expect(transport.send(baseEmail())).resolves.toBeUndefined();
+    const elapsed = Date.now() - started;
+
     expect(server.state.bodyRepliesSent).toBe(1);
-  });
+    expect(elapsed).toBeLessThan(5_000);
+  }, 15_000);
 
   // Post-250 HARD RESET — the socket-error close path, distinct from the two
   // deadline-timeout cases above. The relay commits the body-250, then RSTs on
