@@ -295,7 +295,9 @@ function parseListPage(xml: string): ListPage {
     );
   }
 
-  return { keys, nextToken: decodeXmlEntities(match[1]) };
+  // Guarded above: match is non-null and group 1 (`[^<]*`) always participates
+  // and is non-empty here, so it is a defined string.
+  return { keys, nextToken: decodeXmlEntities(match[1]!) };
 }
 
 /** Pull `<Key>` values out of an S3 `ListObjectsV2` XML response. */
