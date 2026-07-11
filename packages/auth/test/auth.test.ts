@@ -224,13 +224,42 @@ describe("describeHashCost", () => {
     });
   });
 
-  it("never carries the salt or derived key (secret-free)", () => {
-    const encoded = JSON.stringify(
-      describeHashCost(`scrypt$${2 ** 17}$8$1$${SALT_HEX}$${SCRYPT_KEY}`),
-    );
+  it("describes an OVER-CEILING legacy pbkdf2 row by its true cost, not unknown", () => {
+    // A 600k row (a pre-100k-pin/hybrid legacy hash) is un-derivable on the edge, but
+    // the web `parseStored` has no iteration cap, so its cost is still legible — the
+    // exact input the DOWN-grade monitor (600k → 100k walk-down) needs to see.
+    // Pins that a future "reject > EDGE_MAX_ITERATIONS in parseStored" edit can't
+    // silently blind this describe view.
+    expect(describeHashCost(`pbkdf2$sha256$600000$${SALT_HEX}$${PBKDF2_KEY}`)).toEqual({
+      algorithm: "pbkdf2",
+      iterations: 600_000,
+    });
+  });
 
+  it("collapses a scrypt row above the current N ceiling to unknown (describe ⟺ verify)", () => {
+    // N=2^18 > DEFAULT_N: the scrypt `parseStored` rejects it (it would exceed MAXMEM
+    // and can't be a row this build minted), so verify returns false AND describe is
+    // unknown — the two stay aligned by construction. Pins the describe side of that.
+    expect(describeHashCost(`scrypt$${2 ** 18}$8$1$${SALT_HEX}$${SCRYPT_KEY}`)).toEqual({
+      algorithm: "unknown",
+    });
+  });
+
+  it("never carries the salt or derived key (secret-free)", () => {
+    const scryptCost = describeHashCost(`scrypt$${2 ** 17}$8$1$${SALT_HEX}$${SCRYPT_KEY}`);
+    const pbkdf2Cost = describeHashCost(`pbkdf2$sha256$100000$${SALT_HEX}$${PBKDF2_KEY}`);
+
+    // Assert the EXACT key set, not just the absence of a hex substring: a leaked
+    // `salt`/`expected` Buffer would JSON-encode as decimal bytes (never the hex
+    // string), so a `not.toContain(SALT_HEX)` check alone is vacuous — it would pass
+    // even while leaking. (This repo's vacuous-negative-assertion trap.)
+    expect(Object.keys(scryptCost).toSorted()).toEqual(["algorithm", "n", "p", "r"]);
+    expect(Object.keys(pbkdf2Cost).toSorted()).toEqual(["algorithm", "iterations"]);
+
+    const encoded = JSON.stringify(scryptCost) + JSON.stringify(pbkdf2Cost);
     expect(encoded).not.toContain(SALT_HEX);
     expect(encoded).not.toContain(SCRYPT_KEY);
+    expect(encoded).not.toContain(PBKDF2_KEY);
   });
 
   it("collapses an unrecognized or corrupt row to unknown", () => {

@@ -132,6 +132,14 @@ export type PasswordHashCost =
  * recognize — a corrupt row, or a format from a newer writer — to
  * `{ algorithm: "unknown" }`. When a new backend lands (e.g. argon2id, ADR 0046),
  * its arm is added HERE, in one place, rather than re-spelled by every consumer.
+ *
+ * ⚠️ This reads only the wire formats `@lesto/auth`'s OWN backends mint. A row minted
+ * by a *custom* `PasswordHasher` (the `@lesto/identity` injection seam) in a foreign
+ * or looser format — e.g. a stronger scrypt at `N > DEFAULT_N`, or a non-16/64-byte
+ * shape — describes as `{ algorithm: "unknown" }` even though that hasher verifies it,
+ * because describe is deliberately pinned to the same `parseStored` the built-in
+ * verifier uses (never wider). Its audit-cost legibility is the custom hasher's own to
+ * provide.
  */
 export function describeHashCost(stored: string): PasswordHashCost {
   if (isPbkdf2(stored)) return describeCostWeb(stored) ?? { algorithm: "unknown" };
