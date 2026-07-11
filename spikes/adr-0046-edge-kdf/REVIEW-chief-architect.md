@@ -1,5 +1,11 @@
 # ADR 0046 Phase-0 spike — chief-architect verdict (fable, delegated review)
 
+> **Superseded figures note:** this review was written on the PRE-correction draft.
+> Its `1.2–1.8 s` / `25×` / `~12 s enrollment` numbers are superseded by
+> `FINDINGS.md` §Measurement rounds and `REVIEW-red-team.md` P1 (corrected to
+> **~0.5–0.8 s / ~10–16× / ~5–8 s**). The **rulings are unaffected** — the decision
+> holds on every corrected number.
+
 Delegated per the owner's instruction ("consult with a fable chief architect when
 needed") and the repo's decision-gated-delegate rule. Read `FINDINGS.md` first.
 Advisory input to the human owner; the owner ratifies.

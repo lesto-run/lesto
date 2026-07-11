@@ -600,9 +600,11 @@ These invert the Q1 *default* and touch load-bearing claims — **awaiting owner
   enumeration residual.
 - **A16 — NEW cross-runtime consequence of A-wasm:** A-js's "identical bytes, runs everywhere for
   free" property is **lost**. Node/Bun tiers verifying `argon2id$…` must load the wasm backend too
-  (bytes-compile, legal off-workerd) — noble-JS at ~0.5–0.8 s/verify is not an acceptable Node
-  verify path; noble is the **degrade-to-secure-and-alive** fallback preserving "never strands a
-  user." State this in Integration design when the facade lands.
+  (bytes-compile, legal off-workerd). The disqualifier is **enrollment fan-out + one-implementation
+  consistency**, not single-verify latency: noble on **Node** measured ~0.27–0.43 s/verify (not the
+  ~0.5–0.8 s *edge* figure), so a single verify is tolerable but a 10-code enrollment ≈ 3–4 s and a
+  second JS implementation to maintain is not. noble stays the **degrade-to-secure-and-alive**
+  fallback preserving "never strands a user." State this in Integration design when the facade lands.
 - **A17 — housekeeping:** R4 closed with the measured ~0.47 s wasm enrollment (the code-count/cost
   knob is moot); **IT4 marked confirmed** (measured `CompileError` behavior); IT3 ruling recorded
   (vendored first-party wasm; `@phi-ag/argon2` sanctioned fallback only).

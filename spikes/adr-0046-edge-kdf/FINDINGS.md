@@ -129,7 +129,7 @@ bursts **despite each derive being only ~50 ms** — i.e. a free-tier *aggregate
 burst* throttle on one low-traffic isolate, not a per-request cap and not a KDF
 property (78 A-wasm derives succeeded at ~50 ms median). Consequence: I could not
 get a **clean** sustained-combined-load p95 free of 503 noise. **The decision does
-not depend on it** — the ~25× per-derive CPU gap is plan-independent and decisive —
+not depend on it** — the ~10–16× per-derive CPU gap is plan-independent and decisive —
 but the *clean A6 p95 under the semaphore* and the *memory ceiling* should be
 re-run on **Workers Paid** to formally close the gate. That is a **confirm, not
 decide** follow-up.
