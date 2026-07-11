@@ -30,6 +30,17 @@ const BATCHES_TABLE = "lesto_job_batches";
 const DEPS_TABLE = "lesto_job_deps";
 
 /**
+ * The `last_error` a RECLAIM stamps on a job it dead-letters for stalling: a
+ * worker claimed it `maxAttempts` times and died each time without ever
+ * reporting an outcome (an OOM kill, a hung handler that never returned before
+ * its visibility deadline lapsed). Deliberately distinct prose from a handler's
+ * thrown message so an operator can tell a repeat-stall-out from an ordinary
+ * failure in the dashboard's `last_error` column (see {@link Queue.reclaim}).
+ */
+const STALLED_ERROR =
+  "Job exceeded maxAttempts by repeatedly stalling its worker (no outcome reported before the visibility deadline lapsed).";
+
+/**
  * The durable job queue.
  *
  * The contract is at-least-once: a worker CLAIMS a job atomically, stamps a
@@ -620,22 +631,67 @@ export class Queue {
     };
   }
 
-  /** Return any job stranded past its visibility deadline to `ready`. */
+  /**
+   * Resolve every job stranded past its visibility deadline — a worker claimed
+   * it, then died (an OOM kill, a SIGKILLed deploy, a hung handler) without ever
+   * reporting an outcome, so the row lingers `running` with a lapsed
+   * `locked_until`. Returns how many stranded rows this sweep resolved.
+   *
+   * A stranded job is normally returned to `ready` for another worker — the
+   * at-least-once contract means the work is retried, not lost. But a job that
+   * stalls its worker EVERY time (a payload that reliably OOMs, an infinite loop)
+   * would otherwise be reclaimed forever, its `attempts` climbing without bound:
+   * retirement lives in {@link Queue.fail}, and a stalled worker never reaches
+   * `fail()` — it died mid-job. So reclaim enforces the SAME attempt cap the
+   * handler-failure path does. A stranded job whose `attempts` have reached
+   * `maxAttempts` is retired to `failed` (dead-lettered with a coded
+   * {@link STALLED_ERROR} reason, `finished_at` stamped like any terminal write)
+   * instead of reclaimed — exactly as `fail()` retires an exhausted job. This is
+   * BullMQ's `maxStalledCount` guard; here a stall shares the
+   * `attempts`/`maxAttempts` budget rather than a separate counter, because every
+   * reclaim is followed by a claim that increments `attempts`.
+   *
+   * The retire and the reclaim are two statements, not a transaction: their WHERE
+   * clauses are DISJOINT (`attempts >= max_attempts` vs `<`), a stranded
+   * `running` row cannot be claimed by anyone between them (the claim subselect
+   * scans only `ready`), and both writes are safe alone — a fault after the
+   * retire simply leaves the still-eligible stragglers `running` for the next
+   * sweep to reclaim. Nothing is stranded and nothing double-processes, so the
+   * atomic bracket a transaction would add buys no correctness here.
+   */
   async reclaim(): Promise<number> {
     const now = nowIso(this.clock);
 
-    // `now` appears twice (SET updated_at, WHERE locked_until <) → repeated.
-    const result = await this.db
+    // First, dead-letter the stranded jobs that have burned their whole attempt
+    // budget: another reclaim would only re-stall them forever. Retire to
+    // `failed` with the terminal write `fail()` uses (finished_at + last_error),
+    // so the dashboard shows a coded stall-out, not a job stuck `running`.
+    const retired = await this.db
+      .prepare(
+        `UPDATE ${TABLE}
+            SET status = 'failed', locked_until = NULL, finished_at = ?,
+                updated_at = ?, last_error = ?
+          WHERE status = 'running'
+            AND locked_until IS NOT NULL
+            AND locked_until < ?
+            AND attempts >= max_attempts`,
+      )
+      .run([now, now, STALLED_ERROR, now]);
+
+    // Then return the rest — stranded but with attempts to spare — to `ready` for
+    // another worker. `now` appears twice (SET updated_at, WHERE locked_until <).
+    const reclaimed = await this.db
       .prepare(
         `UPDATE ${TABLE}
             SET status = 'ready', locked_until = NULL, updated_at = ?
           WHERE status = 'running'
             AND locked_until IS NOT NULL
-            AND locked_until < ?`,
+            AND locked_until < ?
+            AND attempts < max_attempts`,
       )
       .run([now, now]);
 
-    return result.changes;
+    return retired.changes + reclaimed.changes;
   }
 
   /**
@@ -1148,37 +1204,70 @@ export class Queue {
 
   // ---- private: the three terminal transitions ----
   //
-  // Each is FENCED by the claim lock as a token: `status = 'running' AND
-  // locked_until = <the value this worker stamped at claim>`. If a slow worker's
-  // visibility deadline lapsed and RECLAIM returned the row to `ready` (or another
-  // worker re-claimed it and stamped a fresh `locked_until`), this worker's
-  // terminal update matches ZERO rows and is a no-op — it can never resurrect a
-  // job another worker now owns, nor mark `done` a row that was already retried.
+  // Each is FENCED by the claim GENERATION as a token: `status = 'running' AND
+  // locked_until = <the value this worker stamped at claim> AND attempts = <the
+  // count that claim incremented to>`. If a slow worker's visibility deadline
+  // lapsed and RECLAIM returned the row to `ready` (or another worker re-claimed
+  // it), this worker's terminal update matches ZERO rows and is a no-op — it can
+  // never resurrect a job another worker now owns, nor mark `done` a row already
+  // retired.
+  //
+  // `attempts` is in the fence, not `locked_until` alone, because `locked_until`
+  // is a TIMESTAMP and timestamps are not unique. A reclaim + re-claim that lands
+  // on the same instant — a coarse clock, or a wall clock NTP-stepped backwards —
+  // mints an IDENTICAL `locked_until`, and a stale worker's terminal write would
+  // slip through a timestamp-only fence and resurrect a job the new owner holds.
+  // `attempts` is bumped by every claim, so two claims of the same row are ALWAYS
+  // distinguishable regardless of what the clock does.
 
   private async complete(job: Job): Promise<void> {
     const now = nowIso(this.clock);
 
-    // `?` order: now (finished_at), now (updated_at), id, locked_until (fence).
-    const result = await this.db
-      .prepare(
-        `UPDATE ${TABLE}
-            SET status = 'done', locked_until = NULL, finished_at = ?, updated_at = ?
-          WHERE id = ? AND status = 'running' AND locked_until = ?`,
-      )
-      .run([now, now, job.id, job.lockedUntil]);
+    // The fenced `done` write, then the release of the dependents it unblocks —
+    // both on ONE connection (`sql`), so a batched job's completion is atomic.
+    const settle = async (sql: SqlDatabase): Promise<void> => {
+      // `?` order: now (finished_at), now (updated_at), id, locked_until, attempts
+      // (fence). `attempts` is in the fence, not `locked_until` alone, so two
+      // claims that share a `locked_until` stay distinct — see the fence note above
+      // the terminal transitions.
+      const result = await sql
+        .prepare(
+          `UPDATE ${TABLE}
+              SET status = 'done', locked_until = NULL, finished_at = ?, updated_at = ?
+            WHERE id = ? AND status = 'running' AND locked_until = ? AND attempts = ?`,
+        )
+        .run([now, now, job.id, job.lockedUntil, job.attempts]);
 
-    // Release dependents ONLY if THIS worker actually landed the `done`
-    // transition (the fence matched its row). A stale worker whose visibility
-    // lapsed matches zero rows here — it no longer owns the job, so it must not
-    // release the job's dependents on a completion it did not perform. Gating on
-    // `changes` keeps the at-least-once `complete` from double-advancing a DAG.
+      // Release dependents ONLY if THIS worker actually landed the `done`
+      // transition (the fence matched its row). A stale worker whose visibility
+      // lapsed matches zero rows here — it no longer owns the job, so it must not
+      // release the job's dependents on a completion it did not perform. Gating on
+      // `changes` keeps the at-least-once `complete` from double-advancing a DAG.
+      // For a batchless job this release matches nothing (no `lesto_job_deps` rows)
+      // and is a cheap no-op, exactly as it was before dependencies existed.
+      if (result.changes > 0) {
+        await this.releaseReadyDependents(job.id, sql);
+      }
+    };
+
+    // A BATCHED job's `done` write and the flip of the dependents it unblocks must
+    // be ONE transaction: NOTHING else re-evaluates a `blocked` job, so a crash
+    // BETWEEN the two statements would leave the prerequisite `done` while its
+    // dependents sit `blocked` forever — a stranded DAG with no sweep to recover
+    // it. On a rollback the `done` is undone too, so the row stays `running`, gets
+    // reclaimed when its visibility lapses, and a later attempt completes AND
+    // releases together.
     //
-    // A batchless job has no rows in `lesto_job_deps`, so the release `UPDATE`
-    // matches nothing and is a cheap no-op — the common path pays one indexed
-    // statement and the dependency machinery stays invisible to non-batch work.
-    if (result.changes > 0) {
-      await this.releaseReadyDependents(job.id);
-    }
+    // A BATCHLESS job (every plain `enqueue` — no `batch_id`) can NEVER be a
+    // prerequisite: dependency edges are minted only by `enqueueBatch`, which
+    // stamps a `batch_id` on every job it writes. So its release is guaranteed a
+    // no-op and its completion is a SINGLE fenced write with nothing to keep
+    // atomic — it takes the direct path, no transaction. That keeps the common
+    // path one round trip AND keeps `complete` working on a bare driver handle:
+    // only the batch DAG features open a transaction, and a caller that enqueues a
+    // batch has ALREADY had to supply a conformant `SqlDatabase.transaction`
+    // (`enqueueBatch` opens one), so this asks nothing new of it.
+    return job.batchId === null ? settle(this.db) : this.db.transaction(settle);
   }
 
   private async fail(job: Job, error: unknown): Promise<"retry" | "failed"> {
@@ -1192,27 +1281,27 @@ export class Queue {
     // of how many `maxAttempts` remain. A normal failure still retries below.
     if (job.attempts >= job.maxAttempts || isPermanentFailure(error)) {
       // `?` order: error (last_error), now (finished_at), now (updated_at), id,
-      // locked_until (fence).
+      // locked_until, attempts (fence — see the fence note above).
       await this.db
         .prepare(
           `UPDATE ${TABLE}
               SET status = 'failed', last_error = ?, locked_until = NULL,
                   finished_at = ?, updated_at = ?
-            WHERE id = ? AND status = 'running' AND locked_until = ?`,
+            WHERE id = ? AND status = 'running' AND locked_until = ? AND attempts = ?`,
         )
-        .run([message, now, now, job.id, job.lockedUntil]);
+        .run([message, now, now, job.id, job.lockedUntil, job.attempts]);
 
       return "failed";
     }
 
     // `?` order: error (last_error), runAt (run_at), now (updated_at), id,
-    // locked_until (fence).
+    // locked_until, attempts (fence — see the fence note above).
     await this.db
       .prepare(
         `UPDATE ${TABLE}
             SET status = 'ready', last_error = ?, locked_until = NULL,
                 run_at = ?, updated_at = ?
-          WHERE id = ? AND status = 'running' AND locked_until = ?`,
+          WHERE id = ? AND status = 'running' AND locked_until = ? AND attempts = ?`,
       )
       .run([
         message,
@@ -1220,6 +1309,7 @@ export class Queue {
         now,
         job.id,
         job.lockedUntil,
+        job.attempts,
       ]);
 
     return "retry";

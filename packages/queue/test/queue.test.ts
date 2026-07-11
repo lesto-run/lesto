@@ -325,6 +325,46 @@ describe("runOnce", () => {
     await queue["complete"](b!);
     expect((await queue.find(id))?.status).toBe("done");
   });
+
+  it("the terminal fence survives two claims that share a `locked_until` (attempts, not just the timestamp)", async () => {
+    queue.define("x", () => {});
+    const id = await queue.enqueue("x");
+
+    const statusOf = (jobId: number): string =>
+      (
+        database.prepare("SELECT status FROM lesto_jobs WHERE id = ?").get(jobId) as {
+          status: string;
+        }
+      ).status;
+
+    // Worker A claims with a fixed window → locked_until = now + 5000, attempts = 1.
+    const a = await queue.claim("default", 5000);
+    expect(a?.attempts).toBe(1);
+
+    // Reproduce a reclaim + re-claim that lands on the SAME instant. A monotonic
+    // clock makes this unreachable — reclaim needs the deadline to lapse, which
+    // only happens as time moves forward — but a COARSE clock or a wall clock that
+    // NTP steps BACKWARDS can mint the same `locked_until` twice. We construct that
+    // coincidence directly: return the row to `ready` without advancing the clock,
+    // then re-claim at the frozen instant so B stamps the identical timestamp.
+    database
+      .prepare("UPDATE lesto_jobs SET status = 'ready', locked_until = NULL WHERE id = ?")
+      .run(id);
+    const b = await queue.claim("default", 5000);
+    expect(b?.attempts).toBe(2);
+    // The collision the fence must survive: identical timestamps, distinct claims.
+    expect(b?.lockedUntil).toBe(a?.lockedUntil);
+
+    // A's stale completion carries the OLD attempts (1); the row now holds attempts
+    // 2 under B. A timestamp-only fence would MATCH (same locked_until) and let A's
+    // write resurrect a job B owns; the attempts in the fence reject it.
+    await queue["complete"](a!);
+    expect(statusOf(id)).toBe("running"); // B still owns it — A did not land
+
+    // B (the real owner, matching attempts) completes cleanly.
+    await queue["complete"](b!);
+    expect(statusOf(id)).toBe("done");
+  });
 });
 
 describe("claim & reclaim", () => {
@@ -356,6 +396,39 @@ describe("claim & reclaim", () => {
     advance(2001);
     expect(await queue.reclaim()).toBe(1); // now stale → reclaimed
     expect((await queue.find(id))?.status).toBe("ready");
+  });
+
+  it("retires a job that has stalled past its attempt budget instead of reclaiming it forever", async () => {
+    // A job whose worker dies mid-run EVERY time (an OOM kill, a hung handler) is
+    // never seen by fail() — retirement lives there, and a dead worker never
+    // reaches it. Without a cap, reclaim would return it to `ready` forever,
+    // attempts climbing without bound. reclaim must enforce the same maxAttempts
+    // cap fail() does and dead-letter it once the budget is gone.
+    queue.define("oom", () => {});
+    const id = await queue.enqueue("oom", {}, { maxAttempts: 2 });
+
+    const rowOf = (
+      jobId: number,
+    ): { status: string; last_error: string | null; finished_at: string | null } =>
+      database
+        .prepare("SELECT status, last_error, finished_at FROM lesto_jobs WHERE id = ?")
+        .get(jobId) as { status: string; last_error: string | null; finished_at: string | null };
+
+    // Attempt 1: a worker claims it and dies (never completes); visibility lapses.
+    await queue.claim("default", 1000); // attempts → 1
+    advance(1001);
+    expect(await queue.reclaim()).toBe(1); // budget remains → back to ready
+    expect(rowOf(id).status).toBe("ready");
+
+    // Attempt 2 (== maxAttempts): claimed, dies again, visibility lapses.
+    await queue.claim("default", 1000); // attempts → 2 == maxAttempts
+    advance(1001);
+    expect(await queue.reclaim()).toBe(1); // budget exhausted → dead-lettered
+
+    const row = rowOf(id);
+    expect(row.status).toBe("failed"); // retired, NOT reclaimed a third time
+    expect(row.last_error).toContain("stalling"); // a coded stall-out reason
+    expect(row.finished_at).not.toBeNull(); // stamped like any terminal write
   });
 
   it("postgres dialect: the claim subselect carries FOR UPDATE SKIP LOCKED", async () => {
@@ -1279,6 +1352,77 @@ describe("batches & dependency edges", () => {
     // claimable row is `first` (second is blocked), proving no early release.
     expect((await queue.find(jobIds[1]!))?.status).toBe("blocked");
     expect(firstId).toBe(jobIds[0]);
+  });
+
+  it("runs complete() + the dependency release in ONE transaction: a release fault never strands the DAG", async () => {
+    // Wrap the db so the dependency-release UPDATE throws exactly once — whether it
+    // is issued directly on `this.db` (the old, non-transactional path) or on a
+    // transaction's connection (the fixed path). Everything else delegates
+    // unchanged, so the completion's own `done` write lands and can be rolled back.
+    let releaseThrown = false;
+    const faultyPrepare =
+      (delegate: SqlDatabase): SqlDatabase["prepare"] =>
+      (sql) => {
+        // The dependency-release UPDATE is the only statement that reads the deps
+        // table by `depends_on_id` inside an `id IN (…)` — match it, throw once.
+        if (sql.includes("id IN (SELECT job_id FROM lesto_job_deps") && !releaseThrown) {
+          releaseThrown = true;
+
+          return {
+            run: async () => {
+              throw new Error("release blip");
+            },
+            get: async () => undefined,
+            all: async () => [],
+          };
+        }
+
+        return delegate.prepare(sql);
+      };
+    const faulty: SqlDatabase = {
+      exec: (sql) => db.exec(sql),
+      prepare: faultyPrepare(db),
+      // Inject the same fault into the tx handed to the callback, so the release —
+      // which the fix runs on `tx`, not `this.db` — still throws inside the span.
+      transaction: (fn) =>
+        db.transaction((tx) =>
+          fn({ exec: tx.exec, prepare: faultyPrepare(tx), transaction: tx.transaction }),
+        ),
+    };
+
+    const q = new Queue({ db: faulty, clock, baseBackoffMs: 1000, maxBackoffMs: 3000 });
+    q.define("a", () => {});
+    q.define("b", () => {});
+    const { jobIds } = await q.enqueueBatch("chain", [
+      { name: "a" },
+      { name: "b", dependsOn: [0] },
+    ]);
+    const [aId, bId] = jobIds as readonly [number, number];
+
+    const statusOf = (jobId: number): string =>
+      (
+        database.prepare("SELECT status FROM lesto_jobs WHERE id = ?").get(jobId) as {
+          status: string;
+        }
+      ).status;
+
+    // Run A: its handler succeeds and `complete` lands the `done` write, then the
+    // release throws. In one transaction the WHOLE completion rolls back, so A is
+    // never left `done` with B stranded `blocked` forever (nothing else re-checks a
+    // blocked job) — it reverts to `running`, runOnce reschedules it, DAG intact.
+    const first = await q.runOnce();
+    expect(releaseThrown).toBe(true);
+    expect(first?.outcome).toBe("retry"); // the rolled-back completion re-queued A
+    expect(statusOf(aId)).toBe("ready"); // NOT 'done' — the completion was undone
+    expect(statusOf(bId)).toBe("blocked");
+
+    // The release no longer throws; a clean re-run completes A AND releases B, so
+    // the DAG advances rather than deadlocking on a half-applied completion.
+    advance(1000); // past A's retry backoff (baseBackoffMs, attempt 1)
+    const second = await q.runOnce();
+    expect(second?.outcome).toBe("done");
+    expect(statusOf(aId)).toBe("done");
+    expect(statusOf(bId)).toBe("ready");
   });
 
   it("coerces Postgres-stringified batch counters through `Number()`", async () => {
