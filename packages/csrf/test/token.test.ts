@@ -36,6 +36,24 @@ describe("generateToken / verifyToken", () => {
     expect(verifyToken(nonce + ".deadbeef", SESSION, SECRET)).toBe(false);
   });
 
+  // F6: a real hex signature is 64 ASCII chars (64 bytes). A forgery of the same
+  // *string* length but carrying a non-ASCII char — legal latin-1 in an HTTP
+  // header — has a greater *byte* length once UTF-8-encoded. A string-length
+  // guard lets it through to timingSafeEqual, which throws RangeError on a
+  // byte-size mismatch — escaping the total contract and turning a 403 into a
+  // 500 an attacker can trigger at will. verify must stay total: `false`.
+  it("stays total for a same-string-length signature with non-ASCII bytes", () => {
+    const [nonce] = generateToken(SESSION, SECRET).split(".") as [string, string];
+
+    // 64 UTF-16 code units (matches a hex signature's string length) …
+    const nonAsciiSig = "ÿ" + "a".repeat(63);
+    expect(nonAsciiSig).toHaveLength(64);
+    // … but 65 bytes in UTF-8 — the byte-length mismatch that trips the throw.
+    expect(Buffer.byteLength(nonAsciiSig, "utf8")).toBe(65);
+
+    expect(verifyToken(nonce + "." + nonAsciiSig, SESSION, SECRET)).toBe(false);
+  });
+
   it("mints a fresh token every call", () => {
     expect(generateToken(SESSION, SECRET)).not.toBe(generateToken(SESSION, SECRET));
   });

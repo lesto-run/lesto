@@ -70,8 +70,15 @@ export const verifyToken = (token: string, sessionId: string, secret: string): b
 
   const expected = sign(nonce, sessionId, secret);
 
-  // Length guard before timingSafeEqual, which throws on a size mismatch.
-  if (signature.length !== expected.length) return false;
+  const signatureBytes = Buffer.from(signature);
+  const expectedBytes = Buffer.from(expected);
 
-  return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  // Guard on *byte* length, not string length. An HTTP header is latin-1, so a
+  // forged signature of the same string length can still carry non-ASCII chars
+  // that encode to more UTF-8 bytes — and timingSafeEqual throws RangeError on a
+  // byte-size mismatch. A string-length guard would let that throw escape and
+  // turn an attacker's 403 into a 500; the byte guard keeps verify total.
+  if (signatureBytes.length !== expectedBytes.length) return false;
+
+  return timingSafeEqual(signatureBytes, expectedBytes);
 };
