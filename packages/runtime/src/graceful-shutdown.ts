@@ -48,6 +48,18 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_FORCE_EXIT_GRACE_MS = 5_000;
 
 /**
+ * The default force-exit deadline for a caller with no `drainTimeoutMs` of its own to
+ * derive from — the CLI's `installShutdown`, whose `drain` closes a server plus its own
+ * extra teardown (watchers, the dev-only loopback MCP server, a trace flush) rather than
+ * being a single {@link ServeOptions.drainTimeoutMs}. Same shape as
+ * {@link serveWithGracefulShutdown}'s own default: the standard drain window
+ * ({@link DEFAULT_DRAIN_TIMEOUT_MS}) plus the same headroom
+ * ({@link DEFAULT_FORCE_EXIT_GRACE_MS}) for the rest of teardown, so both paths force-exit
+ * on the same schedule.
+ */
+export const DEFAULT_FORCE_EXIT_TIMEOUT_MS = DEFAULT_DRAIN_TIMEOUT_MS + DEFAULT_FORCE_EXIT_GRACE_MS;
+
+/**
  * The process/timer seams {@link onShutdownSignals} touches — injected so a test
  * drives the signal handlers, the exit, and the force-exit timer WITHOUT
  * registering real handlers or killing the test process. Real defaults wire the
@@ -100,10 +112,12 @@ export interface ShutdownSignalOptions {
   /**
    * Force-exit(1) if the whole `teardown` chain has not settled within this many
    * ms — the backstop for a teardown step that itself wedges (a `close()` that
-   * hangs, a `stop()` that never resolves). Omit to never force (the CLI's
-   * `installShutdown`, whose injected `drain` is trusted to settle, does this — it
-   * wants only the double-signal guard). {@link serveWithGracefulShutdown} always
-   * sets it.
+   * hangs, a `stop()` that never resolves). Omit to never force — the double-signal
+   * guard still holds, but a genuinely wedged teardown then waits on the platform's
+   * SIGKILL. Both {@link serveWithGracefulShutdown} and the CLI's `installShutdown`
+   * always set it ({@link DEFAULT_FORCE_EXIT_TIMEOUT_MS} for the latter); this stays
+   * optional for a caller (a test, a minimal script) that truly wants only the
+   * double-signal guard.
    */
   readonly forceExitTimeoutMs?: number;
 }

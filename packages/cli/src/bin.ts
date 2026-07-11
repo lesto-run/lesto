@@ -16,7 +16,12 @@ import { createServer as createNetServer } from "node:net";
 import type { AddressInfo, Server as NetServer } from "node:net";
 import { dirname, join } from "node:path";
 
-import { nodeStaticReader, onShutdownSignals, serve } from "@lesto/runtime";
+import {
+  DEFAULT_FORCE_EXIT_TIMEOUT_MS,
+  nodeStaticReader,
+  onShutdownSignals,
+  serve,
+} from "@lesto/runtime";
 import type { LestoAppConfig } from "@lesto/kernel";
 import { compileFileRoutes, scanRoutes } from "@lesto/router";
 import { applyFileRoutes, generateRouteManifest, loadFileRoutes } from "@lesto/web";
@@ -1442,11 +1447,17 @@ const code = await run(argv, {
   checkHealth: httpHealthCheck,
   // On a deploy's rolling restart, drain in-flight requests then exit cleanly. The
   // same productized helper the long-lived examples dogfood: SIGTERM + SIGINT, a
-  // double-signal guard (a second Ctrl-C mid-drain is a no-op, never a re-entry),
-  // and exit 0 on a clean drain / exit 1 + stderr on a teardown REJECTION (a socket
-  // close that threw, the dev MCP / trace flush that rejected — never an unhandled
-  // rejection). The injected `drain` is trusted to settle, so no force-exit deadline.
-  installShutdown: (drain) => onShutdownSignals(drain),
+  // double-signal guard (a second Ctrl-C mid-drain is a no-op, never a re-entry —
+  // it is NOT a second escape hatch), and exit 0 on a clean drain / exit 1 + stderr
+  // on a teardown REJECTION (a socket close that threw, the dev MCP / trace flush
+  // that rejected — never an unhandled rejection). The escape hatch for a teardown
+  // that itself wedges (`dev`'s drain closes watchers/the loopback MCP server/a
+  // trace flush and CAN hang) is the force-exit deadline: `DEFAULT_FORCE_EXIT_TIMEOUT_MS`,
+  // the same default `serveWithGracefulShutdown` arms for the examples, so a
+  // genuinely stuck `lesto dev`/`lesto serve` force-exits on schedule instead of
+  // waiting on the platform's SIGKILL.
+  installShutdown: (drain) =>
+    onShutdownSignals(drain, { forceExitTimeoutMs: DEFAULT_FORCE_EXIT_TIMEOUT_MS }),
   out: console.log,
 });
 

@@ -43,7 +43,11 @@ export type {
   TraceparentParser,
 } from "./server";
 
-export { onShutdownSignals, serveWithGracefulShutdown } from "./graceful-shutdown";
+export {
+  DEFAULT_FORCE_EXIT_TIMEOUT_MS,
+  onShutdownSignals,
+  serveWithGracefulShutdown,
+} from "./graceful-shutdown";
 export type {
   GracefulShutdownOptions,
   ShutdownSignalOptions,

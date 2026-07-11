@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { App } from "@lesto/kernel";
 
 import {
+  DEFAULT_FORCE_EXIT_TIMEOUT_MS,
   onShutdownSignals,
   realSignalDeps,
   serveWithGracefulShutdown,
@@ -133,7 +134,7 @@ describe("onShutdownSignals", () => {
     expect(h.exits).toEqual([]); // teardown still in flight, no exit yet
   });
 
-  it("does not arm a force-exit timer when no timeout is given (the CLI's shape)", async () => {
+  it("does not arm a force-exit timer when no timeout is given (the double-signal-guard-only shape)", async () => {
     const h = harness();
 
     onShutdownSignals(async () => {}, {}, h.deps);
@@ -360,6 +361,24 @@ describe("serveWithGracefulShutdown", () => {
     expect(server.port).toBeGreaterThan(0);
 
     await server.close(); // tear the real socket down
+  });
+});
+
+describe("DEFAULT_FORCE_EXIT_TIMEOUT_MS", () => {
+  it("matches serveWithGracefulShutdown's own default (10s drain + 5s grace) so both paths agree", async () => {
+    expect(DEFAULT_FORCE_EXIT_TIMEOUT_MS).toBe(15_000);
+
+    // Prove the two are actually the SAME schedule, not just coincidentally equal numbers:
+    // the productized default (no drainTimeoutMs, no forceExitTimeoutMs override) arms at
+    // this exact constant.
+    const h = harness();
+
+    await serveWithGracefulShutdown(trivialApp, { port: 3000 }, h.deps);
+
+    h.fire("SIGINT");
+    await tick();
+
+    expect(h.state.forceExitMs).toBe(DEFAULT_FORCE_EXIT_TIMEOUT_MS);
   });
 });
 
