@@ -35,6 +35,18 @@ import type { JsonValue, Queue } from "@lesto/queue";
  *      request replayed later fails — the replay window is the tolerance, not
  *      forever.
  *
+ *   4. `verifyRequest` (multi-tenant form) distinguishes an unresolvable tenant
+ *      from a bad signature by HOW it reports failure, not just what it reports:
+ *      a {@link SecretResolver} that throws or returns no secret is a hard throw
+ *      (`WEBHOOK_SECRET_UNRESOLVED`), while a resolved secret that fails the HMAC
+ *      is a returned `{ verified: false, reason: "signature_mismatch" }` — never
+ *      thrown. A caller who maps "threw" and "returned false" to DIFFERENT HTTP
+ *      statuses (e.g. 404 for the former, 401 for the latter) turns that
+ *      asymmetry into a tenant-existence oracle: an attacker with no valid
+ *      secret can still learn which tenant ids exist by watching which status
+ *      comes back. Map both outcomes to the SAME response (a flat 401, say) if
+ *      that oracle would matter for your receiver.
+ *
  * DNS-rebinding TOCTOU — closeable by opt-in: the default guard resolves the host
  * and the default `fetch` resolves it AGAIN, so a hostile DNS server could answer
  * "public" to the guard and "private" to the fetch in the gap between. The default
@@ -209,19 +221,23 @@ export interface VerifyRequestInput {
 
 /**
  * The material a {@link SecretResolver} sees to pick the per-request secret: the
- * raw request (body + headers) plus the already-parsed signature and sender
- * timestamp. A multi-tenant receiver reads a tenant/source identifier from the
- * headers (or the body) and returns THAT tenant's signing secret.
+ * raw request (body + headers) plus the sender's already-parsed timestamp. A
+ * multi-tenant receiver reads a tenant/source identifier from the headers (or
+ * the body) and returns THAT tenant's signing secret.
  *
- * Reading the body here only SELECTS which secret to check against — the
- * signature is still verified over the raw body under whatever secret the
- * resolver returns, so a forger who names a tenant whose secret they do not hold
- * simply fails the constant-time HMAC check. The identifier is untrusted until
- * the HMAC passes.
+ * Deliberately excludes the signature. A resolver's job is SELECTION — "whose
+ * secret is this?" — never verification: the signature is checked afterward, by
+ * {@link verifyRequest} itself, over the raw body, against whatever secret the
+ * resolver returns. The signature has no legitimate role in choosing a secret,
+ * so it is not reachable here at all — that forecloses a resolver that
+ * compares or logs the exact value under check, intentionally or by accident.
+ *
+ * Reading the body here only SELECTS which secret to check against — a forger
+ * who names a tenant whose secret they do not hold simply fails the
+ * constant-time HMAC check afterward. The identifier is untrusted until the
+ * HMAC passes.
  */
 export interface SecretResolverContext extends VerifyRequestInput {
-  /** The `x-lesto-signature` the sender shipped. */
-  readonly signature: string;
   /** The parsed `x-lesto-timestamp` (epoch ms), already inside the replay window. */
   readonly timestamp: number;
 }
@@ -424,7 +440,6 @@ export function verifyRequest(
       secret = await resolveSecret({
         body: input.body,
         headers: input.headers,
-        signature: pre.signature,
         timestamp: pre.timestamp,
       });
     } catch (cause) {

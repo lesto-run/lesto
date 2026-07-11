@@ -374,7 +374,7 @@ describe("verifyRequest — multi-tenant secret resolver", () => {
     });
   });
 
-  it("passes the raw body, headers, signature, and parsed timestamp to the resolver", async () => {
+  it("passes the raw body, headers, and parsed timestamp to the resolver — never the signature", async () => {
     const body = JSON.stringify({ event: "ping", data: {} });
     const headers: Record<string, string> = {
       ...signedHeaders(ts, body, "shh"),
@@ -393,8 +393,10 @@ describe("verifyRequest — multi-tenant secret resolver", () => {
     });
     expect(seen?.body).toBe(body); // the RAW body, for tenant selection
     expect(seen?.headers[TENANT_HEADER]).toBe("acme");
-    expect(seen?.signature).toBe(headers[SIGNATURE_HEADER]);
     expect(seen?.timestamp).toBe(ts);
+    // The resolver's job is SELECTING a secret, never verifying one — the
+    // signature it has no legitimate use for must not be reachable at all.
+    expect(seen).not.toHaveProperty("signature");
   });
 
   it("fails CLOSED (WEBHOOK_SECRET_UNRESOLVED) when the resolver throws, preserving the cause", async () => {
