@@ -122,17 +122,34 @@ export function assertPeerHonesty(manifest) {
 
 /**
  * The major numbers a range ADVERTISES as supported, ascending — e.g. `^18 || ^19` → [18, 19].
- * A `<Y`/`<=Y` upper bound is a ceiling, not an advertised major, so it is skipped: `>=18 <19`
- * advertises [18] (NOT [18, 19]) — counting the exclusive `<19` as major 19 would false-split a
- * `>=18 <19` peer against an equivalent `^18` one. Lower bounds (`>=18`) and caret/tilde/exact
- * tokens do contribute their major. (This is a major-set approximation, enough for lockstep on the
- * repo's caret-style peers; it does not enumerate the interior majors of a wide comparator span.)
+ * A `>=X <Y` (or `>X <Y` / `<=Y`) comparator PAIR is a closed SPAN, not a single point: it
+ * advertises every major from X through the one just below (or at, for `<=`) the ceiling — so
+ * `>=18 <20` advertises [18, 19], the SAME set as its caret-union equivalent `^18 || ^19`. Getting
+ * this wrong (recording only the lower bound's major) made two equivalent ranges report different
+ * major sets and trip `assertReactLockstep` with a false mismatch (L-f4ca9903). A lone `<Y`/`<=Y`
+ * with no paired lower bound in the same disjunct is still just a ceiling, not an advertised
+ * major, and is skipped: `>=18 <19` — a one-major span — still advertises [18], same as `^18`.
+ * Caret/tilde/exact/x-range tokens each contribute their own (single) major.
  */
 function advertisedMajors(range) {
   const set = new Set();
   for (const d of String(range).trim().split("||")) {
-    for (const token of normalizeComparatorSpacing(d.trim()).split(/\s+/).filter(Boolean)) {
-      if (token.startsWith("<")) continue; // an upper bound caps the range; it is not an advertised major
+    const tokens = normalizeComparatorSpacing(d.trim()).split(/\s+/).filter(Boolean);
+    // Detect a comparator-span disjunct: an open lower bound (`>=X`/`>X`) paired with an upper
+    // bound (`<Y`/`<=Y`) anywhere in the same disjunct. Enumerate the closed interval [X, Y-1]
+    // (or [X, Y] for `<=`) instead of falling through to the per-token pass below, which would
+    // only record X and silently drop the interior majors.
+    const lower = tokens.find((t) => /^>=?\d/.test(t));
+    const upper = tokens.find((t) => /^<=?\d/.test(t));
+    if (lower && upper) {
+      const lowMajor = Number(/(\d+)/.exec(lower)[1]);
+      const upperMajor = Number(/(\d+)/.exec(upper)[1]);
+      const ceilMajor = upper.startsWith("<=") ? upperMajor : upperMajor - 1;
+      for (let major = lowMajor; major <= ceilMajor; major++) set.add(major);
+      continue; // this disjunct is fully accounted for as a span; skip the per-token pass
+    }
+    for (const token of tokens) {
+      if (token.startsWith("<")) continue; // a lone upper bound caps the range; it is not an advertised major
       const m = /(\d+)/.exec(token.replace(/^[\^~=v>]=?/, ""));
       if (m) set.add(Number(m[1]));
     }

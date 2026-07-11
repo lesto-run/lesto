@@ -145,6 +145,18 @@ describe("assertReactLockstep", () => {
       }),
     ).toEqual([]);
   });
+  it("treats a WIDE `>=X <Y` comparator span as equivalent to its caret-union (L-f4ca9903)", () => {
+    // `>=18 <20` and `^18 || ^19` advertise the SAME major set, [18, 19] — a comparator span must
+    // enumerate its INTERIOR majors (18 AND 19), not just the lower bound, or these two equivalent
+    // ranges report different major sets and trip a false lockstep mismatch. (Before the fix,
+    // `advertisedMajors(">=18.0.0 <20.0.0")` returned only `[18]`, dropping the interior major 19.)
+    expect(
+      assertReactLockstep({
+        name: "x",
+        peerDependencies: { react: ">=18.0.0 <20.0.0", "react-dom": "^18.0.0 || ^19.0.0" },
+      }),
+    ).toEqual([]);
+  });
   it("SKIPS sections that declare only one of the pair, or a workspace protocol", () => {
     expect(assertReactLockstep({ name: "x", peerDependencies: { react: "^19" } })).toEqual([]);
     expect(
