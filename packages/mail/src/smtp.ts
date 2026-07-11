@@ -142,7 +142,23 @@ export function createSmtpTransport(config: SmtpTransportConfig): MailTransport 
         await conn.command(`RCPT TO:<${addressOnly(email.to)}>`, 250);
         await conn.command("DATA", 354);
         await conn.command(buildMessage(email, from), 250);
-        await conn.command("QUIT", 221);
+
+        // The DATA-body 250 COMMITS the message (RFC 5321 §4.2): the receiver has
+        // accepted responsibility, so the send has ALREADY succeeded. QUIT is now
+        // a courtesy — issue it best-effort and SWALLOW whatever happens to the
+        // 221 (a withheld or slow reply, a socket error, or a relay that drops the
+        // connection the instant it accepts — all common). Gating success on the
+        // 221, as this once did, turned a post-commit hiccup into a REJECTED send,
+        // and the at-least-once queue then re-delivers an already-accepted message:
+        // a guaranteed DUPLICATE. Note a deadline that fires BEFORE this point
+        // still rejects (nothing delivered → a clean retry) — only the post-commit
+        // QUIT/221 is forgiven, and a post-250 connection close likewise resolves
+        // as success here rather than surfacing as a reject.
+        try {
+          await conn.command("QUIT", 221);
+        } catch {
+          // Committed already — the QUIT/221 outcome must never fail the send.
+        }
       } finally {
         socket.removeAllListeners();
         socket.end();
@@ -235,6 +251,20 @@ async function authenticate(conn: SmtpConnection, auth: SmtpAuth): Promise<void>
     await conn.command(base64(auth.user), 334);
     await conn.command(base64(auth.pass), 235);
   } catch (error) {
+    // A TRANSIENT stall (the whole-dialogue deadline) or a dropped connection
+    // during an AUTH step is NOT a credential failure — re-throw those UNCHANGED
+    // so the queue treats them as retryable. Flattening a timeout into a
+    // permanent MAIL_TRANSPORT_SMTP_AUTH lets a queue that drops "auth failed"
+    // jobs DROP a deliverable message → a lost email. Only a genuine protocol /
+    // credential rejection (e.g. a 535) is wrapped as a permanent auth error.
+    if (
+      error instanceof SmtpTransportError &&
+      (error.code === "MAIL_TRANSPORT_SMTP_TIMEOUT" ||
+        error.code === "MAIL_TRANSPORT_SMTP_CONNECTION")
+    ) {
+      throw error;
+    }
+
     // `command` only ever throws SmtpTransportError, so `error` is always an Error.
     throw new SmtpTransportError("MAIL_TRANSPORT_SMTP_AUTH", "SMTP authentication failed.", {
       cause: (error as Error).message,

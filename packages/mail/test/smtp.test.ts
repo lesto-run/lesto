@@ -478,6 +478,63 @@ describe("createSmtpTransport", () => {
   });
 });
 
+describe("createSmtpTransport — AUTH error classification", () => {
+  // A TRANSIENT stall (deadline) during an AUTH step must NOT be reported as a
+  // permanent credential failure: the server prompts through AUTH LOGIN +
+  // username, then hangs before acking the password. The whole-dialogue deadline
+  // must surface MAIL_TRANSPORT_SMTP_TIMEOUT (retryable) — not
+  // MAIL_TRANSPORT_SMTP_AUTH, which a queue may treat as permanent and DROP,
+  // losing the email. RED without the fix: authenticate() wraps the timeout as
+  // MAIL_TRANSPORT_SMTP_AUTH and this assertion misses.
+  it("re-throws a transient AUTH-step timeout as a coded timeout, not a permanent auth error", async () => {
+    const fake = new FakeSocket([
+      "220 ready\r\n",
+      "250 ok\r\n", // EHLO
+      "334 user\r\n", // AUTH LOGIN → username prompt
+      "334 pass\r\n", // username → password prompt
+      // No reply to the base64 password: the dialogue stalls mid-AUTH here.
+    ]);
+    const transport = createSmtpTransport({
+      host: "h",
+      port: 25,
+      secure: false,
+      auth: { user: "u@app.com", pass: "secret" },
+      timeoutMs: 200,
+      connect: async () => fake,
+    });
+
+    await expect(transport.send({ ...base(), from: "u@app.com" })).rejects.toMatchObject({
+      code: "MAIL_TRANSPORT_SMTP_TIMEOUT",
+      details: { timeoutMs: 200 },
+    });
+  });
+
+  // No-regression companion: a GENUINE credential rejection (535 to the password)
+  // must STILL surface as MAIL_TRANSPORT_SMTP_AUTH. This pins the discrimination
+  // — timeouts pass through, real auth failures are wrapped — so the fix cannot
+  // over-correct into forwarding a permanent auth error as retryable.
+  it("still surfaces a genuine AUTH rejection (535) as a coded auth error", async () => {
+    const fake = new FakeSocket([
+      "220 ready\r\n",
+      "250 ok\r\n", // EHLO
+      "334 user\r\n", // AUTH LOGIN → username prompt
+      "334 pass\r\n", // username → password prompt
+      "535 bad creds\r\n", // password rejected
+    ]);
+    const transport = createSmtpTransport({
+      host: "h",
+      port: 25,
+      secure: false,
+      auth: { user: "u", pass: "bad" },
+      connect: async () => fake,
+    });
+
+    await expect(transport.send({ ...base(), from: "u@app.com" })).rejects.toMatchObject({
+      code: "MAIL_TRANSPORT_SMTP_AUTH",
+    });
+  });
+});
+
 describe("createSmtpTransport — node default fallbacks", () => {
   it("falls back to the real nodeConnect when no connect is injected", async () => {
     const transport = createSmtpTransport({ host: "0.0.0.0", port: 1, secure: false });
@@ -728,10 +785,7 @@ describe("SmtpConnection lost-wakeup and dialogue timeout (F15)", () => {
       // rejection always has a handler (no unhandled-rejection window), and a
       // still-pending send — the pre-fix bug — reads as `undefined` rather than
       // hanging the test, so the RED failure is a clean assertion miss.
-      let outcome:
-        | { status: "resolved" }
-        | { status: "rejected"; error: unknown }
-        | undefined;
+      let outcome: { status: "resolved" } | { status: "rejected"; error: unknown } | undefined;
       const observed = sending.then(
         () => {
           outcome = { status: "resolved" };
@@ -837,10 +891,7 @@ describe("SmtpConnection — connect + STARTTLS share the whole-dialogue deadlin
       // has a handler (no unhandled-rejection window), and a still-pending
       // pre-fix send reads as `undefined` rather than hanging the test, so the
       // RED failure is a clean assertion miss, not a suite timeout.
-      let outcome:
-        | { status: "resolved" }
-        | { status: "rejected"; error: unknown }
-        | undefined;
+      let outcome: { status: "resolved" } | { status: "rejected"; error: unknown } | undefined;
       const observed = sending.then(
         () => {
           outcome = { status: "resolved" };
@@ -903,10 +954,7 @@ describe("SmtpConnection — connect + STARTTLS share the whole-dialogue deadlin
 
       const sending = transport.send({ ...base(), from: "f@app.com" });
 
-      let outcome:
-        | { status: "resolved" }
-        | { status: "rejected"; error: unknown }
-        | undefined;
+      let outcome: { status: "resolved" } | { status: "rejected"; error: unknown } | undefined;
       const observed = sending.then(
         () => {
           outcome = { status: "resolved" };
