@@ -81,6 +81,8 @@ The browser has OPFS-SQLite, Web Locks, and BroadcastChannel natively.
 its own, so it can only *consume* an external sync service. Lesto owns the ORM, the migrator, the
 queue, and the auth model on **one** Postgres — so `live()` can be a **method on the same query
 builder** the app already uses: `db.select().from(messages).where(eq(messages.roomId, id)).live()`.
+(**As-built: `live()` is the free function `live(table).where(col, "eq", value).query()`, not a chained
+`.live()` method — the moat claim holds verbatim over it; see the 2026-07-10 erratum.**)
 Local-first becomes **a property of the substrate, not a bolted-on service.** That is the thing no
 app framework can coherently match, and the reason this is worth a hard, separate ADR.
 

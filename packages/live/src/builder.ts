@@ -125,7 +125,7 @@ function makeBuilder<R extends Row>(state: BuilderState): LiveQueryBuilder<R> {
 /**
  * Start a `live()` query over a `@lesto/db` table. The returned builder is typed to the
  * table's row (`InferRow<T>`), so `.query()` yields a `LiveQuery<Todo>` with no second query
- * language and no socket code — the moat, made a method on the ORM's own schema.
+ * language and no socket code — the moat, as a free function over the ORM's own schema.
  */
 export function live<T extends Table>(table: T): LiveQueryBuilder<InferRow<T>> {
   return makeBuilder<InferRow<T>>({ table, where: [], orderBy: undefined });

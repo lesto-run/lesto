@@ -100,10 +100,10 @@ function Room({ roomId }: { roomId: string }) {
 ## The durable store, offline writes, and cross-tab
 
 - **The store.** The default is an in-memory keyed store (lost on reload — fine for
-  live views). Opt into durability with `createSqliteLiveStore`, backed by
-  OPFS-SQLite via the `@lesto/live/opfs` subpath: a real local SQLite that survives
-  reload and persists its resume cursor *atomically* with the rows, so a crash never
-  leaves rows ahead of the cursor.
+  live views). Opt into durability with `createSqliteLiveStore` (from `@lesto/live`),
+  given an OPFS-SQLite database opened via the `@lesto/live/opfs` subpath: a real local
+  SQLite that survives reload and persists its resume cursor *atomically* with the rows,
+  so a crash never leaves rows ahead of the cursor.
 - **Offline writes.** `createLiveMutations` is the write outbox: a write is applied
   to the store optimistically and durably logged, then replayed on reconnect through
   the app's **normal authorized `POST` mutation** — the same validation, authz, and
@@ -115,7 +115,9 @@ function Room({ roomId }: { roomId: string }) {
   to hold the connection and the durable store; a BroadcastChannel fans the leader's
   rendered slice to follower tabs, which mirror it without a connection of their own.
   Leadership fails over automatically on tab close. It returns the same `LiveQuery`
-  handle, so `useLiveQuery` binds it unchanged.
+  handle, so `useLiveQuery` binds it unchanged. (Preview caveat: a leader failover
+  *during an in-flight offline write* can drop that pending write — a known open
+  hardening item, tracked before GA.)
 
 ## Scope and caveats (v1)
 
