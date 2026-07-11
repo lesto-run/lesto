@@ -55,6 +55,12 @@ message string. Messages are for humans and may change freely.
 throw new QueueError("QUEUE_HANDLER_NOT_FOUND", `No handler for job "${name}".`, { name });
 ```
 
+Recognize the **base** `LestoError` via `isLestoError`/`hasCode` (a cross-copy brand check), never
+`instanceof LestoError` — a duplicate `@lesto/errors` install (version mispin, dedupe miss) breaks
+class identity and silently downgrades a coded error. Subclass checks (`instanceof QueueError`, etc.)
+are unaffected and stay correct; oxlint's `lesto-errors/no-base-instanceof-lesto-error` rule enforces
+the base-class case (see `packages/errors/lint/no-base-instanceof-lesto-error.ts`).
+
 ## Logs
 
 - **Server & CLI logs are first-class output**, not debug noise. Structured, leveled, and quiet by

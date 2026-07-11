@@ -3,6 +3,13 @@
 
   "plugins": ["typescript", "unicorn", "oxc", "promise"],
 
+  // Custom rule guarding the `@lesto/errors` brand invariant — see
+  // `packages/errors/lint/no-base-instanceof-lesto-error.ts` for the full
+  // rationale. oxlint ships no `no-restricted-syntax` (that's an ESLint-only
+  // rule built on esquery selectors), so this is a hand-rolled `jsPlugins`
+  // rule matching the one AST shape we need to forbid.
+  "jsPlugins": ["./packages/errors/lint/no-base-instanceof-lesto-error.ts"],
+
   "categories": {
     "correctness": "error",
     "suspicious": "error",
@@ -29,8 +36,34 @@
     "unicorn/no-await-expression-member": "off",
     "unicorn/no-null": "off",
     "no-await-in-loop": "off",
-    "no-unmodified-loop-condition": "off"
+    "no-unmodified-loop-condition": "off",
+
+    // Base-class `instanceof LestoError` silently breaks across a duplicate
+    // `@lesto/errors` copy (class identity, not the error's brand) — see the
+    // rule's own doc comment for the full story. `isLestoError` is the fix.
+    "lesto-errors/no-base-instanceof-lesto-error": "error"
   },
+
+  // Test files that deliberately construct a foreign-copy `LestoError`-shaped
+  // object and assert `instanceof LestoError` is `false` — proving exactly
+  // the failure mode the rule above guards against — are exempt. These are
+  // demonstrations of the bug, not production control flow reintroducing it.
+  "overrides": [
+    {
+      "files": [
+        "**/test/**",
+        "**/tests/**",
+        "**/__tests__/**",
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx"
+      ],
+      "rules": {
+        "lesto-errors/no-base-instanceof-lesto-error": "off"
+      }
+    }
+  ],
 
   "ignorePatterns": ["**/dist/**", "**/node_modules/**", "**/*.d.ts"]
 }
