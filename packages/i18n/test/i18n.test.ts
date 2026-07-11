@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { I18n, interpolate } from "../src/index";
+import { escapeHtml, I18n, interpolate, interpolateHtml } from "../src/index";
 
 import type { Messages } from "../src/index";
 
@@ -360,6 +360,111 @@ describe("I18n.onMissing", () => {
   });
 });
 
+// -- HTML-safe variants: the XSS-footgun fix -------------------------------
+//
+// `t`/`plural` are plain text BY CONTRACT (see interpolate.ts): a translation
+// or interpolated param that carries markup passes straight through. Every
+// "neutralizes" test below first asserts the plain-text method DOES let the
+// payload through unescaped (so the assertion is proven to fire against a
+// non-escaping implementation), then asserts the HTML-safe method does not.
+
+describe("I18n.tHtml", () => {
+  it("neutralizes a <script>-bearing translation template", () => {
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: { en: { xss: "<script>alert(1)</script>Hi, {name}!" } },
+    });
+
+    // Proves the payload is really live: the plain-text method (t's documented
+    // contract) lets the raw tag through.
+    expect(i18n.t("en", "xss", { name: "Ada" })).toContain("<script>");
+
+    const rendered = i18n.tHtml("en", "xss", { name: "Ada" });
+    expect(rendered).not.toContain("<script>");
+    expect(rendered).toBe("&lt;script&gt;alert(1)&lt;/script&gt;Hi, Ada!");
+  });
+
+  it("neutralizes a <script>-bearing interpolation param", () => {
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: { en: { greeting: "Hello, {name}!" } },
+    });
+    const payload = "<script>alert(document.cookie)</script>";
+
+    expect(i18n.t("en", "greeting", { name: payload })).toContain("<script>");
+
+    const rendered = i18n.tHtml("en", "greeting", { name: payload });
+    expect(rendered).not.toContain("<script>");
+    expect(rendered).toBe("Hello, &lt;script&gt;alert(document.cookie)&lt;/script&gt;!");
+  });
+
+  it("round-trips legitimate text exactly like t() when there is nothing to escape", () => {
+    const i18n = new I18n({ defaultLocale: "en", locales: { en: { plain: "Just text." } } });
+
+    expect(i18n.tHtml("en", "plain")).toBe(i18n.t("en", "plain"));
+  });
+
+  it("HTML-encodes a legitimate translation that itself contains markup-significant characters", () => {
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: { en: { notice: "Terms & Conditions apply" } },
+    });
+
+    expect(i18n.tHtml("en", "notice")).toBe("Terms &amp; Conditions apply");
+  });
+
+  it("falls back to the default locale like t(), escaping the borrowed template", () => {
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: { en: { notice: "<b>Sale!</b>" }, fr: {} },
+    });
+
+    expect(i18n.tHtml("fr", "notice")).toBe("&lt;b&gt;Sale!&lt;/b&gt;");
+  });
+
+  it("escapes the key itself (and still fires onMissing) when the key resolves nowhere", () => {
+    const missing: Array<[string, string]> = [];
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: { en: {} },
+      onMissing: (locale, key) => missing.push([locale, key]),
+    });
+
+    expect(i18n.tHtml("en", "a<b")).toBe("a&lt;b");
+    expect(missing).toEqual([["en", "a<b"]]);
+  });
+});
+
+describe("I18n.pluralHtml", () => {
+  it("neutralizes a <script>-bearing plural template and interpolated param", () => {
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: {
+        en: {
+          "cart.one": "<b>{count}</b> item for {who}",
+          "cart.other": "<b>{count}</b> items for {who}",
+        },
+      },
+    });
+    const payload = "<script>alert(1)</script>";
+
+    expect(i18n.plural("en", "cart", 1, { who: payload })).toContain("<script>");
+
+    const rendered = i18n.pluralHtml("en", "cart", 1, { who: payload });
+    expect(rendered).not.toContain("<script>");
+    expect(rendered).toBe("&lt;b&gt;1&lt;/b&gt; item for &lt;script&gt;alert(1)&lt;/script&gt;");
+  });
+
+  it("resolves the same category/fallback rules as plural()", () => {
+    const i18n = new I18n({
+      defaultLocale: "en",
+      locales: { en: { "cart.other": "{count} items" } },
+    });
+
+    expect(i18n.pluralHtml("en", "cart", 3)).toBe("3 items");
+  });
+});
+
 describe("interpolate", () => {
   it("renders numeric values as strings", () => {
     expect(interpolate("n={n}", { n: 7 })).toBe("n=7");
@@ -370,5 +475,61 @@ describe("interpolate", () => {
     // function into the text; with no own `constructor` param it stays verbatim.
     expect(interpolate("x={constructor}", {})).toBe("x={constructor}");
     expect(interpolate("x={toString}", {})).toBe("x={toString}");
+  });
+});
+
+describe("escapeHtml", () => {
+  it("encodes &, <, >, \", and ' so text is safe as HTML content or a quoted attribute", () => {
+    expect(escapeHtml(`&<>"'`)).toBe("&amp;&lt;&gt;&quot;&#39;");
+  });
+
+  it("does not re-escape the entities it introduces (ampersand runs first)", () => {
+    expect(escapeHtml("<script>a & b</script>")).toBe("&lt;script&gt;a &amp; b&lt;/script&gt;");
+  });
+
+  it("leaves plain text, including non-ASCII characters, unchanged", () => {
+    expect(escapeHtml("Café, bienvenue !")).toBe("Café, bienvenue !");
+  });
+});
+
+describe("interpolateHtml", () => {
+  it("neutralizes a <script> tag embedded directly in the template", () => {
+    const template = "<script>alert(1)</script>Hi, {name}!";
+
+    // Proves the payload is live: plain `interpolate` on the same input lets
+    // the raw tag through.
+    expect(interpolate(template, { name: "Ada" })).toContain("<script>");
+
+    const rendered = interpolateHtml(template, { name: "Ada" });
+    expect(rendered).not.toContain("<script>");
+    expect(rendered).toBe("&lt;script&gt;alert(1)&lt;/script&gt;Hi, Ada!");
+  });
+
+  it("neutralizes a <script>-bearing interpolation param", () => {
+    const payload = "<script>alert(document.cookie)</script>";
+
+    expect(interpolate("Hi, {name}!", { name: payload })).toContain("<script>");
+
+    const rendered = interpolateHtml("Hi, {name}!", { name: payload });
+    expect(rendered).not.toContain("<script>");
+    expect(rendered).toBe("Hi, &lt;script&gt;alert(document.cookie)&lt;/script&gt;!");
+  });
+
+  it("round-trips legitimate text with no special characters", () => {
+    expect(interpolateHtml("Hello, {name}!", { name: "Ada" })).toBe("Hello, Ada!");
+  });
+
+  it("HTML-encodes legitimate text and params that contain markup-significant characters", () => {
+    expect(interpolateHtml("{a} and {b}", { a: "Salt & Pepper", b: "Mac's diner" })).toBe(
+      "Salt &amp; Pepper and Mac&#39;s diner",
+    );
+  });
+
+  it("leaves a placeholder with no matching param verbatim", () => {
+    expect(interpolateHtml("Hi, {name}!", {})).toBe("Hi, {name}!");
+  });
+
+  it("treats inherited Object.prototype members as misses, not resolvable output", () => {
+    expect(interpolateHtml("x={constructor}", {})).toBe("x={constructor}");
   });
 });

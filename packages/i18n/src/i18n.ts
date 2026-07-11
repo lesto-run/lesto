@@ -22,7 +22,8 @@
  * catalog keyed only by the bare/`other` key keeps working unchanged.
  */
 
-import { interpolate } from "./interpolate";
+import { escapeHtml } from "./html";
+import { interpolate, interpolateHtml } from "./interpolate";
 
 import type { I18nOptions, Messages, OnMissing, Params } from "./types";
 
@@ -97,6 +98,35 @@ export class I18n {
   }
 
   /**
+   * HTML-safe variant of {@link I18n.t}.
+   *
+   * Same lookup, fallback, and missing-key rules as `t` — the difference is
+   * entirely in the encoding of the result: the resolved template and every
+   * interpolated param are HTML-escaped (via {@link interpolateHtml}) before
+   * splicing, so the return value is safe to write directly into an HTML
+   * document. That holds even if the catalog entry itself carries markup (a
+   * compromised or careless translation) or a param is attacker-controlled —
+   * the two footguns `t`'s plain-text contract otherwise leaves for the
+   * caller to remember at the render layer.
+   *
+   * `t` is unchanged: it still returns unescaped plain text, and callers who
+   * need a different sink's encoding (an attribute, a URL, plain email) keep
+   * using `t` and encoding it themselves. `tHtml` is the escaping applied for
+   * the one sink common enough to deserve a batteries-included default.
+   */
+  tHtml(locale: string, key: string, params: Params = {}): string {
+    const template = this.lookup(locale, key);
+
+    if (template === undefined) {
+      this.reportMissing(locale, key);
+
+      return escapeHtml(key);
+    }
+
+    return interpolateHtml(template, params);
+  }
+
+  /**
    * Translate a pluralized `key` by `count`.
    *
    * The CLDR category for `count` is chosen by the locale's `Intl.PluralRules`
@@ -106,6 +136,14 @@ export class I18n {
    */
   plural(locale: string, key: string, count: number, params: Params = {}): string {
     return this.t(locale, `${key}.${this.pluralSuffix(locale, key, count)}`, { ...params, count });
+  }
+
+  /** HTML-safe variant of {@link I18n.plural}; see {@link I18n.tHtml} for what changes. */
+  pluralHtml(locale: string, key: string, count: number, params: Params = {}): string {
+    return this.tHtml(locale, `${key}.${this.pluralSuffix(locale, key, count)}`, {
+      ...params,
+      count,
+    });
   }
 
   /** Whether `key` resolves in `locale` (honouring fallback). */
