@@ -186,6 +186,21 @@ describe("rateLimit middleware", () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(429);
   });
+
+  it("accepts and threads onSaturated into the auto-built per-IP store", async () => {
+    // With no injected limiter, rateLimit builds a RateLimiter that routes
+    // onSaturated into its per-IP MemoryRateLimitStore — the seam an operator uses
+    // to observe the per-IP cap shedding buckets under a distinct-IP flood. That it
+    // actually FIRES through the limiter→store path is proven end-to-end in the
+    // limiter suite; here we cover that the middleware accepts + wires the option
+    // (no injected store to carry its own) and still serves normally.
+    const onSaturated = vi.fn();
+    const middleware = rateLimit({ capacity: 2, refillPerSecond: 1, onSaturated });
+
+    const response = await middleware(request, async () => okResponse);
+
+    expect(response.status).toBe(200);
+  });
 });
 
 describe("rateLimit unresolved-client detection", () => {

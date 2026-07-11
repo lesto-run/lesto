@@ -15,6 +15,55 @@ import type { BucketState, RateLimitStore } from "./types";
 const DEFAULT_MAX_BUCKETS = 10_000;
 
 /**
+ * The stable code carried by the default saturation warning, so logs and ops
+ * tooling branch on the code, never the prose. Mirrors
+ * {@link RATELIMIT_UNKNOWN_CLIENT_CODE} — a coded signal, not a thrown error.
+ */
+export const RATELIMIT_STORE_SATURATED_CODE = "RATELIMIT_STORE_SATURATED";
+
+/**
+ * The default saturation signal: one `console.warn` carrying the stable
+ * {@link RATELIMIT_STORE_SATURATED_CODE}, fired once per store the first time the
+ * hard cap has to evict an actively-throttled bucket. The eviction is the memory
+ * bound working as designed — but sustained saturation means a distinct-key flood
+ * (or a cap set too low for legitimate traffic), which an operator wants to SEE,
+ * not have swallowed (ADR 0011 loud-when-wrong). Mirrors `warnUnknownClient`.
+ */
+function warnStoreSaturated(): void {
+  console.warn(
+    `[${RATELIMIT_STORE_SATURATED_CODE}] a MemoryRateLimitStore reached its maxBuckets cap and is ` +
+      `evicting actively-throttled buckets to stay bounded — the memory bound working, but sustained ` +
+      `eviction signals a distinct-key flood or an undersized cap. Compare store.saturationEvictions ` +
+      `/ store.size against store.maxBuckets; raise maxBuckets if the traffic is legitimate, or move ` +
+      `to a durable sqlRateLimitStore. Warned once per store; poll store.saturationEvictions for the ` +
+      `ongoing count.`,
+  );
+}
+
+/** What a {@link MemoryRateLimitStore} accepts at construction. */
+export interface MemoryRateLimitStoreOptions {
+  /** The bucket ceiling — see {@link MemoryRateLimitStore.capacity}. */
+  readonly capacity?: number;
+
+  /** Refill rate in tokens/sec — see {@link MemoryRateLimitStore.refillPerSecond}. */
+  readonly refillPerSecond?: number;
+
+  /** The hard ceiling on retained buckets — see {@link DEFAULT_MAX_BUCKETS}. */
+  readonly maxBuckets?: number;
+
+  /**
+   * Fired ONCE, the first time the hard cap evicts an actively-throttled bucket
+   * (the closest-to-full drop — NOT the lossless full-refill sweep, which is
+   * ordinary housekeeping). The one observable that a flood is being shed;
+   * defaults to a `console.warn` carrying {@link RATELIMIT_STORE_SATURATED_CODE}.
+   * Inject to route it to a real logger, or pass a no-op to silence it. Fires once
+   * (not per eviction) so a sustained flood is not a log flood — poll
+   * {@link MemoryRateLimitStore.saturationEvictions} for the running count.
+   */
+  readonly onSaturated?: () => void;
+}
+
+/**
  * The simplest store that works: an in-process Map.
  *
  * State lives only in memory, so it is per-process and resets on restart — fine
@@ -80,6 +129,19 @@ const DEFAULT_MAX_BUCKETS = 10_000;
  * makes the hard cap rank by stored tokens (a coarser but still-safe proxy — a
  * drained bucket stores fewer tokens than a fresh one). The hard cap itself is
  * always on.
+ *
+ * ## Observability
+ *
+ * The hard cap shedding a throttled bucket is an *attack signal* — a distinct-key
+ * flood, or a cap too small for real traffic — and a silent bound would hide
+ * exactly what it defends against. So the store is loud-when-wrong (ADR 0011): the
+ * first such eviction fires {@link MemoryRateLimitStoreOptions.onSaturated} (a
+ * `console.warn` with a stable code by default, injectable to a logger), and every
+ * one increments the {@link saturationEvictions} counter. The lossless full-refill
+ * sweep is ordinary housekeeping and stays silent — only the closest-to-full drop
+ * of a live bucket signals. `size`, `saturationEvictions`, and `maxBuckets` are all
+ * readable so an operator can watch saturation (`size / maxBuckets`) climb before
+ * the cap ever engages.
  */
 export class MemoryRateLimitStore implements RateLimitStore {
   private readonly buckets = new Map<string, BucketState>();
@@ -103,18 +165,26 @@ export class MemoryRateLimitStore implements RateLimitStore {
    */
   readonly refillPerSecond: number | undefined;
 
-  /** The hard ceiling on retained buckets — see {@link DEFAULT_MAX_BUCKETS}. */
-  private readonly maxBuckets: number;
+  /**
+   * The hard ceiling on retained buckets (see {@link DEFAULT_MAX_BUCKETS}).
+   * `public` so an operator can watch saturation — `size / maxBuckets` — climb
+   * toward the cap before eviction ever begins.
+   */
+  readonly maxBuckets: number;
 
-  constructor(
-    options: {
-      readonly capacity?: number;
-      readonly refillPerSecond?: number;
-      readonly maxBuckets?: number;
-    } = {},
-  ) {
+  /** The signal fired once on first live-bucket eviction; see the options field. */
+  private readonly onSaturated: () => void;
+
+  /** Latches {@link onSaturated} to once per store — a flood is not a log flood. */
+  private saturationWarned = false;
+
+  /** Running count of throttled buckets shed under the hard cap (see below). */
+  private saturationCount = 0;
+
+  constructor(options: MemoryRateLimitStoreOptions = {}) {
     this.capacity = options.capacity;
     this.refillPerSecond = options.refillPerSecond;
+    this.onSaturated = options.onSaturated ?? warnStoreSaturated;
 
     const maxBuckets = options.maxBuckets ?? DEFAULT_MAX_BUCKETS;
 
@@ -130,6 +200,17 @@ export class MemoryRateLimitStore implements RateLimitStore {
     }
 
     this.maxBuckets = maxBuckets;
+  }
+
+  /**
+   * How many actively-throttled buckets the hard cap has shed since construction —
+   * the *continuous* saturation signal (the {@link MemoryRateLimitStoreOptions.onSaturated}
+   * hook fires only once). Zero in ordinary operation; a rising count is a
+   * distinct-key flood in progress or a cap set too low for legitimate traffic.
+   * Does NOT count the lossless full-refill sweep — only closest-to-full drops.
+   */
+  get saturationEvictions(): number {
+    return this.saturationCount;
   }
 
   /**
@@ -261,5 +342,14 @@ export class MemoryRateLimitStore implements RateLimitStore {
     }
 
     this.buckets.delete(victimKey);
+
+    // This drop is the attack signal (a throttled bucket shed under the cap), NOT
+    // the housekeeping above. Count every one; warn once — see the class doc.
+    this.saturationCount += 1;
+
+    if (!this.saturationWarned) {
+      this.saturationWarned = true;
+      this.onSaturated();
+    }
   }
 }

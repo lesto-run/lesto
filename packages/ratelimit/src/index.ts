@@ -22,7 +22,8 @@ export {
 } from "./middleware";
 export type { RateLimitOptions } from "./middleware";
 
-export { MemoryRateLimitStore } from "./store";
+export { MemoryRateLimitStore, RATELIMIT_STORE_SATURATED_CODE } from "./store";
+export type { MemoryRateLimitStoreOptions } from "./store";
 
 export { installRateLimitSchema, isUniqueViolation, sqlRateLimitStore } from "./sql-store";
 export type { Dialect, SqlRateLimitStore } from "./sql-store";

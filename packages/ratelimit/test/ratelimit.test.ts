@@ -1,6 +1,12 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MemoryRateLimitStore, RateLimitError, RateLimiter, systemClock } from "../src/index";
+import {
+  MemoryRateLimitStore,
+  RATELIMIT_STORE_SATURATED_CODE,
+  RateLimitError,
+  RateLimiter,
+  systemClock,
+} from "../src/index";
 
 import type { BucketState, RateLimitStore } from "../src/index";
 
@@ -488,6 +494,97 @@ describe("MemoryRateLimitStore hard cap (maxBuckets)", () => {
     expect((await limiter.check("b", 0)).remaining).toBe(2);
     // c was evicted, so it re-materializes as a fresh, full bucket.
     expect((await limiter.check("c", 0)).remaining).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MemoryRateLimitStore saturation signal — L-b5bae0a4
+//
+// The hard cap shedding a throttled bucket is an ATTACK signal (a distinct-key
+// flood, or a cap too low for real traffic). A silent bound would hide exactly
+// what it defends against (ADR 0011 loud-when-wrong). So: warn ONCE on the first
+// live eviction (default console.warn w/ a stable code, injectable), count EVERY
+// one, and stay silent for the lossless full-refill sweep (housekeeping).
+// ---------------------------------------------------------------------------
+
+describe("MemoryRateLimitStore saturation signal", () => {
+  it("fires onSaturated ONCE and counts every throttled-bucket eviction; maxBuckets is public", async () => {
+    let calls = 0;
+    const bounded = new MemoryRateLimitStore({
+      capacity: 5,
+      refillPerSecond: 1,
+      maxBuckets: 3,
+      onSaturated: () => {
+        calls += 1;
+      },
+    });
+    const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
+
+    // Frozen clock: nothing refills, so the sweep reclaims nothing and every insert
+    // past the cap is a LIVE (throttled-bucket) eviction — the attack signal.
+    for (let i = 0; i < 10; i++) await limiter.check(`ip:${i}`); // each 5 -> 4, below ceiling
+
+    expect(bounded.size).toBe(3); // bounded
+    expect(bounded.maxBuckets).toBe(3); // publicly readable for saturation math
+    expect(bounded.saturationEvictions).toBe(7); // 10 inserts, first 3 fit → 7 evictions
+    expect(calls).toBe(1); // warned ONCE across 7 evictions — not a log flood
+  });
+
+  it("stays SILENT for the lossless full-refill sweep — housekeeping is not an attack", async () => {
+    let calls = 0;
+    const bounded = new MemoryRateLimitStore({
+      capacity: 5,
+      refillPerSecond: 1,
+      maxBuckets: 3,
+      onSaturated: () => {
+        calls += 1;
+      },
+    });
+    const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
+
+    await limiter.check("a"); // 5 -> 4
+    await limiter.check("b");
+    await limiter.check("c");
+    advance(1000); // a, b, c refill 4 -> 5 (full) while idle
+    await limiter.check("d"); // overflow → sweep reclaims a, b, c (all full): NO live eviction
+
+    expect(bounded.size).toBe(1);
+    expect(bounded.saturationEvictions).toBe(0); // the sweep does not count
+    expect(calls).toBe(0); // and does not warn
+  });
+
+  it("warns once by DEFAULT (no hook injected), carrying the stable code", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const bounded = new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, maxBuckets: 2 });
+      const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
+
+      for (let i = 0; i < 5; i++) await limiter.check(`ip:${i}`); // 3 evictions
+
+      expect(warn).toHaveBeenCalledTimes(1); // default warn, once
+      expect(String(warn.mock.calls[0]?.[0])).toContain(RATELIMIT_STORE_SATURATED_CODE);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("routes RateLimiterOptions.onSaturated into the store the limiter builds (end-to-end)", async () => {
+    // No injected store → the limiter auto-builds one at the DEFAULT 10k cap and
+    // threads onSaturated in. Overflow the 10k to prove the signal actually fires
+    // through the limiter seam (the per-IP/identity default path), not just compiles.
+    let calls = 0;
+    const limiter = new RateLimiter({
+      capacity: 5,
+      refillPerSecond: 1,
+      clock,
+      onSaturated: () => {
+        calls += 1;
+      },
+    });
+
+    for (let i = 0; i <= 10_000; i++) await limiter.check(`ip:${i}`); // 10_001 distinct keys
+
+    expect(calls).toBe(1); // the auto-built store's cap engaged and surfaced through the limiter
   });
 });
 

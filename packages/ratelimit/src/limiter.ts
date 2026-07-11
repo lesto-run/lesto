@@ -24,6 +24,15 @@ export interface RateLimiterOptions {
   /** How fast the bucket refills, in tokens per second. */
   readonly refillPerSecond: number;
 
+  /**
+   * Routed into the auto-constructed {@link MemoryRateLimitStore} as its
+   * `onSaturated` signal — fired once when the store's hard cap starts shedding
+   * throttled buckets under a flood (see {@link MemoryRateLimitStoreOptions.onSaturated}).
+   * Ignored when a `store` is injected (that store carries its own). Defaults, via
+   * the store, to a `console.warn` with a stable code.
+   */
+  readonly onSaturated?: () => void;
+
   /** Injected for determinism; defaults to the system clock. */
   readonly clock?: Clock;
 }
@@ -97,7 +106,15 @@ export class RateLimiter {
 
     this.store =
       options.store ??
-      new MemoryRateLimitStore({ capacity: this.capacity, refillPerSecond: this.refillPerSecond });
+      new MemoryRateLimitStore({
+        capacity: this.capacity,
+        refillPerSecond: this.refillPerSecond,
+        // Thread the saturation signal into the store the limiter owns — only when
+        // given, so an unwired caller falls through to the store's own loud
+        // `console.warn` default (conditional spread: `exactOptionalPropertyTypes`
+        // forbids passing an explicit `undefined` for an optional prop).
+        ...(options.onSaturated ? { onSaturated: options.onSaturated } : {}),
+      });
   }
 
   async check(key: string, cost = 1): Promise<RateLimitResult> {

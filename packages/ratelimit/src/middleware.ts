@@ -103,6 +103,18 @@ export interface RateLimitOptions {
    * is not dropped mid-write.
    */
   readonly onDenied?: (kind: string, c: LestoRequest) => void | Promise<void>;
+
+  /**
+   * Routed into the limiter's auto-constructed {@link MemoryRateLimitStore} as its
+   * saturation signal — fired once when the per-client store's hard cap starts
+   * shedding throttled buckets under a distinct-IP flood (see
+   * {@link MemoryRateLimitStoreOptions.onSaturated}). Distinct from
+   * {@link onDenied}, which fires on every ordinary throttle: this fires only when
+   * the store's *memory* bound engages — an attack signal, not a routine 429.
+   * Ignored when a pre-built {@link limiter} is supplied (it owns its store).
+   * Defaults, via the store, to a `console.warn` with a stable code.
+   */
+  readonly onSaturated?: () => void;
 }
 
 /**
@@ -191,12 +203,16 @@ export function rateLimit(options: RateLimitOptions): Middleware {
   // refills back to full while idle — but the hard cap does, and closest-to-full
   // order means a targeted IP actively being throttled is the LAST thing evicted.
   // Handing the limiter a store ourselves would only risk the capacity/rate drift
-  // it now guards against.
+  // it now guards against; we thread `onSaturated` through instead so an operator
+  // can observe (or route/silence) the per-IP store shedding buckets under a flood.
   const limiter =
     options.limiter ??
     new RateLimiter({
       capacity: options.capacity,
       refillPerSecond: options.refillPerSecond,
+      // Only when given — an unwired caller falls through to the store's loud
+      // default (conditional spread per `exactOptionalPropertyTypes`).
+      ...(options.onSaturated ? { onSaturated: options.onSaturated } : {}),
     });
 
   // A custom keyFor is an explicit operator choice — no fallback, no warning.
