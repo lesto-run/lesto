@@ -37,6 +37,27 @@ export function verifySigner(masterSecret: string, clock?: Clock): SignedSession
 }
 
 /**
+ * A `SignedSessions` for the short-lived second-factor **login challenge**.
+ *
+ * When a 2FA-enabled user's password verifies, `login` withholds the session
+ * and instead issues one of these tokens — a stateless, HMAC-signed proof that
+ * the first factor *already* succeeded, carrying the `userId` inside the signed
+ * claim. `completeTotpChallenge` verifies it before checking the TOTP/recovery
+ * code, so the second step can never mint a session on its own (a bare `userId`
+ * is not enough — the caller must present a challenge this server signed). Kept
+ * deliberately simple: no per-user secret like {@link resetSigner}, because the
+ * short TTL (minutes) bounds replay and the `userId` is authenticated inside the
+ * envelope. Domain-separated from the verify/reset purposes so a token minted
+ * for one can never be verified as another.
+ */
+export function totpChallengeSigner(masterSecret: string, clock?: Clock): SignedSessions {
+  return new SignedSessions({
+    secret: `${masterSecret}:totp_challenge`,
+    ...(clock ? { clock } : {}),
+  });
+}
+
+/**
  * A `SignedSessions` whose secret is bound to a specific user's password hash.
  *
  * Because the password hash is in the HMAC secret, changing the password

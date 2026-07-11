@@ -23,6 +23,7 @@ import type { PrincipalResolverOptions } from "@lesto/authz";
 import {
   clearSessionCookie,
   IdentityError,
+  readCookie,
   readSessionToken,
   sessionCookie,
 } from "@lesto/identity";
@@ -56,6 +57,27 @@ function formField(body: unknown, field: string): string | undefined {
   if (typeof body !== "string") return undefined;
 
   return new URLSearchParams(body).get(field) ?? undefined;
+}
+
+/**
+ * The short-lived cookie that carries the signed TOTP challenge between the
+ * password step (`/mls/api/sign-in`) and the second-factor step
+ * (`/mls/api/totp/challenge`). It is NOT a session — it only proves the password
+ * verified, and `Identity.completeTotpChallenge` still demands a live code before
+ * any session is minted. `__Host-` + `Secure` + `HttpOnly` + a tight `Max-Age`
+ * (the challenge itself also expires server-side) keep it off `document.cookie`
+ * and scoped to this origin.
+ */
+const TOTP_CHALLENGE_COOKIE = "__Host-lesto_totp_challenge";
+
+/** Serialize the `Set-Cookie` that carries a pending TOTP challenge. */
+function totpChallengeCookie(challenge: string): string {
+  return `${TOTP_CHALLENGE_COOKIE}=${challenge}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=300`;
+}
+
+/** Serialize the `Set-Cookie` that clears the pending-challenge cookie. */
+function clearTotpChallengeCookie(): string {
+  return `${TOTP_CHALLENGE_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
 
 /** The display name to surface for a signed-in user, mapped from their email. */
@@ -194,11 +216,26 @@ export function buildEstateRoutes(
         const password = formField(c.req.body, "password") ?? "";
 
         try {
-          const { session } = await identity.login(email, password);
+          const result = await identity.login(email, password);
+
+          // A confirmed second factor withholds the session: the password proved
+          // out, but "signed in" now means 2FA-complete. Carry the signed
+          // challenge (NOT a session) to the second-factor step and land on the
+          // TOTP prompt — no `__Host-lesto_session` cookie is set here.
+          if (result.status === "totp_required") {
+            return {
+              status: 303,
+              headers: {
+                Location: "/mls?totp=1",
+                "Set-Cookie": totpChallengeCookie(result.challenge),
+              },
+              body: "",
+            };
+          }
 
           return {
             status: 303,
-            headers: { Location: "/mls", "Set-Cookie": sessionCookie(session.token) },
+            headers: { Location: "/mls", "Set-Cookie": sessionCookie(result.session.token) },
             body: "",
           };
         } catch (error) {
@@ -283,28 +320,36 @@ export function buildEstateRoutes(
         }
       })
       /**
-       * Verify a second-factor challenge — the step the app runs after a password
-       * login when the user has a confirmed factor. A code OR a single-use recovery
-       * code is accepted; a bad code is a 401.
+       * Complete a second-factor challenge — the step the app runs after a
+       * password login when the user has a confirmed factor. The pending challenge
+       * rides the `__Host-lesto_totp_challenge` cookie set by `/mls/api/sign-in`
+       * (NOT a session — no session exists yet). A live TOTP code OR a single-use
+       * recovery code is accepted; only success mints the session. A bad/expired
+       * challenge or code is a 401.
        */
       .post("/mls/api/totp/challenge", async (c) => {
-        // The challenge needs the user *id*, so resolve the full identity user
-        // (the local `currentUser` narrows to `{ email }`).
-        const user = await identity.currentUser(readSessionToken(c.header("cookie")));
+        const challenge = readCookie(c.header("cookie"), TOTP_CHALLENGE_COOKIE);
 
-        if (user === undefined) return c.json({ error: "sign in required" }, 401);
+        if (challenge === undefined) return c.json({ error: "sign in required" }, 401);
 
         const code = formField(c.req.body, "code") ?? "";
         const recovery = formField(c.req.body, "recovery") === "1";
 
         try {
-          if (recovery) {
-            await identity.verifyRecoveryCode(user.id, code);
-          } else {
-            await identity.verifyTotpChallenge(user.id, code);
-          }
+          // Exchange the signed challenge + live code for a session. This is what
+          // elevates the account from "password proven" to "signed in": mint the
+          // session cookie and clear the now-spent challenge cookie in one response
+          // (Set-Cookie is a multimap — two lines, never comma-joined).
+          const { session } = await identity.completeTotpChallenge(challenge, code, { recovery });
 
-          return c.json({ status: "verified" });
+          return {
+            status: 303,
+            headers: {
+              Location: "/mls",
+              "Set-Cookie": [sessionCookie(session.token), clearTotpChallengeCookie()],
+            },
+            body: "",
+          };
         } catch (error) {
           if (error instanceof IdentityError) {
             return c.json({ error: error.code }, 401);

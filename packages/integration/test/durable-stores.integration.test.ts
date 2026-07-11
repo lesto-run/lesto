@@ -22,7 +22,13 @@ import { installSessionSchema, Sessions, sqlSessionStore, hashPassword } from "@
 import type { SqlDatabase as AuthSql } from "@lesto/auth";
 import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@lesto/ratelimit";
 import type { Dialect, SqlDatabase as RateLimitSql } from "@lesto/ratelimit";
-import { createIdentity, findUserByEmail, insertUser, usersMigration } from "@lesto/identity";
+import {
+  createIdentity,
+  findUserByEmail,
+  insertUser,
+  totpMigration,
+  usersMigration,
+} from "@lesto/identity";
 import type { Identity } from "@lesto/identity";
 import { createDb, createTableSql, defineTable, integer, text } from "@lesto/db";
 import type { Db, SqlDatabase } from "@lesto/db";
@@ -135,7 +141,9 @@ describe.each(drivers)("durable stores: $name", (driver) => {
     beforeEach(async () => {
       // The migration installs `users` for the driver's dialect — no hand-written
       // DDL — proving identity's own migration runs on a real Postgres.
-      await new Migrator(handle, [usersMigration], { dialect: driver.name }).migrate();
+      await new Migrator(handle, [usersMigration, totpMigration], {
+        dialect: driver.name,
+      }).migrate();
       await installSessionSchema(handle as AuthSql);
 
       db = createDb(handle, { dialect: driver.name });
@@ -161,7 +169,10 @@ describe.each(drivers)("durable stores: $name", (driver) => {
     it("login → currentUser → logout → currentUser is undefined", async () => {
       expect(await findUserByEmail(db, "ada@example.com")).not.toBeUndefined();
 
-      const { session } = await identity.login("ada@example.com", "correct horse battery staple");
+      const login = await identity.login("ada@example.com", "correct horse battery staple");
+      if (login.status !== "authenticated")
+        throw new Error(`expected authenticated login, got ${login.status}`);
+      const { session } = login;
       expect((await identity.currentUser(session.token))?.email).toBe("ada@example.com");
 
       await identity.logout(session.token);

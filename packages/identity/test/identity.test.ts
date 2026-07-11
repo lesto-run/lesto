@@ -18,12 +18,14 @@ import {
   readSessionToken,
   SESSION_COOKIE,
   sessionCookie,
+  totpMigration,
   users,
   usersMigration,
 } from "../src/index";
 
 import * as userRepo from "../src/user";
 
+import { expectAuthenticated } from "./authed";
 import { cheapHasher } from "./cheap-hasher";
 
 import type { Identity, IdentityEvent, IdentityMailer, IdentityOptions } from "../src/index";
@@ -165,7 +167,10 @@ beforeEach(async () => {
   db = createDb(sql);
   now = new Date("2026-06-09T12:00:00Z").getTime();
 
-  await new Migrator(sql, [usersMigration]).migrate();
+  // `login` now consults the TOTP factor table (the F2 second-factor gate), so
+  // the rig installs the TOTP schema alongside the users one — the same set a
+  // real identity install carries.
+  await new Migrator(sql, [usersMigration, totpMigration]).migrate();
   // The durable-store tests (revoke-on-reset, login throttle) run over real SQL
   // tables on the same in-memory handle; install both schemas up front so any
   // test can opt into the SQL-backed stores.
@@ -366,7 +371,9 @@ describe("login", () => {
     await identity.register("ada@example.com", "correct horse staple");
     await identity.verifyEmail(sent[0]!.token);
 
-    const { user, session } = await identity.login("Ada@Example.com", "correct horse staple");
+    const { user, session } = expectAuthenticated(
+      await identity.login("Ada@Example.com", "correct horse staple"),
+    );
 
     expect(user.email).toBe("ada@example.com");
     expect(session.token).toMatch(/^[a-f0-9]{64}$/);
@@ -407,7 +414,9 @@ describe("login", () => {
 
     await identity.register("ada@example.com", "correct horse staple");
 
-    const { session } = await identity.login("ada@example.com", "correct horse staple");
+    const { session } = expectAuthenticated(
+      await identity.login("ada@example.com", "correct horse staple"),
+    );
 
     expect(session.token).toBeDefined();
   });
@@ -464,7 +473,7 @@ describe("login", () => {
       .spyOn(userRepo, "setPasswordHash")
       .mockRejectedValueOnce(new Error("write conflict"));
 
-    const { session } = await identity.login("ada@example.com", password);
+    const { session } = expectAuthenticated(await identity.login("ada@example.com", password));
 
     expect(session).toBeDefined();
     expect(spy).toHaveBeenCalledTimes(1);
@@ -543,7 +552,8 @@ describe("resetPassword", () => {
       expect.objectContaining({ code: "IDENTITY_INVALID_CREDENTIALS" }),
     );
     expect(
-      (await identity.login("ada@example.com", "brand new password")).session.token,
+      expectAuthenticated(await identity.login("ada@example.com", "brand new password")).session
+        .token,
     ).toBeDefined();
   });
 
@@ -698,7 +708,9 @@ describe("session lifecycle", () => {
 
     await identity.register("ada@example.com", "correct horse staple");
     await identity.verifyEmail(sent[0]!.token);
-    const { session } = await identity.login("ada@example.com", "correct horse staple");
+    const { session } = expectAuthenticated(
+      await identity.login("ada@example.com", "correct horse staple"),
+    );
 
     expect((await identity.currentUser(session.token))?.email).toBe("ada@example.com");
   });
@@ -711,7 +723,9 @@ describe("session lifecycle", () => {
 
     await identity.register("ada@example.com", "correct horse staple");
     await identity.verifyEmail(sent[0]!.token);
-    const { session } = await identity.login("ada@example.com", "correct horse staple");
+    const { session } = expectAuthenticated(
+      await identity.login("ada@example.com", "correct horse staple"),
+    );
 
     advance(2000);
 
@@ -723,7 +737,9 @@ describe("session lifecycle", () => {
 
     const { user } = await identity.register("ada@example.com", "correct horse staple");
     await identity.verifyEmail(sent[0]!.token);
-    const { session } = await identity.login("ada@example.com", "correct horse staple");
+    const { session } = expectAuthenticated(
+      await identity.login("ada@example.com", "correct horse staple"),
+    );
 
     await userRepo.deleteUser(db, user!.id);
 
@@ -735,7 +751,9 @@ describe("session lifecycle", () => {
 
     await identity.register("ada@example.com", "correct horse staple");
     await identity.verifyEmail(sent[0]!.token);
-    const { session } = await identity.login("ada@example.com", "correct horse staple");
+    const { session } = expectAuthenticated(
+      await identity.login("ada@example.com", "correct horse staple"),
+    );
 
     await identity.logout(undefined);
     expect((await identity.currentUser(session.token))?.email).toBe("ada@example.com");
@@ -755,10 +773,18 @@ describe("user model + migration", () => {
   });
 
   it("the migration's down drops the users table", async () => {
-    const migrator = new Migrator(sql, [usersMigration]);
+    // Self-contained on a fresh handle: the shared rig now applies both the users
+    // and TOTP migrations, so rolling back the shared stack would pop the TOTP one
+    // first. This isolates the users migration to assert its own `down`.
+    const localRaw = new Database(":memory:");
+    const localSql = adapt(localRaw);
+    const migrator = new Migrator(localSql, [usersMigration]);
+    await migrator.migrate();
 
     expect(await migrator.rollback()).toBe(usersMigration.version);
-    expect(() => raw.prepare("SELECT * FROM users").all()).toThrow();
+    expect(() => localRaw.prepare("SELECT * FROM users").all()).toThrow();
+
+    localRaw.close();
   });
 });
 
@@ -831,7 +857,8 @@ describe("token signer", () => {
     await identity.resetPassword(resetToken, "fresh new password");
 
     expect(
-      (await identity.login("ada@example.com", "fresh new password")).session.token,
+      expectAuthenticated(await identity.login("ada@example.com", "fresh new password")).session
+        .token,
     ).toBeDefined();
   });
 });
@@ -865,7 +892,9 @@ describe("revoke-on-reset (SQL-backed default)", () => {
     await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
 
     // The attacker holds a live session minted before the reset.
-    const { session: attacker } = await identity.login("ada@example.com", "old password 1");
+    const { session: attacker } = expectAuthenticated(
+      await identity.login("ada@example.com", "old password 1"),
+    );
     expect((await identity.currentUser(attacker.token))?.email).toBe("ada@example.com");
 
     // The victim resets their password — the SQL store's deleteByUserId fires by
@@ -896,7 +925,9 @@ describe("revoke-on-reset (SQL-backed default)", () => {
 
     await identity.register("ada@example.com", "old password 1");
     await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
-    const { session: attacker } = await identity.login("ada@example.com", "old password 1");
+    const { session: attacker } = expectAuthenticated(
+      await identity.login("ada@example.com", "old password 1"),
+    );
 
     await identity.requestPasswordReset("ada@example.com");
     const resetToken = sent.find((e) => e.kind === "reset")!.token;
@@ -974,7 +1005,9 @@ describe("login throttling", () => {
 
     // Many successful logins spend nothing — the bucket stays full.
     for (let i = 0; i < 5; i++) {
-      const { session } = await identity.login("ada@example.com", "correct horse staple");
+      const { session } = expectAuthenticated(
+        await identity.login("ada@example.com", "correct horse staple"),
+      );
       expect(session.token).toBeDefined();
     }
   });
@@ -1227,7 +1260,9 @@ describe("onEvent seam", () => {
 
     const { user } = await identity.register("ada@example.com", "correct horse staple");
     await identity.verifyEmail(sent[0]!.token);
-    const { session } = await identity.login("ada@example.com", "correct horse staple");
+    const { session } = expectAuthenticated(
+      await identity.login("ada@example.com", "correct horse staple"),
+    );
     events.length = 0;
 
     await identity.logout(session.token);
@@ -1240,7 +1275,9 @@ describe("onEvent seam", () => {
 
     await identity.register("ada@example.com", "correct horse staple");
     await identity.verifyEmail(sent[0]!.token);
-    const { session } = await identity.login("ada@example.com", "correct horse staple");
+    const { session } = expectAuthenticated(
+      await identity.login("ada@example.com", "correct horse staple"),
+    );
     events.length = 0;
 
     // No token, then a token that names no session — neither ends anything.
@@ -1285,7 +1322,9 @@ describe("onEvent seam", () => {
 
     const { user } = await identity.register("ada@example.com", "correct horse staple");
     await identity.verifyEmail(sent[0]!.token);
-    const { session } = await identity.login("ada@example.com", "correct horse staple");
+    const { session } = expectAuthenticated(
+      await identity.login("ada@example.com", "correct horse staple"),
+    );
     await identity.logout(session.token);
     await identity.requestPasswordReset("ada@example.com");
     await identity.resetPassword(sent.find((e) => e.kind === "reset")!.token, "brand new password");
@@ -1309,7 +1348,7 @@ describe("onEvent seam", () => {
     const password = "correct horse staple";
     await identity.register("ada@example.com", password);
     await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
-    const { session } = await identity.login("ada@example.com", password);
+    const { session } = expectAuthenticated(await identity.login("ada@example.com", password));
     await identity.logout(session.token);
     await identity.login("ada@example.com", "wrong password").catch(() => undefined);
     await identity.requestPasswordReset("ada@example.com");

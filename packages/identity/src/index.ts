@@ -13,7 +13,9 @@
  *
  *   await identity.register("ada@example.com", "correct horse battery staple");
  *   await identity.verifyEmail(tokenFromLink);
- *   const { session } = identity.login("ada@example.com", "correct horse battery staple");
+ *   const result = await identity.login("ada@example.com", "correct horse battery staple");
+ *   // `result.status` is "authenticated" (session minted) or "totp_required"
+ *   // (a confirmed 2FA factor — complete it with `completeTotpChallenge`).
  *
  * Composes:
  *   - `@lesto/auth`    — password hashing (scrypt on Node, PBKDF2 on edge), store-backed sessions, signed tokens
@@ -31,6 +33,7 @@ export type {
   IdentityEvent,
   IdentityMailer,
   IdentityOptions,
+  LoginResult,
   PasswordHasher,
   PasswordHashCost,
 } from "./identity";

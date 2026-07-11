@@ -20,6 +20,16 @@ export type IdentityErrorCode =
   | "IDENTITY_LOGIN_THROTTLED"
   | "IDENTITY_INVALID_TOKEN"
   /**
+   * The signed second-factor challenge minted by {@link Identity.login} for a
+   * 2FA-enabled account is missing, forged, or expired — so
+   * {@link Identity.completeTotpChallenge} cannot prove the first factor
+   * (password) already succeeded and refuses to mint a session. The fix is to
+   * sign in again to obtain a fresh challenge. Not an enumeration oracle: the
+   * challenge is unforgeable and this reveals nothing about which account (if
+   * any) it named.
+   */
+  | "IDENTITY_INVALID_CHALLENGE"
+  /**
    * Login could not verify this account's stored password hash on this runtime —
    * a `scrypt$…` hash reaching a Cloudflare Workers isolate, where the derive would
    * OOM (a migrated / hybrid corpus). Only surfaced when the app opts into

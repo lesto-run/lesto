@@ -19,6 +19,8 @@ import {
 
 import * as totpRepo from "../src/totp";
 
+import { expectAuthenticated } from "./authed";
+
 import type { IdentityEvent, IdentityMailer, IdentityOptions, PasswordHasher } from "../src/index";
 
 // ---------------------------------------------------------------------------
@@ -297,7 +299,9 @@ describe("pbkdf2MigrationHasher", () => {
     // rehash-on-login seam re-mints it as edge-safe PBKDF2 — pinned to the 100k edge
     // ceiling so the hash it produces actually runs at the destination it migrates to.
     const identity = createIdentity(build({ hasher: pbkdf2MigrationHasher }));
-    const { session } = await identity.login(email, "correct horse battery staple");
+    const { session } = expectAuthenticated(
+      await identity.login(email, "correct horse battery staple"),
+    );
 
     expect(session.token).toBeTruthy();
 
@@ -321,7 +325,9 @@ describe("pbkdf2MigrationHasher", () => {
     await seedVerifiedUser(email, await pbkdf2HashAt("correct horse battery staple", 600_000));
 
     const identity = createIdentity(build({ hasher: pbkdf2MigrationHasher }));
-    const { session } = await identity.login(email, "correct horse battery staple");
+    const { session } = expectAuthenticated(
+      await identity.login(email, "correct horse battery staple"),
+    );
 
     expect(session.token).toBeTruthy();
 

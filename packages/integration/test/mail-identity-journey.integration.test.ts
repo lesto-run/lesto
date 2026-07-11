@@ -28,7 +28,7 @@ import { Schema } from "@lesto/migrate";
 import { installSchema, Queue } from "@lesto/queue";
 import type { SqlDatabase } from "@lesto/queue";
 
-import { createIdentity, usersMigration } from "@lesto/identity";
+import { createIdentity, totpMigration, usersMigration } from "@lesto/identity";
 import type { Identity, IdentityMailer } from "@lesto/identity";
 
 import { ResetPasswordEmail, VerifyEmail } from "./email-templates";
@@ -126,8 +126,10 @@ beforeEach(async () => {
 
   await installSchema(db);
   // Apply the canonical users-table migration through the real Schema editor —
-  // one DDL system, no coupling to identity's internal table value.
+  // one DDL system, no coupling to identity's internal table value. The TOTP
+  // table rides along because `login` now consults it to detect a second factor.
   await usersMigration.migration.up(new Schema(db, "sqlite"));
+  await totpMigration.migration.up(new Schema(db, "sqlite"));
 
   queue = new Queue({ db });
   delivered = [];

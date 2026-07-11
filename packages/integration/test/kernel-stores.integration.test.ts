@@ -24,7 +24,7 @@ import { openSqlite } from "@lesto/runtime";
 
 import { createApp, durableStores, installDurableSchema, secureStack } from "@lesto/kernel";
 import type { Dialect } from "@lesto/ratelimit";
-import { createIdentity, insertUser, usersMigration } from "@lesto/identity";
+import { createIdentity, insertUser, totpMigration, usersMigration } from "@lesto/identity";
 import type { Identity } from "@lesto/identity";
 import { currentContext, fromRequestMiddleware, lesto, runWithContext } from "@lesto/web";
 import type { LestoResponse } from "@lesto/web";
@@ -118,7 +118,9 @@ describe.each(drivers)("createApp({ db }) durable by default: $name", (driver) =
     // seed a user, then wire TWO identities over the durable session store. A
     // login through one is a live session through the other; a logout through one
     // ends it for both — the row, not a process, is the truth.
-    await new Migrator(handle, [usersMigration], { dialect: driver.name }).migrate();
+    await new Migrator(handle, [usersMigration, totpMigration], {
+      dialect: driver.name,
+    }).migrate();
     await installDurableSchema(handle);
 
     const db = createDb(handle, { dialect: driver.name });
@@ -144,7 +146,10 @@ describe.each(drivers)("createApp({ db }) durable by default: $name", (driver) =
     const first = await buildIdentity();
     const second = await buildIdentity();
 
-    const { session } = await first.login("ada@example.com", "correct horse battery staple");
+    const login = await first.login("ada@example.com", "correct horse battery staple");
+    if (login.status !== "authenticated")
+      throw new Error(`expected authenticated login, got ${login.status}`);
+    const { session } = login;
 
     // The SECOND identity, over the same SQL store, resolves the session minted
     // by the first — sessions are shared, zero config.

@@ -11,7 +11,9 @@
  *
  *   await identity.register("ada@example.com", "correct horse battery staple");
  *   await identity.verifyEmail(tokenFromEmail);
- *   const { session } = await identity.login("ada@example.com", "correct horse battery staple");
+ *   const result = await identity.login("ada@example.com", "correct horse battery staple");
+ *   // `result.status === "authenticated"` carries the session; a confirmed 2FA
+ *   // factor yields `"totp_required"` + a challenge for `completeTotpChallenge`.
  *
  * Built as a closure factory (`createIdentity`) returning an object of plain
  * functions — no `this`, no class to extend, options + secrets + signers
@@ -76,7 +78,13 @@ import { hasCode } from "@lesto/errors";
 import type { RateLimiter } from "@lesto/ratelimit";
 
 import { assertStrongSecret, IdentityError } from "./errors";
-import { packResetToken, resetSigner, unpackResetToken, verifySigner } from "./tokens";
+import {
+  packResetToken,
+  resetSigner,
+  totpChallengeSigner,
+  unpackResetToken,
+  verifySigner,
+} from "./tokens";
 import * as totpRepo from "./totp";
 
 // Namespace import so test code can `vi.spyOn(userRepo, "findUserByEmail")`
@@ -113,6 +121,14 @@ const DEFAULT_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Reset token TTL — 1h, narrow because a leaked link compromises the account. */
 const DEFAULT_RESET_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Second-factor login-challenge TTL — 5 minutes. The window between "password
+ * verified" and "TOTP/recovery code entered": long enough for a human to open
+ * their authenticator, short enough that a leaked challenge is near-useless (it
+ * still requires a live second-factor code to mint anything).
+ */
+const DEFAULT_TOTP_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
 /**
  * The password-hashing surface Identity leans on — an injectable seam over
@@ -354,6 +370,15 @@ export interface IdentityOptions {
   /** Reset token lifetime in ms. Default 1h. */
   readonly resetTtlMs?: number;
 
+  /**
+   * Second-factor login-challenge lifetime in ms. Default 5 minutes.
+   *
+   * The lifetime of the signed challenge {@link Identity.login} returns for a
+   * 2FA-enabled account, which {@link Identity.completeTotpChallenge} must
+   * present (with a valid code) to mint the session.
+   */
+  readonly totpChallengeTtlMs?: number;
+
   /** Where sessions live. Defaults to an in-memory store (single-process apps). */
   readonly sessionStore?: SessionStore;
 
@@ -483,6 +508,32 @@ export interface IdentityOptions {
 }
 
 /**
+ * The outcome of {@link Identity.login} — a **discriminated union**, not a bare
+ * `{ user, session }`, precisely so a caller cannot treat "password verified" as
+ * "authenticated" (the F2 2FA-bypass class):
+ *
+ *   - `"authenticated"` — the account has no confirmed second factor (or 2FA is
+ *     not in use), so the password alone fully authenticates. A live
+ *     {@link Session} is minted and returned; this is the session that gates
+ *     every "is this user signed in?" check.
+ *   - `"totp_required"` — the password verified **but the account has a confirmed
+ *     TOTP factor**, so no session is minted yet. A short-lived, signed
+ *     {@link Session}-less `challenge` is returned instead; the caller collects a
+ *     TOTP or recovery code and calls {@link Identity.completeTotpChallenge} with
+ *     that challenge to obtain the session. Until then there is **no session**, so
+ *     any handler that gates on "has a session" is correctly *unsatisfied* — 2FA
+ *     is enforced by default, not opt-in.
+ *
+ * Branch on `status`: the `session` field exists only on the authenticated arm,
+ * the `challenge` field only on the second-factor arm, so the type system forces
+ * the caller to handle the 2FA path rather than silently reading a session that
+ * is not there.
+ */
+export type LoginResult =
+  | { readonly status: "authenticated"; readonly user: User; readonly session: Session }
+  | { readonly status: "totp_required"; readonly user: User; readonly challenge: string };
+
+/**
  * The identity service — an object of functions, all closing over the
  * `IdentityOptions` passed to {@link createIdentity}.
  *
@@ -497,7 +548,34 @@ export interface Identity {
     password: string,
   ): Promise<{ status: "verification_sent"; user: User | undefined }>;
   verifyEmail(token: string): Promise<User>;
-  login(email: string, password: string): Promise<{ user: User; session: Session }>;
+  /**
+   * Verify credentials and either mint a session or — when the account has a
+   * confirmed second factor — withhold it and return a challenge to complete via
+   * {@link Identity.completeTotpChallenge}. See {@link LoginResult}. Throws the
+   * same credential/verification/throttle errors as before on the failure paths.
+   */
+  login(email: string, password: string): Promise<LoginResult>;
+
+  /**
+   * Complete a `"totp_required"` login (ADR 0020): exchange the signed
+   * `challenge` from {@link Identity.login} plus a live second-factor `code` for
+   * an authenticated {@link Session}. This is what elevates a 2FA account from
+   * "password proven" to "fully signed in" — and it is bound server-side to the
+   * first factor: the challenge is an HMAC proof that the password already
+   * verified, so a valid code alone (without a challenge this server signed)
+   * cannot mint a session.
+   *
+   * Pass `{ recovery: true }` to spend a single-use recovery code instead of a
+   * TOTP code (the break-glass path). Throws `IDENTITY_INVALID_CHALLENGE` for a
+   * missing/forged/expired challenge (sign in again), and the same
+   * `IDENTITY_INVALID_TOTP` / `IDENTITY_TOTP_THROTTLED` a raw challenge does for a
+   * bad code or a drained throttle bucket — all before any session is minted.
+   */
+  completeTotpChallenge(
+    challenge: string,
+    code: string,
+    options?: { recovery?: boolean },
+  ): Promise<{ user: User; session: Session }>;
   requestPasswordReset(email: string): Promise<{ status: "reset_sent" }>;
   resetPassword(token: string, newPassword: string): Promise<User>;
   logout(token: string | undefined): Promise<void>;
@@ -565,10 +643,12 @@ export function createIdentity(options: IdentityOptions): Identity {
   const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
   const verificationTtlMs = options.verificationTtlMs ?? DEFAULT_VERIFICATION_TTL_MS;
   const resetTtlMs = options.resetTtlMs ?? DEFAULT_RESET_TTL_MS;
+  const totpChallengeTtlMs = options.totpChallengeTtlMs ?? DEFAULT_TOTP_CHALLENGE_TTL_MS;
 
   const appName = options.appName ?? "Lesto";
 
   const verifyTokens = verifySigner(options.secret, options.clock);
+  const challengeTokens = totpChallengeSigner(options.secret, options.clock);
 
   const sessionStore = options.sessionStore ?? new MemorySessionStore();
 
@@ -674,6 +754,99 @@ export function createIdentity(options: IdentityOptions): Identity {
           "Your password must be reset before you can sign in.",
         )
       : new IdentityError("IDENTITY_INVALID_CREDENTIALS", "Invalid email or password.");
+
+  // Verify a TOTP code for a user, enforcing the per-account throttle + the
+  // live-window replay guard, and record the accepted step on success. The shared
+  // core behind both the public {@link Identity.verifyTotpChallenge} primitive
+  // (which returns void — the app manages its own session) and
+  // {@link Identity.completeTotpChallenge} (which mints a session on success).
+  const runTotpChallenge = async (userId: number, code: string): Promise<void> => {
+    // Refuse before touching the secret once the per-account bucket is drained —
+    // the brute-force guard (a 6-digit code is the only barrier after a stolen
+    // password). Keyed `totp:<userId>` for every user, factor or not.
+    await assertTotpNotThrottled(userId);
+
+    const factor = await totpRepo.findTotpFactor(db, userId);
+
+    // Unknown user, no factor, or an unconfirmed one all collapse to the same
+    // coded refusal — a challenge must not reveal which case it hit. This counts
+    // as a failed attempt against the throttle bucket.
+    if (factor === undefined || !factor.confirmed) {
+      await penalizeTotp(userId);
+
+      throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
+    }
+
+    const step = verifyTotpStep(factor.secret, code, { clock: eventClock });
+
+    // A non-matching code, OR a replay of a step we have already spent inside its
+    // still-live ±window (RFC 6238 §5.2), is a failed attempt — burn a token and
+    // refuse, enumeration-quiet.
+    if (step === undefined || (factor.lastUsedStep !== null && step <= factor.lastUsedStep)) {
+      await penalizeTotp(userId);
+
+      throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
+    }
+
+    // Accepted: persist the step so the same code cannot be replayed. A success
+    // spends no throttle token — a real user never locks themselves out.
+    await totpRepo.recordTotpStep(db, userId, step);
+  };
+
+  // Spend a single-use recovery code for a user — the break-glass second step,
+  // behind the same throttle. Shared by the public
+  // {@link Identity.verifyRecoveryCode} primitive and the `recovery` path of
+  // {@link Identity.completeTotpChallenge}.
+  const runRecoveryChallenge = async (userId: number, code: string): Promise<void> => {
+    // The same per-account brute-force guard the TOTP challenge stands behind —
+    // a recovery code is a fixed break-glass string and equally guessable.
+    await assertTotpNotThrottled(userId);
+
+    const candidates = await totpRepo.findUnusedRecoveryCodes(db, userId);
+
+    // Check every still-unused code; the first that matches is *atomically*
+    // claimed — `markRecoveryCodeUsed` flips the row only while it is still
+    // unused and reports whether it won. A concurrent consumer racing the same
+    // code loses the claim (0 rows changed) and falls through to the refusal,
+    // closing the check-then-mark TOCTOU. No factor / no unused codes / no match
+    // all surface the same coded refusal.
+    for (const candidate of candidates) {
+      let matched: boolean;
+      try {
+        matched = await hasher.verifyRecoveryCode(code, candidate.codeHash);
+      } catch (error) {
+        // The KDF is unavailable on this runtime — a `scrypt$…` recovery-code hash
+        // (minted on Node) reaching the edge, where the derive would OOM
+        // (`AUTH_KDF_UNAVAILABLE`). All of a user's codes share one algorithm, so
+        // none can be checked here; fail closed to the same enumeration-quiet
+        // refusal as any miss. Recovery codes are NOT healed by a password reset
+        // (that re-mints only the password hash); a migrated user re-enrolls TOTP
+        // to get PBKDF2 codes. See docs/guide/edge-password-migration.md.
+        //
+        // Accepted timing residual: this `break` returns after 0 derives, whereas a
+        // genuinely-wrong code loops all candidates — so the KDF-unavailable case is
+        // wall-time-distinguishable from a wrong code. Left as-is: it is post-auth
+        // (keyed on a resolved `userId`, not an email — not an existence oracle), is
+        // still fail-closed + `totpRateLimiter`-bounded, and only reveals migration
+        // state; and the loop is already data-dependent (an early match short-circuits).
+        if (!hasCode(error, "AUTH_KDF_UNAVAILABLE")) throw error;
+
+        break;
+      }
+
+      if (matched) {
+        if (await totpRepo.markRecoveryCodeUsed(db, candidate.id)) return;
+
+        // Lost the race: another request spent this code between our read and our
+        // conditional UPDATE. Refuse — a recovery code is single-use.
+        break;
+      }
+    }
+
+    await penalizeTotp(userId);
+
+    throw new IdentityError("IDENTITY_INVALID_TOTP", "That recovery code is invalid or used.");
+  };
 
   return {
     /**
@@ -949,13 +1122,33 @@ export function createIdentity(options: IdentityOptions): Identity {
         }
       }
 
+      // Second-factor gate (ADR 0020 / F2). A confirmed TOTP factor makes the
+      // password only the FIRST of two factors, so we must NOT mint a full session
+      // on it alone — otherwise every "has a session" gate is satisfied
+      // password-only and 2FA is bypass-by-default. Instead we withhold the session
+      // and hand back a short-lived, signed challenge that proves this first factor
+      // succeeded; `completeTotpChallenge` exchanges it (plus a live code) for the
+      // session. Until then there is NO session, so a bare password authenticates
+      // nothing. An unconfirmed factor is not a second factor yet, so it does not
+      // gate — mid-enrollment users still sign in normally.
+      const factor = await totpRepo.findTotpFactor(db, user.id);
+
+      if (factor?.confirmed === true) {
+        const challenge = challengeTokens.issue(String(user.id), totpChallengeTtlMs);
+
+        // No `login_succeeded` here: the login is not complete until the second
+        // factor lands (that event rides `completeTotpChallenge`). Emitting now
+        // would over-count and mislead a monitor into reading "signed in".
+        return { status: "totp_required", user, challenge };
+      }
+
       const session = await sessions.create(String(user.id), sessionTtlMs);
 
       // The credentials proved out and a session exists. The token never travels
       // in the event — only the subject's id, which a trace correlates on.
       await emit({ type: "login_succeeded", userId: String(user.id), at: eventClock() });
 
-      return { user, session };
+      return { status: "authenticated", user, session };
     },
 
     /**
@@ -1169,87 +1362,58 @@ export function createIdentity(options: IdentityOptions): Identity {
     },
 
     async verifyTotpChallenge(userId, code) {
-      // Refuse before touching the secret once the per-account bucket is drained —
-      // the brute-force guard (a 6-digit code is the only barrier after a stolen
-      // password). Keyed `totp:<userId>` for every user, factor or not.
-      await assertTotpNotThrottled(userId);
-
-      const factor = await totpRepo.findTotpFactor(db, userId);
-
-      // Unknown user, no factor, or an unconfirmed one all collapse to the same
-      // coded refusal — a challenge must not reveal which case it hit. This counts
-      // as a failed attempt against the throttle bucket.
-      if (factor === undefined || !factor.confirmed) {
-        await penalizeTotp(userId);
-
-        throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
-      }
-
-      const step = verifyTotpStep(factor.secret, code, { clock: eventClock });
-
-      // A non-matching code, OR a replay of a step we have already spent inside its
-      // still-live ±window (RFC 6238 §5.2), is a failed attempt — burn a token and
-      // refuse, enumeration-quiet.
-      if (step === undefined || (factor.lastUsedStep !== null && step <= factor.lastUsedStep)) {
-        await penalizeTotp(userId);
-
-        throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
-      }
-
-      // Accepted: persist the step so the same code cannot be replayed. A success
-      // spends no throttle token — a real user never locks themselves out.
-      await totpRepo.recordTotpStep(db, userId, step);
+      await runTotpChallenge(userId, code);
     },
 
     async verifyRecoveryCode(userId, code) {
-      // The same per-account brute-force guard the TOTP challenge stands behind —
-      // a recovery code is a fixed break-glass string and equally guessable.
-      await assertTotpNotThrottled(userId);
+      await runRecoveryChallenge(userId, code);
+    },
 
-      const candidates = await totpRepo.findUnusedRecoveryCodes(db, userId);
+    async completeTotpChallenge(challenge, code, completeOptions) {
+      // The challenge is the server-side binding to the first factor: only a
+      // token this server signed inside `login` (after the password verified)
+      // will verify here, so a valid TOTP/recovery code on its own — without a
+      // proven password — cannot mint a session. A missing/forged/expired
+      // challenge is refused before the code is even looked at.
+      const claim = challengeTokens.verify(challenge);
 
-      // Check every still-unused code; the first that matches is *atomically*
-      // claimed — `markRecoveryCodeUsed` flips the row only while it is still
-      // unused and reports whether it won. A concurrent consumer racing the same
-      // code loses the claim (0 rows changed) and falls through to the refusal,
-      // closing the check-then-mark TOCTOU. No factor / no unused codes / no match
-      // all surface the same coded refusal.
-      for (const candidate of candidates) {
-        let matched: boolean;
-        try {
-          matched = await hasher.verifyRecoveryCode(code, candidate.codeHash);
-        } catch (error) {
-          // The KDF is unavailable on this runtime — a `scrypt$…` recovery-code hash
-          // (minted on Node) reaching the edge, where the derive would OOM
-          // (`AUTH_KDF_UNAVAILABLE`). All of a user's codes share one algorithm, so
-          // none can be checked here; fail closed to the same enumeration-quiet
-          // refusal as any miss. Recovery codes are NOT healed by a password reset
-          // (that re-mints only the password hash); a migrated user re-enrolls TOTP
-          // to get PBKDF2 codes. See docs/guide/edge-password-migration.md.
-          //
-          // Accepted timing residual: this `break` returns after 0 derives, whereas a
-          // genuinely-wrong code loops all candidates — so the KDF-unavailable case is
-          // wall-time-distinguishable from a wrong code. Left as-is: it is post-auth
-          // (keyed on a resolved `userId`, not an email — not an existence oracle), is
-          // still fail-closed + `totpRateLimiter`-bounded, and only reveals migration
-          // state; and the loop is already data-dependent (an early match short-circuits).
-          if (!hasCode(error, "AUTH_KDF_UNAVAILABLE")) throw error;
-
-          break;
-        }
-
-        if (matched) {
-          if (await totpRepo.markRecoveryCodeUsed(db, candidate.id)) return;
-
-          // Lost the race: another request spent this code between our read and our
-          // conditional UPDATE. Refuse — a recovery code is single-use.
-          break;
-        }
+      if (claim === undefined) {
+        throw new IdentityError(
+          "IDENTITY_INVALID_CHALLENGE",
+          "The sign-in challenge is invalid or has expired. Sign in again.",
+        );
       }
 
-      await penalizeTotp(userId);
+      const userId = Number(claim.userId);
 
-      throw new IdentityError("IDENTITY_INVALID_TOTP", "That recovery code is invalid or used.");
+      // Verify the second factor (throttle + replay guard live inside these,
+      // exactly as for the raw primitives). A failure throws before any session
+      // is minted — the account stays gated on the second factor.
+      if (completeOptions?.recovery === true) {
+        await runRecoveryChallenge(userId, code);
+      } else {
+        await runTotpChallenge(userId, code);
+      }
+
+      // The code proved out. Resolve the subject the challenge named — a user
+      // deleted between `login` and here leaves the challenge naming no one, so we
+      // refuse rather than mint a session for a ghost.
+      const user = await userRepo.findUserById(db, userId);
+
+      if (user === undefined) {
+        throw new IdentityError(
+          "IDENTITY_INVALID_CHALLENGE",
+          "The sign-in challenge is invalid or has expired. Sign in again.",
+        );
+      }
+
+      // Both factors are now proven — mint the authenticated session and announce
+      // the (now complete) login. This is the event that means "signed in".
+      const session = await sessions.create(String(user.id), sessionTtlMs);
+
+      await emit({ type: "login_succeeded", userId: String(user.id), at: eventClock() });
+
+      return { user, session };
     },
   };
 }

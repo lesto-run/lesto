@@ -15,9 +15,10 @@ import { recoveryCodes as recoveryCodesTable, totpFactors } from "../src/totp";
 import * as totpRepo from "../src/totp";
 import { usersMigration } from "../src/user";
 
+import { expectAuthenticated } from "./authed";
 import { cheapHasher } from "./cheap-hasher";
 
-import type { Identity, IdentityMailer, IdentityOptions } from "../src/index";
+import type { Identity, IdentityEvent, IdentityMailer, IdentityOptions } from "../src/index";
 
 // ---------------------------------------------------------------------------
 // Test rig — one in-memory SQLite per test, the @lesto/db `SqlDatabase` shape,
@@ -100,7 +101,9 @@ async function signedInUser(
 ): Promise<{ userId: number; token: string }> {
   const { user } = await identity.register(email, password);
 
-  const { user: loggedIn, session } = await identity.login(email, password);
+  // Registration precedes any TOTP enrollment, so this first login always takes
+  // the authenticated arm (no confirmed second factor yet) and mints a session.
+  const { user: loggedIn, session } = expectAuthenticated(await identity.login(email, password));
 
   return { userId: user?.id ?? loggedIn.id, token: session.token };
 }
@@ -684,5 +687,174 @@ describe("totpMigration", () => {
     expect(await migrator.rollback()).toBe(totpMigration.version);
     expect(() => raw.prepare("SELECT * FROM recovery_codes").all()).toThrow();
     expect(() => raw.prepare("SELECT * FROM totp_factors").all()).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2FA enforcement at login (F2) — a confirmed second factor must WITHHOLD the
+// session on the password alone; only completeTotpChallenge mints it.
+// ---------------------------------------------------------------------------
+
+describe("login withholds the session until the second factor (F2)", () => {
+  const email = "ada@example.com";
+  const password = "correct horse staple";
+
+  /** Register, sign in once (pre-2FA), enroll + confirm TOTP. Returns the secret + userId. */
+  async function enrolled(identity: Identity): Promise<{ userId: number; secret: string }> {
+    const { userId, token } = await signedInUser(identity, email, password);
+    const { secret } = await identity.enrollTotp(token);
+    await identity.confirmTotp(token, codeFor(secret));
+
+    return { userId, secret };
+  }
+
+  it("returns totp_required (no usable session) on password alone, then completeTotpChallenge mints a 2FA-complete session", async () => {
+    const events: IdentityEvent[] = [];
+    const identity = buildIdentity({
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    const { userId, secret } = await enrolled(identity);
+
+    // Non-vacuous control: the session-usability oracle is real — the pre-2FA
+    // session from `signedInUser` DOES authenticate `currentUser`. So a later
+    // `currentUser(...) === undefined` means "no usable session", not "the oracle
+    // rejects everything".
+    const pre = await signedInUser(identity, "control@example.com", password);
+    expect((await identity.currentUser(pre.token))?.id).toBe(pre.userId);
+
+    events.length = 0;
+
+    // A fresh password login now that 2FA is confirmed. Advance one step so the
+    // challenge code is a later step than the one `confirmTotp` recorded.
+    now += 30 * 1000;
+    const result = await identity.login(email, password);
+
+    // THE FIX: password alone does NOT mint a session. RED before the fix (login
+    // used to return a `{ user, session }` with a fully-usable session and no
+    // `status`); GREEN after.
+    expect(result.status).toBe("totp_required");
+    if (result.status !== "totp_required") throw new Error("unreachable");
+
+    // The challenge is NOT a session token — every "has a session" gate is
+    // unsatisfied until the second factor lands.
+    expect(await identity.currentUser(result.challenge)).toBeUndefined();
+
+    // And the password step alone must not announce a completed login.
+    expect(events.some((event) => event.type === "login_succeeded")).toBe(false);
+
+    // Completing the second factor (bound to the challenge) mints the real,
+    // now-usable, 2FA-complete session.
+    const completed = await identity.completeTotpChallenge(result.challenge, codeFor(secret));
+
+    expect(completed.user.id).toBe(userId);
+    expect((await identity.currentUser(completed.session.token))?.id).toBe(userId);
+
+    // login_succeeded fires exactly once — on completion, the event that truly
+    // means "signed in".
+    expect(events.filter((event) => event.type === "login_succeeded")).toHaveLength(1);
+  });
+
+  it("a user WITHOUT a confirmed factor still logs in normally (no regression)", async () => {
+    const identity = buildIdentity();
+
+    await identity.register(email, password);
+    const result = await identity.login(email, password);
+
+    expect(result.status).toBe("authenticated");
+    // The narrowing helper both asserts the arm and yields the session.
+    const { session } = expectAuthenticated(result);
+    expect((await identity.currentUser(session.token))?.email).toBe(email);
+  });
+
+  it("an UNCONFIRMED (mid-enrollment) factor does not gate login", async () => {
+    const identity = buildIdentity();
+    const { token } = await signedInUser(identity, email, password);
+
+    // Enroll but never confirm — not a real second factor yet.
+    await identity.enrollTotp(token);
+
+    const result = await identity.login(email, password);
+
+    expect(result.status).toBe("authenticated");
+  });
+
+  it("completes the login with a single-use recovery code, then refuses its replay", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity, email, password);
+    const { secret } = await identity.enrollTotp(token);
+    const { recoveryCodes } = await identity.confirmTotp(token, codeFor(secret));
+
+    const first = await identity.login(email, password);
+    if (first.status !== "totp_required") throw new Error("expected totp_required");
+
+    const completed = await identity.completeTotpChallenge(first.challenge, recoveryCodes[0]!, {
+      recovery: true,
+    });
+    expect((await identity.currentUser(completed.session.token))?.id).toBe(userId);
+
+    // A fresh challenge + the ALREADY-SPENT recovery code is refused (single-use),
+    // and no session is minted.
+    const second = await identity.login(email, password);
+    if (second.status !== "totp_required") throw new Error("expected totp_required");
+
+    await expect(
+      identity.completeTotpChallenge(second.challenge, recoveryCodes[0]!, { recovery: true }),
+    ).rejects.toMatchObject({ code: "IDENTITY_INVALID_TOTP" });
+  });
+
+  it("refuses a wrong TOTP code against a valid challenge — no session minted", async () => {
+    const identity = buildIdentity();
+    await enrolled(identity);
+
+    const result = await identity.login(email, password);
+    if (result.status !== "totp_required") throw new Error("expected totp_required");
+
+    await expect(identity.completeTotpChallenge(result.challenge, "000000")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_TOTP",
+    });
+  });
+
+  it("refuses a forged/garbage challenge with IDENTITY_INVALID_CHALLENGE", async () => {
+    const identity = buildIdentity();
+
+    await expect(
+      identity.completeTotpChallenge("not-a-real-challenge", "000000"),
+    ).rejects.toMatchObject({ code: "IDENTITY_INVALID_CHALLENGE" });
+  });
+
+  it("refuses an expired challenge (a valid code alone cannot revive it)", async () => {
+    const identity = buildIdentity({ totpChallengeTtlMs: 60 * 1000 });
+    const { secret } = await enrolled(identity);
+
+    now += 30 * 1000;
+    const result = await identity.login(email, password);
+    if (result.status !== "totp_required") throw new Error("expected totp_required");
+
+    // Step past the 60s challenge TTL — the signed challenge no longer verifies.
+    now += 61 * 1000;
+
+    await expect(
+      identity.completeTotpChallenge(result.challenge, codeFor(secret)),
+    ).rejects.toMatchObject({ code: "IDENTITY_INVALID_CHALLENGE" });
+  });
+
+  it("refuses when the challenged user has been deleted (IDENTITY_INVALID_CHALLENGE)", async () => {
+    const identity = buildIdentity();
+    const { secret } = await enrolled(identity);
+
+    now += 30 * 1000;
+    const result = await identity.login(email, password);
+    if (result.status !== "totp_required") throw new Error("expected totp_required");
+
+    // Delete the user but leave the (still-confirmed) factor row: the code verifies
+    // and its step is recorded, but there is no user to mint a session for.
+    raw.prepare("DELETE FROM users").run();
+
+    await expect(
+      identity.completeTotpChallenge(result.challenge, codeFor(secret)),
+    ).rejects.toMatchObject({ code: "IDENTITY_INVALID_CHALLENGE" });
   });
 });

@@ -34,6 +34,7 @@ import {
   IdentityError,
   readSessionToken,
   sessionCookie,
+  totpMigration,
   usersMigration,
 } from "@lesto/identity";
 import type { Identity, IdentityMailer } from "@lesto/identity";
@@ -151,7 +152,10 @@ function buildConfig(database: Database.Database): LestoAppConfig {
     .post("/auth/login", async (c) => {
       const { email, password } = authBody(c);
       try {
-        const { session } = await identity.login(email, password);
+        const login = await identity.login(email, password);
+        if (login.status !== "authenticated")
+          throw new Error(`expected authenticated login, got ${login.status}`);
+        const { session } = login;
 
         return {
           status: 200,
@@ -206,7 +210,7 @@ function buildConfig(database: Database.Database): LestoAppConfig {
   return {
     db: adapt(database),
     app,
-    migrations: [usersMigration],
+    migrations: [usersMigration, totpMigration],
   };
 }
 

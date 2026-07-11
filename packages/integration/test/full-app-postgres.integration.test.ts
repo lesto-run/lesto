@@ -37,6 +37,7 @@ import {
   IdentityError,
   readSessionToken,
   sessionCookie,
+  totpMigration,
   usersMigration,
 } from "@lesto/identity";
 import type { Identity, IdentityMailer } from "@lesto/identity";
@@ -187,7 +188,10 @@ async function bootApp(handle: KernelDatabase, dialect: Dialect): Promise<AppPro
     .post("/auth/login", async (c) => {
       const { email, password } = authBody(c);
       try {
-        const { session } = await identity.login(email, password);
+        const login = await identity.login(email, password);
+        if (login.status !== "authenticated")
+          throw new Error(`expected authenticated login, got ${login.status}`);
+        const { session } = login;
 
         return {
           status: 200,
@@ -240,7 +244,7 @@ async function bootApp(handle: KernelDatabase, dialect: Dialect): Promise<AppPro
     db: handle,
     dialect,
     app,
-    migrations: [usersMigration],
+    migrations: [usersMigration, totpMigration],
     // The queue + cache batteries ride SQL tables of their own; declare their
     // installers so `lesto_jobs` / `lesto_cache` exist before the first enqueue/set.
     // (The durable session + rate-limit schemas install by default.)
