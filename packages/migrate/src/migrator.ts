@@ -55,7 +55,7 @@ export class Migrator {
 
   constructor(
     private readonly db: SqlDatabase,
-    migrations: MigrationEntry[],
+    migrations: readonly MigrationEntry[],
     options: MigratorOptions = {},
   ) {
     // Sort once, up front, so order is total and independent of caller input.
