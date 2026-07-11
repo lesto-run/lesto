@@ -18,7 +18,11 @@ export interface MemoryStoreOptions {
   /**
    * The most entries this store holds at once. A HARD bound, not a hint: once
    * exceeded, the least-recently-used entry is evicted to make room for the
-   * write that crossed the cap. Defaults to {@link DEFAULT_MAX_ENTRIES}.
+   * write that crossed the cap. Must be a positive integer — a non-finite,
+   * fractional, or non-positive value is rejected loudly by the constructor
+   * (a `NaN` cap, left unchecked, makes every eviction comparison false and
+   * silently wipes the whole store on the next write). Defaults to
+   * {@link DEFAULT_MAX_ENTRIES}.
    */
   readonly maxEntries?: number;
 
@@ -58,7 +62,18 @@ export class MemoryStore implements CacheStore {
   private readonly clock: Clock;
 
   constructor(options: MemoryStoreOptions = {}) {
-    this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
+    const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
+
+    // A positive integer is the only value with well-defined eviction: `NaN`
+    // makes `size <= maxEntries` and `overflow <= 0` both false forever, so the
+    // store deletes every entry on the next write; `Infinity` never evicts (the
+    // unbounded leak this store exists to prevent); `<= 0` and fractional caps
+    // are misconfigurations. Fail at construction, not silently at runtime.
+    if (!Number.isInteger(maxEntries) || maxEntries < 1) {
+      throw new Error(`MemoryStore maxEntries must be a positive integer, received ${maxEntries}.`);
+    }
+
+    this.maxEntries = maxEntries;
     this.clock = options.clock ?? systemClock;
   }
 

@@ -496,6 +496,32 @@ describe("MemoryStore bounded eviction", () => {
   });
 });
 
+describe("MemoryStore option validation", () => {
+  // Each of these constructs fine against the OLD (unchecked) constructor, so
+  // these assertions are non-vacuous — they only pass because the guard throws.
+  // `NaN` is the dangerous one: unchecked, `size <= NaN` and `overflow <= 0`
+  // are both false, so the store silently deletes every entry on the next write.
+  it.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["zero", 0],
+    ["a negative", -1],
+    ["a fraction", 1.5],
+  ])("rejects a %s maxEntries at construction", (_label, maxEntries) => {
+    expect(() => new MemoryStore({ maxEntries })).toThrow(/positive integer/);
+  });
+
+  it("does not silently wipe the store when a valid cap is given", async () => {
+    const store = new MemoryStore({ maxEntries: 2, clock: () => 0 });
+
+    await store.set("a", { value: 1, expiresAt: null });
+    await store.set("b", { value: 2, expiresAt: null });
+
+    expect(await store.get("a")).toEqual({ value: 1, expiresAt: null });
+    expect(await store.get("b")).toEqual({ value: 2, expiresAt: null });
+  });
+});
+
 describe("sqlStore.sweep", () => {
   it("deletes only entries whose deadline has passed, never NULL or future ones", async () => {
     const db = makeSqlDatabase();
