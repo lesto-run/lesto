@@ -11,12 +11,15 @@
  * caller injects a `MailTransport` (the Cloudflare `send_email` binding on the
  * edge; a Resend provider or a console logger on Node; a fake in tests).
  *
- * Delivery is drained IN-REQUEST (`while (await queue.runOnce())`) rather than by
- * a long-running worker, because a Cloudflare Worker has no steady process to run
- * a drain loop on. `/send` enqueues with `maxAttempts: 1` so a single attempt
- * yields an immediate, honest verdict — `delivered: true`, or `delivered: false`
- * with the failure reason (the transport error MESSAGE, from `job.lastError` — not
- * the machine code; e.g. the sender domain not being onboarded yet).
+ * Delivery is drained IN-REQUEST rather than by a long-running worker, because a
+ * Cloudflare Worker has no steady process to run a drain loop on. The drain is
+ * bounded to the job THIS request enqueued — it calls `queue.runOnce()` only
+ * until `queue.find(jobId)` reports that job terminal, not until the whole queue
+ * is empty, so one request never processes another concurrent request's jobs.
+ * `/send` enqueues with `maxAttempts: 1` so a single attempt yields an immediate,
+ * honest verdict — `delivered: true`, or `delivered: false` with the failure
+ * reason (the transport error MESSAGE, from `job.lastError` — not the machine
+ * code; e.g. the sender domain not being onboarded yet).
  */
 
 import { Mailer } from "@lesto/mail";
@@ -30,6 +33,15 @@ import { defineWelcome } from "./mailers";
 
 /** The onboarded Cloudflare Email Sending sender this demo delivers from. */
 export const DEFAULT_FROM = "hello@lesto.run";
+
+/**
+ * A fail-safe cap on the in-request drain loop in `POST /send` — NOT the
+ * expected exit. With `maxAttempts: 1`, one claim always retires our job to a
+ * terminal status, so the loop should stop on its own well before this many
+ * iterations; the cap only bites if it never gets claimed at all (e.g. wiped
+ * from under it by a concurrent reclaim/prune).
+ */
+const MAX_DRAIN_ITERATIONS = 100;
 
 export interface BootOptions {
   /** A SQL handle: `d1ToSqlDatabase(env.DB)` on the edge, `openSqlite` on Node. */
@@ -78,11 +90,27 @@ export async function bootMail(options: BootOptions): Promise<Booted> {
       // Drain in-request — a Worker has no long-running worker loop. `runOnce`
       // catches a handler/transport throw and routes it through the queue's
       // fail() path, so this loop never throws; it returns null when empty.
-      while (await queue.runOnce()) {
-        // keep draining
+      //
+      // Bounded to THIS request's job, not the whole queue: under concurrency
+      // the queue holds other requests' ready jobs too, and draining until
+      // `runOnce` returns null would make this handler do THEIR work before it
+      // could answer — wasteful, and racy (this request's latency would track
+      // the whole backlog rather than its own job). So stop the instant
+      // `queue.find(jobId)` reports our job terminal (`done`/`failed`), rather
+      // than emptying the queue.
+      let job = await queue.find(jobId);
+      for (
+        let i = 0;
+        i < MAX_DRAIN_ITERATIONS &&
+        job !== null &&
+        job.status !== "done" &&
+        job.status !== "failed";
+        i++
+      ) {
+        if (!(await queue.runOnce())) break; // nothing left to claim
+        job = await queue.find(jobId);
       }
 
-      const job = await queue.find(jobId);
       const delivered = job?.status === "done";
 
       return c.json({
