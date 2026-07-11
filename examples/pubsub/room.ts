@@ -121,7 +121,7 @@ export class PubSubRoom {
     const url = new URL(request.url);
 
     if (url.pathname === "/subscribe") {
-      return this.#subscribe(url);
+      return this.#subscribe(request, url);
     }
 
     if (url.pathname === "/publish" && request.method === "POST") {
@@ -131,7 +131,7 @@ export class PubSubRoom {
     return new Response("not found", { status: 404 });
   }
 
-  #subscribe(url: URL): Response {
+  #subscribe(request: Request, url: URL): Response {
     const channel = url.searchParams.get("channel");
 
     if (channel === null || channel.length === 0) {
@@ -154,6 +154,15 @@ export class PubSubRoom {
       return new Response("invalid ?since (expected a non-negative integer seq)", { status: 400 });
     }
     const sinceSeq = sinceRaw === null ? undefined : Number(sinceRaw);
+
+    // workerd rejects a 101 + `webSocket` response to a request that never asked to
+    // upgrade — a bare GET (address-bar hit, health check) would otherwise mint a
+    // `WebSocketPair` it can never use and surface as an opaque 500. Reject it as a
+    // clean 426 before minting the pair (parity with the Bun path's `server.upgrade`
+    // returning false in `app.ts`).
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("expected a websocket upgrade", { status: 426 });
+    }
 
     const { 0: client, 1: server } = new WebSocketPair();
 
