@@ -139,6 +139,12 @@ function serializeBlock(block: MessageBlock): Record<string, unknown> {
  *
  * A non-2xx is the loud failure: `AI_HTTP_ERROR` with the status in `details`, so
  * the boundary branches on the code and the status, never on the message string.
+ *
+ * Two `AI_RESPONSE_MALFORMED` refusals guard the 2xx path (mirroring `openai-compatible.ts`):
+ * a body that is not JSON (a misconfigured proxy/gateway returning a 200 with an HTML/text
+ * body), or a 2xx with no `content` array (an error-shaped 200). Both are refused loudly rather
+ * than throwing an uncoded `SyntaxError`/`TypeError` the boundary can't branch on. An EMPTY
+ * `content` array is legitimate (yields `text: ""`), so the guard is `Array.isArray`, not presence.
  */
 export async function parseResponse(response: Response): Promise<GenerateResult> {
   if (!response.ok) {
@@ -147,7 +153,17 @@ export async function parseResponse(response: Response): Promise<GenerateResult>
     });
   }
 
-  const json = (await response.json()) as AnthropicMessage;
+  let json: AnthropicMessage;
+
+  try {
+    json = (await response.json()) as AnthropicMessage;
+  } catch {
+    throw new AiError("AI_RESPONSE_MALFORMED", "Response body was not valid JSON.");
+  }
+
+  if (!Array.isArray(json.content)) {
+    throw new AiError("AI_RESPONSE_MALFORMED", "Response carried no content array to parse.");
+  }
 
   const text = json.content
     .filter((block): block is TextBlock => block.type === "text")

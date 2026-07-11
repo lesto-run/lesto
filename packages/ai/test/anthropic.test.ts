@@ -192,6 +192,45 @@ describe("parseResponse", () => {
     expect((error as AiError).code).toBe("AI_HTTP_ERROR");
     expect((error as AiError).details["status"]).toBe(429);
   });
+
+  it("refuses a 2xx whose body is not JSON with AI_RESPONSE_MALFORMED (not an uncoded SyntaxError)", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+    const html = new Response("<html>not json</html>", {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    });
+
+    const error = await model.parseResponse(html).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AiError);
+    expect((error as AiError).code).toBe("AI_RESPONSE_MALFORMED");
+  });
+
+  it("refuses a 2xx with no content array with AI_RESPONSE_MALFORMED (not an uncoded TypeError)", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    const error = await model
+      .parseResponse(jsonResponse({ error: "overloaded", stop_reason: null }))
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AiError);
+    expect((error as AiError).code).toBe("AI_RESPONSE_MALFORMED");
+  });
+
+  it("accepts a 2xx with an EMPTY content array — legitimate, yields empty text", async () => {
+    const model = createAnthropic({ apiKey: "sk-test" });
+
+    const result = await model.parseResponse(
+      jsonResponse({
+        content: [],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 1, output_tokens: 0 },
+      }),
+    );
+
+    expect(result.text).toBe("");
+    expect(result.toolCalls).toEqual([]);
+  });
 });
 
 describe("parseStream", () => {
