@@ -1245,7 +1245,17 @@ export function createIdentity(options: IdentityOptions): Identity {
 
         try {
           rehashed = await hasher.hashPassword(password);
-          await userRepo.setPasswordHash(db, user.id, rehashed);
+
+          // Compare-and-swap, NOT an unconditional write: persist the upgrade only
+          // while the stored hash is still the one we verified against. A concurrent
+          // `resetPassword` derives+writes a new hash off the same old row; without
+          // this fence, our re-hash of the OLD plaintext could land last and silently
+          // revert the reset. A lost CAS is not an error — treat it as "not persisted":
+          // null out `rehashed` so the emit gate below stays silent and the upgrade
+          // simply retries on the next login (already the best-effort posture).
+          if (!(await userRepo.setPasswordHashIf(db, user.id, rehashed, previousHash))) {
+            rehashed = undefined;
+          }
         } catch {
           // The login succeeded; the cost upgrade can wait for the next login. A
           // throw here (mint or persist) means nothing was written, so leave

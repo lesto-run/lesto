@@ -19,6 +19,7 @@
  */
 
 import {
+  and,
   createTableSql,
   defineTable,
   dropTableSql,
@@ -88,6 +89,27 @@ export async function setPasswordHash(db: Db, id: number, passwordHash: string):
     .set({ passwordHash, updatedAt: new Date().toISOString() })
     .where(eq(users.id, id))
     .run();
+}
+
+/**
+ * Stamp a new password hash iff the stored hash still equals `expectedCurrentHash`
+ * (compare-and-swap). Returns true when the row was updated. A false return means
+ * the stored hash changed under us (e.g. a concurrent reset) — the caller must not
+ * treat that as a persisted upgrade.
+ */
+export async function setPasswordHashIf(
+  db: Db,
+  id: number,
+  passwordHash: string,
+  expectedCurrentHash: string,
+): Promise<boolean> {
+  const { changes } = await db
+    .update(users)
+    .set({ passwordHash, updatedAt: new Date().toISOString() })
+    .where(and(eq(users.id, id), eq(users.passwordHash, expectedCurrentHash)))
+    .run();
+
+  return changes > 0;
 }
 
 /** Stamp a user's `emailVerifiedAt` + bump `updatedAt`. */

@@ -506,9 +506,10 @@ describe("login", () => {
     });
 
     // The upgrade write fails — the login must succeed anyway (the proven
-    // credentials are valid; only the cost upgrade is deferred).
+    // credentials are valid; only the cost upgrade is deferred). The rehash path
+    // now persists through the compare-and-swap helper, so that is what throws.
     const spy = vi
-      .spyOn(userRepo, "setPasswordHash")
+      .spyOn(userRepo, "setPasswordHashIf")
       .mockRejectedValueOnce(new Error("write conflict"));
 
     const { session } = expectAuthenticated(await identity.login("ada@example.com", password));
@@ -536,6 +537,98 @@ describe("login", () => {
     const after = (await userRepo.findUserByEmail(db, "ada@example.com"))!.passwordHash;
 
     expect(after).toBe(before);
+  });
+
+  // Rehash-on-login persists through a COMPARE-AND-SWAP, not an unconditional
+  // write, so a concurrent password reset can never be silently reverted (the
+  // login's re-hash of the OLD password landing last). These two tests pin both
+  // arms of that CAS: it matches when no one else wrote, and it loses (silently)
+  // when a reset changed the stored hash under the derive window.
+
+  it("persists the rehash and emits password_rehashed when the CAS matches (no concurrent write)", async () => {
+    const password = "correct horse staple";
+    const events: IdentityEvent[] = [];
+
+    // A hasher that always reports the stored hash as stale, so the rehash branch
+    // fires under the cheap KDF (the real cost is exercised by buildRealIdentity).
+    const hasher: PasswordHasher = { ...cheapHasher, needsRehash: () => true };
+    const { identity } = buildIdentity({
+      hasher,
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    const staleHash = await cheapHasher.hashPassword(password);
+    const user = await userRepo.insertUser(db, {
+      email: "ada@example.com",
+      passwordHash: staleHash,
+      emailVerifiedAt: new Date().toISOString(),
+    });
+
+    const casSpy = vi.spyOn(userRepo, "setPasswordHashIf");
+
+    const { session } = expectAuthenticated(await identity.login("ada@example.com", password));
+    expect(session).toBeDefined();
+
+    // The CAS was fenced against exactly the hash the login verified against, and
+    // matched (nothing raced it) — so it returned true and the upgrade persisted.
+    expect(casSpy).toHaveBeenCalledTimes(1);
+    expect(casSpy).toHaveBeenLastCalledWith(db, user.id, expect.any(String), staleHash);
+    await expect(casSpy.mock.results[0]!.value).resolves.toBe(true);
+
+    const stored = await userRepo.findUserById(db, user.id);
+    expect(stored!.passwordHash).not.toBe(staleHash);
+
+    // The persisted upgrade announced itself exactly once.
+    expect(events.filter((event) => event.type === "password_rehashed")).toHaveLength(1);
+  });
+
+  it("does NOT persist or emit when a concurrent reset changes the stored hash under the rehash (CAS loses)", async () => {
+    const password = "correct horse staple";
+    const events: IdentityEvent[] = [];
+
+    const hasher: PasswordHasher = { ...cheapHasher, needsRehash: () => true };
+    const { identity } = buildIdentity({
+      hasher,
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    const staleHash = await cheapHasher.hashPassword(password);
+    const user = await userRepo.insertUser(db, {
+      email: "ada@example.com",
+      passwordHash: staleHash,
+      emailVerifiedAt: new Date().toISOString(),
+    });
+
+    // The reset's post-image: a DIFFERENT valid hash the concurrent resetPassword
+    // will have written — distinct from both the stale hash and the login's rehash.
+    const resetHash = await cheapHasher.hashPassword("the reset's brand new password");
+
+    // Drive the real race: the concurrent reset's unconditional write lands DURING
+    // the login's rehash derive (`hasher.hashPassword`) — the exact ~one-KDF window
+    // the fix closes. When the login then tries to persist its re-hash of the OLD
+    // password, the stored hash is no longer the one it verified against, so the CAS
+    // must refuse the write and leave the reset's hash in place.
+    vi.spyOn(hasher, "hashPassword").mockImplementationOnce(async (pw) => {
+      await userRepo.setPasswordHash(db, user.id, resetHash); // the reset wins the write
+      return await cheapHasher.hashPassword(pw); // the login's re-hash of the OLD password
+    });
+
+    const { session } = expectAuthenticated(await identity.login("ada@example.com", password));
+
+    // The login still succeeds — the cost upgrade is best-effort, never a gate.
+    expect(session).toBeDefined();
+
+    // The reset's hash survives: the login's rehash did NOT revert it. (An
+    // unconditional write here would leave a re-hash of the OLD password — RED.)
+    const stored = await userRepo.findUserById(db, user.id);
+    expect(stored!.passwordHash).toBe(resetHash);
+
+    // A lost CAS is silent: no persisted-upgrade event rides a write that never landed.
+    expect(events.some((event) => event.type === "password_rehashed")).toBe(false);
   });
 });
 
@@ -808,6 +901,38 @@ describe("session lifecycle", () => {
 describe("user model + migration", () => {
   it("normalizeEmail lower-cases and trims", () => {
     expect(normalizeEmail("  Ada@Example.com  ")).toBe("ada@example.com");
+  });
+
+  // The compare-and-swap primitive behind the login-rehash fence: it writes iff
+  // the stored hash is still the one the caller proved against, and reports which.
+
+  it("setPasswordHashIf updates and returns true when the expected hash still matches", async () => {
+    const user = await userRepo.insertUser(db, {
+      email: "cas-match@example.com",
+      passwordHash: "hash-A",
+      emailVerifiedAt: null,
+    });
+
+    const matched = await userRepo.setPasswordHashIf(db, user.id, "hash-B", "hash-A");
+
+    expect(matched).toBe(true);
+    const stored = await userRepo.findUserById(db, user.id);
+    expect(stored!.passwordHash).toBe("hash-B");
+  });
+
+  it("setPasswordHashIf is a no-op returning false when the stored hash changed under it", async () => {
+    const user = await userRepo.insertUser(db, {
+      email: "cas-miss@example.com",
+      passwordHash: "hash-A",
+      emailVerifiedAt: null,
+    });
+
+    // Expectation names a hash the row no longer holds — the CAS must not write.
+    const matched = await userRepo.setPasswordHashIf(db, user.id, "hash-B", "STALE-expectation");
+
+    expect(matched).toBe(false);
+    const stored = await userRepo.findUserById(db, user.id);
+    expect(stored!.passwordHash).toBe("hash-A"); // untouched
   });
 
   it("the migration's down drops the users table", async () => {
