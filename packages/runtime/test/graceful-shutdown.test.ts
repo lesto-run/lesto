@@ -36,7 +36,12 @@ function harness(config?: {
   const errors: Array<{ message: string; error?: unknown }> = [];
   const handlers = new Map<string, () => void>();
 
-  const state: { forceExitCb?: () => void; forceExitMs?: number; closeCalls: number } = {
+  const state: {
+    forceExitCb?: () => void;
+    forceExitMs?: number;
+    forceExitCleared?: boolean;
+    closeCalls: number;
+  } = {
     closeCalls: 0,
   };
 
@@ -65,6 +70,12 @@ function harness(config?: {
     setForceExitTimer: (callback, ms) => {
       state.forceExitCb = callback;
       state.forceExitMs = ms;
+
+      return () => {
+        state.forceExitCleared = true;
+        // Model clearTimeout: a cleared timer can no longer fire its callback.
+        delete state.forceExitCb;
+      };
     },
     logError: (message, error) => {
       errors.push({ message, error });
@@ -174,6 +185,38 @@ describe("onShutdownSignals", () => {
     await tick();
 
     expect(h.errors).toEqual([{ message: "graceful shutdown failed", error: boom }]);
+    expect(h.exits).toEqual([1]);
+  });
+
+  it("clears the force-exit timer on a clean settle so a late deadline cannot ghost-exit(1)", async () => {
+    const h = harness();
+
+    onShutdownSignals(() => Promise.resolve(), { forceExitTimeoutMs: 100 }, h.deps);
+
+    h.fire("SIGINT");
+    await tick();
+
+    expect(h.state.forceExitCleared).toBe(true);
+
+    // The deadline "fires" late (an embedder whose exit did not synchronously
+    // halt) — but it was cleared, so no second, ghost exit is pushed.
+    h.fireForceExit();
+
+    expect(h.exits).toEqual([0]);
+  });
+
+  it("clears the force-exit timer when teardown rejects (one exit 1, no ghost)", async () => {
+    const h = harness();
+
+    onShutdownSignals(() => Promise.reject(new Error("boom")), { forceExitTimeoutMs: 100 }, h.deps);
+
+    h.fire("SIGTERM");
+    await tick();
+
+    expect(h.state.forceExitCleared).toBe(true);
+
+    h.fireForceExit();
+
     expect(h.exits).toEqual([1]);
   });
 
@@ -400,16 +443,20 @@ describe("realSignalDeps", () => {
     expect(errSpy).toHaveBeenCalledWith("with context", boom);
   });
 
-  it("schedules an unref'd force-exit timer", () => {
+  it("schedules an unref'd force-exit timer and cancels it via clearTimeout", () => {
     const unref = vi.fn();
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue({ unref } as unknown as ReturnType<typeof setTimeout>);
+    const timer = { unref } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockReturnValue(timer);
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
 
-    realSignalDeps.setForceExitTimer(noop, 500);
+    const cancel = realSignalDeps.setForceExitTimer(noop, 500);
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(noop, 500);
     expect(unref).toHaveBeenCalledTimes(1); // never keeps the process alive on its own
+
+    cancel();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(timer); // disarms the backstop on a clean settle
   });
 
   it("exposes an exit seam over process.exit", () => {

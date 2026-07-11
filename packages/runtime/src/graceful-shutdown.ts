@@ -74,9 +74,12 @@ export interface SignalDeps {
 
   /**
    * Schedule the force-exit callback, `unref`'d so a pending force-exit timer can
-   * never itself keep the process alive (real: `setTimeout(...).unref()`).
+   * never itself keep the process alive. Returns a cancel function that disarms
+   * the timer — called once teardown settles so a clean (or cleanly-failed)
+   * shutdown never fires a ghost force-exit (real: `setTimeout(...).unref()`,
+   * cancel via `clearTimeout`).
    */
-  setForceExitTimer(callback: () => void, ms: number): void;
+  setForceExitTimer(callback: () => void, ms: number): () => void;
 
   /** Where a teardown failure / force-exit line goes (real: `console.error`). */
   logError(message: string, error?: unknown): void;
@@ -93,7 +96,12 @@ export const realSignalDeps: SignalDeps = {
   },
 
   setForceExitTimer: (callback, ms) => {
-    setTimeout(callback, ms).unref();
+    const timer = setTimeout(callback, ms);
+    timer.unref();
+
+    return () => {
+      clearTimeout(timer);
+    };
   },
 
   logError: (message, error) => {
@@ -152,12 +160,14 @@ export function onShutdownSignals(
 
     shuttingDown = true;
 
+    let cancelForceExit: (() => void) | undefined;
+
     // Backstop the whole teardown, not just the socket drain: if a `stop()`/
     // `close()` hangs, exit anyway rather than waiting for the platform's SIGKILL.
     if (options.forceExitTimeoutMs !== undefined) {
       const timeoutMs = options.forceExitTimeoutMs;
 
-      deps.setForceExitTimer(() => {
+      cancelForceExit = deps.setForceExitTimer(() => {
         deps.logError(`graceful shutdown exceeded ${timeoutMs}ms — forcing exit`);
 
         deps.exit(1);
@@ -165,8 +175,18 @@ export function onShutdownSignals(
     }
 
     void teardown().then(
-      () => deps.exit(0),
+      () => {
+        // Teardown settled — disarm the backstop so it can't fire a ghost
+        // exit(1) after we have already exited cleanly. Harmless for the CLI's
+        // unref'd timer (process.exit halts first), but a real footgun for an
+        // embedder whose `exit` seam does not synchronously halt the process.
+        cancelForceExit?.();
+
+        return deps.exit(0);
+      },
       (error: unknown) => {
+        cancelForceExit?.();
+
         deps.logError("graceful shutdown failed", error);
 
         deps.exit(1);
