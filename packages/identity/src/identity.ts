@@ -78,7 +78,7 @@ import {
 import type { Clock, PasswordHashCost, Session, SessionStore } from "@lesto/auth";
 import type { Db } from "@lesto/db";
 import { hasCode } from "@lesto/errors";
-import { isUniqueViolation, MemoryRateLimitStore, RateLimiter } from "@lesto/ratelimit";
+import { isUniqueViolation, RateLimiter } from "@lesto/ratelimit";
 
 import { assertStrongSecret, IdentityError } from "./errors";
 import {
@@ -157,43 +157,32 @@ const DEFAULT_THROTTLE_WINDOW_MS = 15 * 60 * 1000;
  * (the bucket persists across requests in one process), but WEAK on serverless /
  * edge (a fresh isolate resets it) and per-node on a multi-node fleet.
  *
- * A second, distinct residual is MEMORY, and it bites WORST exactly where the
- * throttle floor is strongest — the long-lived Node process. Self-eviction is LAZY
- * (on-access only: a bucket is dropped inside `update()` when a write lands it at
- * FULL — a first-seen key or a cost-0 peek); there is no timer and no sweep. A
- * *failed* login burns a token, so its `login:<email>` bucket is stored BELOW the
- * ceiling — and because that attacker-chosen key is never seen again, `update()`
- * never fires for it, so it is never re-checked and never evicted. Under an
- * adversarial flood of distinct emails the Map therefore grows MONOTONICALLY —
- * one permanent entry per distinct email until the process restarts, NOT a
- * steady-state set that entries age out of — the in-memory default is a per-process
- * FLOOR, not a memory-bounded ceiling (residual L-976b4302). The durable fix is
- * the SAME one below: a limiter over `sqlRateLimitStore`, whose rows a periodic
- * `sweep` reclaims, is what gives a long-lived Node deploy a bounded, fleet-wide
- * cap.
+ * The MEMORY this store holds is itself bounded (L-976b4302), which matters most
+ * on the long-lived Node process where the floor is strongest. Its `login:<email>`
+ * / `totp:<userId>` keys are attacker-chosen, so an unbounded Map would be a
+ * memory-exhaustion DoS. Two mechanisms prevent that: a bucket evicts the instant
+ * it refills to full (lossless — a full bucket is byte-identical to a first-seen
+ * key), and a hard cap sheds the bucket CLOSEST TO FULL first once the Map is over
+ * budget. So a flood of distinct emails — each a failed attempt whose bucket sits
+ * below the ceiling — is capped, and the closest-to-full order keeps a targeted,
+ * actively-throttled account the LAST thing evicted, never pushed out by the flood.
  *
- * For a DURABLE, fleet-wide (and memory-bounded) cap wire a limiter over
- * `sqlRateLimitStore` (the option docs show the shape); pass `false` to opt out
- * deliberately. login and TOTP each get their OWN instance, so the two buckets
- * never interact.
+ * What in-memory CANNOT give is durability or fleet reach: it is a per-process
+ * floor a fresh serverless/edge isolate resets and each node holds separately. For
+ * a DURABLE, fleet-wide cap wire a limiter over `sqlRateLimitStore` (the option
+ * docs show the shape); pass `false` to opt out deliberately. login and TOTP each
+ * get their OWN instance, so the two buckets never interact.
  */
 const defaultRateLimiter = (clock: Clock | undefined): RateLimiter =>
   new RateLimiter({
-    // Hand the store its ceiling so it can SELF-EVICT a bucket the instant it has
-    // fully refilled (L-8244c703). The key here is `login:<email>` / `totp:<userId>`
-    // — attacker-chosen — so a store that persisted every key forever would grow its
-    // Map without bound (a memory-exhaustion DoS) and leak one entry per distinct
-    // email even under benign traffic. A full bucket == a first-seen key, so evicting
-    // it loses no throttle state; an actively-throttled (partially-drained) bucket is
-    // never full and so never evicted. That eviction bounds the BENIGN/idle case —
-    // but NOT an adversarial one: a *failed* login drains the bucket below full, and
-    // eviction is lazy (on-access only, no sweep), so a flooded distinct key — never
-    // seen again — is never re-checked and never evicted: the Map grows monotonically,
-    // one permanent entry per email until restart. This limiter is a per-process FLOOR,
-    // not a hard memory cap (residual L-976b4302); the durable, memory-bounded fix is a
-    // `sqlRateLimitStore`-backed `loginRateLimiter` (see the docstring above and
-    // {@link IdentityOptions.loginRateLimiter}). See `MemoryRateLimitStore`.
-    store: new MemoryRateLimitStore({ capacity: DEFAULT_THROTTLE_CAPACITY }),
+    // No `store`: the RateLimiter builds its own MemoryRateLimitStore at this
+    // capacity AND refill rate, so the store's eviction math cannot drift from the
+    // limiter's spend math (L-e2d3493b — the limiter owns the pairing; passing a
+    // hand-built store here would only reintroduce the drift surface). That store is
+    // memory-bounded (L-976b4302): a bucket evicts the instant it refills to full,
+    // and a hard cap sheds the closest-to-full bucket first, so an adversarial flood
+    // of attacker-chosen `login:<email>` / `totp:<userId>` keys is capped — never the
+    // throttled account. See `MemoryRateLimitStore` and the docstring above.
     capacity: DEFAULT_THROTTLE_CAPACITY,
     refillPerSecond: DEFAULT_THROTTLE_CAPACITY / (DEFAULT_THROTTLE_WINDOW_MS / 1000),
     ...(clock ? { clock } : {}),
@@ -465,13 +454,12 @@ export interface IdentityOptions {
    * or pass `false` to disable the throttle entirely (a deliberate opt-out, e.g.
    * when an outer tier already bounds attempts). ⚠️ The default is IN-MEMORY: a
    * per-process floor that resets on a serverless/edge isolate recycle and does
-   * not span a multi-node fleet. It is also a floor, NOT a hard memory cap even on
-   * a long-lived Node deploy: a *failed* attempt keeps its `login:<email>` bucket
-   * below the eviction ceiling, and since eviction is lazy on-access (no sweep) a
-   * flooded distinct key is never re-checked — an adversarial flood of distinct
-   * emails grows the store's Map monotonically, one permanent entry per email until
-   * restart (residual L-976b4302). Wire a SQL-backed limiter for a durable,
-   * fleet-wide, memory-bounded cap in production (see {@link defaultRateLimiter}).
+   * not span a multi-node fleet. Its memory is bounded even under an adversarial
+   * flood of distinct emails — a hard cap sheds the bucket closest to full first,
+   * so the throttled account is the last thing evicted, never pushed out by the
+   * flood (L-976b4302) — but the throttle itself is still per-process; wire a
+   * SQL-backed limiter for a durable, fleet-wide cap in production (see
+   * {@link defaultRateLimiter}).
    *
    * `login` checks the resolved limiter under the key `login:<normalizedEmail>`
    * before it answers, and burns one token on each *failed* attempt; once the
