@@ -807,6 +807,145 @@ describe("SmtpConnection lost-wakeup and dialogue timeout (F15)", () => {
   });
 });
 
+describe("SmtpConnection — connect + STARTTLS share the whole-dialogue deadline", () => {
+  it("fails a hung TCP dial by the deadline (not the OS TCP timeout) and closes the late socket", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // A dial that only lands at 5s — long past the 1s budget, standing in for
+      // a SYN black-hole that would otherwise block on the OS TCP timeout
+      // (~75-127s). Pre-fix, send() awaits connect() BEFORE the deadline clock
+      // even starts, so the send drags past the queue's visibility window into a
+      // duplicate send. The fix starts the clock before the dial and races the
+      // dial against it: the send fails coded on time, THEN closes the socket
+      // that opens late so a lost race never leaks a half-open connection.
+      const late = new FakeSocket(["220 ready\r\n"]);
+      const transport = createSmtpTransport({
+        host: "h",
+        port: 25,
+        secure: false,
+        timeoutMs: 1000,
+        connect: () =>
+          new Promise<SmtpSocket>((resolve) => {
+            setTimeout(() => resolve(late), 5000);
+          }),
+      });
+
+      const sending = transport.send({ ...base(), from: "f@app.com" });
+
+      // Observe via handlers attached UP FRONT: the eventual rejection always
+      // has a handler (no unhandled-rejection window), and a still-pending
+      // pre-fix send reads as `undefined` rather than hanging the test, so the
+      // RED failure is a clean assertion miss, not a suite timeout.
+      let outcome:
+        | { status: "resolved" }
+        | { status: "rejected"; error: unknown }
+        | undefined;
+      const observed = sending.then(
+        () => {
+          outcome = { status: "resolved" };
+          return outcome;
+        },
+        (error: unknown) => {
+          outcome = { status: "rejected", error };
+          return outcome;
+        },
+      );
+
+      // Let send() arm the connect-deadline timer, then blow the budget.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      // Fixed: coded timeout by the 1s deadline, NOT the 5s dial. Pre-fix: still
+      // pending on the dial, so `outcome` is undefined and this assertion is RED.
+      expect(outcome).toMatchObject({
+        status: "rejected",
+        error: { code: "MAIL_TRANSPORT_SMTP_TIMEOUT", details: { timeoutMs: 1000 } },
+      });
+
+      // Drive past the dial's late resolution: the half-open socket is closed,
+      // never leaked.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(late.ended).toBe(true);
+
+      await vi.runAllTimersAsync();
+      await observed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails a hung STARTTLS upgrade by the deadline and closes the late TLS socket", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // The plaintext dialogue gets through STARTTLS, then the TLS handshake
+      // hangs. Pre-fix, send() awaits upgrade() OUTSIDE any timer, so a hung
+      // handshake blocks indefinitely — past the queue's visibility window into
+      // a duplicate send. The fix races the upgrade against the SAME
+      // whole-dialogue deadline the dial and the reply-waits share.
+      const plain = new FakeSocket([
+        "220 ready\r\n",
+        "250 ok\r\n", // EHLO
+        "220 go-tls\r\n", // STARTTLS
+      ]);
+      const lateTls = new FakeSocket([], false);
+      const transport = createSmtpTransport({
+        host: "mail.test",
+        port: 587,
+        timeoutMs: 1000,
+        connect: async () => plain,
+        upgrade: () =>
+          new Promise<SmtpSocket>((resolve) => {
+            setTimeout(() => resolve(lateTls), 5000);
+          }),
+      });
+
+      const sending = transport.send({ ...base(), from: "f@app.com" });
+
+      let outcome:
+        | { status: "resolved" }
+        | { status: "rejected"; error: unknown }
+        | undefined;
+      const observed = sending.then(
+        () => {
+          outcome = { status: "resolved" };
+          return outcome;
+        },
+        (error: unknown) => {
+          outcome = { status: "rejected", error };
+          return outcome;
+        },
+      );
+
+      // Let connect + the plaintext EHLO/STARTTLS drain and arm the upgrade
+      // deadline timer, then blow the budget.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      // Fixed: coded timeout by the 1s deadline. Pre-fix: still pending on the
+      // hung handshake, so `outcome` is undefined — RED.
+      expect(outcome).toMatchObject({
+        status: "rejected",
+        error: { code: "MAIL_TRANSPORT_SMTP_TIMEOUT", details: { timeoutMs: 1000 } },
+      });
+      // The deadline is aggregate: the plaintext STARTTLS step completed before
+      // the handshake stalled, so the budget is spent across connect + dialogue
+      // + upgrade, not on the upgrade alone.
+      expect(plain.written.some((l) => l.startsWith("STARTTLS"))).toBe(true);
+
+      // The TLS socket that finally lands is closed, not leaked.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(lateTls.ended).toBe(true);
+
+      await vi.runAllTimersAsync();
+      await observed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("SmtpTransportError", () => {
   it("is coded and frozen", () => {
     const error = new SmtpTransportError("MAIL_TRANSPORT_SMTP_PROTOCOL", "boom", { a: 1 });

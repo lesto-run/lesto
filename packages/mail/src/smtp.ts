@@ -103,8 +103,23 @@ export function createSmtpTransport(config: SmtpTransportConfig): MailTransport 
     async send(email: RenderedEmail): Promise<void> {
       validate(email);
 
-      let socket = await connect(config.host, config.port);
-      const conn = new SmtpConnection(socket, timeoutMs);
+      // Fix the whole-dialogue deadline HERE — before the dial — then thread the
+      // same instant through connect, STARTTLS, and every reply-wait. The TCP
+      // dial and the STARTTLS handshake are the two network ops on the default
+      // send path that the read loop cannot time (neither is an SMTP reply), and
+      // left unbounded a SYN black-hole blocks on the OS TCP timeout (~75-127s)
+      // and a hung handshake never returns. Either one alone drags the send past
+      // the queue's job-visibility window (30_000ms in `@lesto/queue`), so the
+      // queue reclaims the still-"running" job and delivers it a SECOND time —
+      // the exact duplicate-send hazard this budget exists to close. One deadline
+      // spanning connect + STARTTLS + the dialogue is what guarantees the send
+      // fails and releases the worker before visibility lapses: a clean retry,
+      // never a duplicate. (Starting it before the dial is why the ctor takes the
+      // deadline rather than computing its own from the moment the socket opens.)
+      const deadline = Date.now() + timeoutMs;
+
+      let socket = await openWithinDeadline(connect(config.host, config.port), deadline, timeoutMs);
+      const conn = new SmtpConnection(socket, timeoutMs, deadline);
 
       try {
         await conn.expect(220);
@@ -112,7 +127,7 @@ export function createSmtpTransport(config: SmtpTransportConfig): MailTransport 
 
         if (secure) {
           await conn.command("STARTTLS", 220);
-          socket = await upgrade(socket, config.host);
+          socket = await openWithinDeadline(upgrade(socket, config.host), deadline, timeoutMs);
           conn.rebind(socket);
           await conn.command(`EHLO ${ehloName}`, 250);
         }
@@ -134,6 +149,69 @@ export function createSmtpTransport(config: SmtpTransportConfig): MailTransport 
       }
     },
   };
+}
+
+/**
+ * Bound a socket-opening network op — the TCP dial or the STARTTLS upgrade —
+ * against the WHOLE-dialogue deadline the read loop already enforces, using a
+ * PORTABLE promise-race rather than `socket.setTimeout`. {@link SmtpSocket}
+ * deliberately exposes no `setTimeout`: a socket opened over the Cloudflare
+ * sockets API (the edge shape this interface stays honest for) has no
+ * node-style per-socket timer, so only a race over the op's OWN promise bounds
+ * every transport the same way.
+ *
+ * Racing connect and STARTTLS against the same `deadline` is what keeps the
+ * budget honest. It is the accumulated time across connect + upgrade + the
+ * reply dialogue — not any single step — that has to stay under `timeoutMs`, so
+ * a stall ANYWHERE fails the send and releases the queue worker before the
+ * job's visibility window lapses. Bound only the reply-waits (as the first cut
+ * did) and a hung dial or handshake still outlives the window, the queue
+ * reclaims the still-"running" job, and it is delivered a second time.
+ *
+ * On a lost race the op is still in flight, so a socket it opens LATE would leak
+ * — close it the moment it lands. A late op *rejection* needs no handling here:
+ * it carries no socket, and `Promise.race` has already surfaced the timeout (and
+ * kept the losing arm from becoming an unhandled rejection).
+ */
+async function openWithinDeadline(
+  op: Promise<SmtpSocket>,
+  deadline: number,
+  timeoutMs: number,
+): Promise<SmtpSocket> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => {
+        timedOut = true;
+        reject(
+          new SmtpTransportError(
+            "MAIL_TRANSPORT_SMTP_TIMEOUT",
+            `SMTP dialogue did not complete within ${timeoutMs}ms.`,
+            { timeoutMs },
+          ),
+        );
+      },
+      // Never negative: an op that starts with the budget already spent trips on
+      // the next tick, exactly as a spent read-wait does.
+      Math.max(0, deadline - Date.now()),
+    );
+  });
+
+  const guarded = op.then((socket) => {
+    if (timedOut) {
+      socket.end();
+    }
+
+    return socket;
+  });
+
+  try {
+    return await Promise.race([guarded, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Re-validate at the transport edge: a transport may be handed a RenderedEmail
@@ -183,19 +261,23 @@ class SmtpConnection {
   private readonly timeoutMs: number;
 
   /**
-   * The absolute deadline for the ENTIRE dialogue, fixed once when the
-   * connection opens (and deliberately NOT reset on {@link rebind}, so the
-   * STARTTLS upgrade spends the same budget). Each reply-wait is capped to the
-   * time still left before this instant — see {@link readLine} for why one
-   * whole-dialogue budget, not a fresh per-step timer, is what keeps a slow
-   * server from outliving the queue's job-visibility window.
+   * The absolute deadline for the ENTIRE dialogue. It is computed in `send()`
+   * BEFORE the dial and passed in (not derived here from the moment the socket
+   * opens), so the one budget spans connect + STARTTLS + every reply-wait rather
+   * than the replies alone — see {@link openWithinDeadline} for why the two
+   * pre-dialogue network ops must share it. It is deliberately NOT reset on
+   * {@link rebind}, so the STARTTLS upgrade spends the same budget. Each
+   * reply-wait is capped to the time still left before this instant — see
+   * {@link readLine} for why one whole-dialogue budget, not a fresh per-step
+   * timer, is what keeps a slow server from outliving the queue's job-visibility
+   * window.
    */
   private readonly deadline: number;
 
-  constructor(socket: SmtpSocket, timeoutMs: number) {
+  constructor(socket: SmtpSocket, timeoutMs: number, deadline: number) {
     this.socket = socket;
     this.timeoutMs = timeoutMs;
-    this.deadline = Date.now() + timeoutMs;
+    this.deadline = deadline;
     this.bind();
   }
 
