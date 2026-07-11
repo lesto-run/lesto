@@ -101,21 +101,47 @@ export class S3Backend implements StorageBackend {
   }
 
   async list(prefix?: string): Promise<string[]> {
+    // ListObjectsV2 pages at 1000 keys and reports more with `IsTruncated` +
+    // a `NextContinuationToken`. Follow that token to exhaustion — a single
+    // request would silently return only the first page (data loss) on any
+    // bucket/prefix holding more than a thousand objects.
+    const keys: string[] = [];
+    let continuationToken: string | undefined;
+
+    do {
+      const page = await this.listPage(prefix, continuationToken);
+      keys.push(...page.keys);
+      continuationToken = page.nextToken;
+    } while (continuationToken !== undefined);
+
+    return keys;
+  }
+
+  /** Fetch and parse one `ListObjectsV2` page, resuming from a prior token. */
+  private async listPage(
+    prefix: string | undefined,
+    continuationToken: string | undefined,
+  ): Promise<ListPage> {
     const url = new URL(this.endpoint);
     url.pathname = `/${encodeRfc3986(this.options.bucket)}`;
 
     // Build the query with the SAME strict encoding the signer canonicalizes
     // under — `URLSearchParams` would serialize a space as `+` and leave `*`/`~`
     // alone, diverging from the signature and tripping `SignatureDoesNotMatch`.
+    // The continuation token is opaque base64 (`+/=`), so it too must ride under
+    // the strict encoder to match the signature.
     const query = ["list-type=2"];
     if (prefix !== undefined) query.push(`prefix=${encodeRfc3986(prefix)}`);
+    if (continuationToken !== undefined) {
+      query.push(`continuation-token=${encodeRfc3986(continuationToken)}`);
+    }
     url.search = query.join("&");
 
     const response = await this.signedFetch("GET", url);
 
     await this.expectOk(response, "list", prefix ?? "");
 
-    return parseListKeys(await response.text());
+    return parseListPage(await response.text());
   }
 
   async url(key: string, options?: UrlOptions): Promise<string> {
@@ -235,6 +261,35 @@ export class S3Backend implements StorageBackend {
       { key, operation, status: response.status, detail },
     );
   }
+}
+
+/** One parsed `ListObjectsV2` page: its keys and the token for the next page. */
+interface ListPage {
+  readonly keys: string[];
+  /** The continuation token to resume from, or `undefined` on the last page. */
+  readonly nextToken: string | undefined;
+}
+
+/** Parse one `ListObjectsV2` XML page into its keys and continuation token. */
+function parseListPage(xml: string): ListPage {
+  const keys = parseListKeys(xml);
+
+  // S3 sends `<IsTruncated>true</IsTruncated>` only when more pages remain; a
+  // false (or absent) flag means this is the last page and there is no token.
+  if (!/<IsTruncated>true<\/IsTruncated>/.test(xml)) return { keys, nextToken: undefined };
+
+  const match = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(xml);
+  // A truncated page always carries the token for the next; its absence is a
+  // malformed response we refuse loudly rather than silently drop the rest.
+  if (match === null) {
+    throw new StorageError(
+      "STORAGE_BACKEND_ERROR",
+      "S3 list returned a truncated page without a continuation token.",
+      { operation: "list", truncated: true },
+    );
+  }
+
+  return { keys, nextToken: decodeXmlEntities(match[1]!) };
 }
 
 /** Pull `<Key>` values out of an S3 `ListObjectsV2` XML response. */

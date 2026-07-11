@@ -126,6 +126,62 @@ describe("S3Backend put/get/delete/exists/list", () => {
   });
 });
 
+describe("S3Backend list() pagination", () => {
+  it("follows the continuation token across pages and returns every key", async () => {
+    // Page 1 is truncated and hands back an opaque base64 token (`/`, `+`, `=`);
+    // page 2 closes the run with `IsTruncated>false` and no token.
+    const page1 =
+      "<ListBucketResult><IsTruncated>true</IsTruncated>" +
+      "<NextContinuationToken>tok/N+xt=</NextContinuationToken>" +
+      "<Contents><Key>a/1</Key></Contents>" +
+      "<Contents><Key>a/2</Key></Contents></ListBucketResult>";
+    const page2 =
+      "<ListBucketResult><IsTruncated>false</IsTruncated>" +
+      "<Contents><Key>a/3</Key></Contents></ListBucketResult>";
+
+    const { backend, calls } = makeBackend((call) =>
+      call.url.includes("continuation-token")
+        ? new Response(page2, { status: 200 })
+        : new Response(page1, { status: 200 }),
+    );
+
+    const keys = await backend.list("a/");
+
+    // Every key across both pages — not just the first 1000-key page.
+    expect(keys).toEqual(["a/1", "a/2", "a/3"]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.url).not.toContain("continuation-token");
+    // The token resumes page 2, strict-encoded (`/`→%2F, `+`→%2B, `=`→%3D) so it
+    // matches the signature; the prefix rides along on every page.
+    expect(calls[1]!.url).toContain("continuation-token=tok%2FN%2Bxt%3D");
+    expect(calls[1]!.url).toContain("prefix=a%2F");
+  });
+
+  it("stops after one request when the first page is not truncated", async () => {
+    const xml =
+      "<ListBucketResult><IsTruncated>false</IsTruncated>" +
+      "<Contents><Key>only.txt</Key></Contents></ListBucketResult>";
+    const { backend, calls } = makeBackend(() => new Response(xml, { status: 200 }));
+
+    expect(await backend.list()).toEqual(["only.txt"]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("refuses a truncated page that omits the continuation token", async () => {
+    // `IsTruncated>true` with no `NextContinuationToken` is malformed — dropping
+    // the remaining pages would be silent data loss, so we fail loud instead.
+    const xml =
+      "<ListBucketResult><IsTruncated>true</IsTruncated>" +
+      "<Contents><Key>a/1</Key></Contents></ListBucketResult>";
+    const { backend } = makeBackend(() => new Response(xml, { status: 200 }));
+
+    await expect(backend.list()).rejects.toMatchObject({
+      code: "STORAGE_BACKEND_ERROR",
+      details: { operation: "list", truncated: true },
+    });
+  });
+});
+
 describe("S3Backend error surfacing", () => {
   it("turns a non-2xx put into STORAGE_BACKEND_ERROR carrying the status", async () => {
     const { backend } = makeBackend(() => new Response("AccessDenied", { status: 403 }));
