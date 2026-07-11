@@ -187,19 +187,30 @@ describe("rateLimit middleware", () => {
     expect(second.status).toBe(429);
   });
 
-  it("accepts and threads onSaturated into the auto-built per-IP store", async () => {
-    // With no injected limiter, rateLimit builds a RateLimiter that routes
-    // onSaturated into its per-IP MemoryRateLimitStore — the seam an operator uses
-    // to observe the per-IP cap shedding buckets under a distinct-IP flood. That it
-    // actually FIRES through the limiter→store path is proven end-to-end in the
-    // limiter suite; here we cover that the middleware accepts + wires the option
-    // (no injected store to carry its own) and still serves normally.
+  it("threads onSaturated into the auto-built per-IP store — fires under a distinct-key flood", async () => {
+    // With no injected limiter, rateLimit builds a RateLimiter that must ROUTE
+    // onSaturated into its per-IP MemoryRateLimitStore — the seam the kernel per-IP
+    // default relies on. Drive a distinct-key flood one past the default 10k cap so
+    // the store actually sheds a throttled bucket and fires the signal END-TO-END
+    // through the middleware→limiter→store path. A near-zero refill means nothing
+    // refills mid-loop, so every key is stored below the ceiling and the cap engages.
+    // If the middleware DROPPED onSaturated (delete its threading spread), the store
+    // falls back to console.warn and this spy never fires — so this pins the wiring,
+    // not merely a 200.
     const onSaturated = vi.fn();
-    const middleware = rateLimit({ capacity: 2, refillPerSecond: 1, onSaturated });
+    let n = 0;
+    const middleware = rateLimit({
+      capacity: 2,
+      refillPerSecond: 0.0001,
+      onSaturated,
+      keyFor: () => `ip:${n++}`,
+    });
 
-    const response = await middleware(request, async () => okResponse);
+    for (let i = 0; i <= 10_000; i++) {
+      await middleware(request, async () => okResponse); // 10_001 distinct keys → cap engages
+    }
 
-    expect(response.status).toBe(200);
+    expect(onSaturated).toHaveBeenCalledTimes(1); // warned once, through the middleware seam
   });
 });
 

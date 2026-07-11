@@ -30,6 +30,12 @@ export interface RateLimiterOptions {
    * throttled buckets under a flood (see {@link MemoryRateLimitStoreOptions.onSaturated}).
    * Ignored when a `store` is injected (that store carries its own). Defaults, via
    * the store, to a `console.warn` with a stable code.
+   *
+   * Synchronous by design (unlike the awaited, request-context `onDenied`): it
+   * fires deep inside the store's atomic read-modify-write, which `check` does not
+   * await, so an async hook could neither be awaited (it would break the "nothing
+   * interleaves" store contract) nor have its promise handled. Route to an async
+   * sink by enqueuing, not awaiting.
    */
   readonly onSaturated?: () => void;
 
@@ -115,6 +121,19 @@ export class RateLimiter {
         // forbids passing an explicit `undefined` for an optional prop).
         ...(options.onSaturated ? { onSaturated: options.onSaturated } : {}),
       });
+  }
+
+  /**
+   * How many actively-throttled buckets the backing store has shed under its hard
+   * cap since construction — the continuous saturation signal, reachable *through
+   * the limiter* so the common caller (who let it build its own store) can poll it
+   * without a handle to the store. `undefined` when the store is not an in-memory
+   * one: a SQL/Redis store accretes rows reclaimed by an explicit sweep, so it has
+   * no in-memory cap to saturate. Reads the count only — the store itself stays
+   * encapsulated, so this cannot reopen the capacity/refill drift the ctor guards.
+   */
+  get saturationEvictions(): number | undefined {
+    return this.store instanceof MemoryRateLimitStore ? this.store.saturationEvictions : undefined;
   }
 
   async check(key: string, cost = 1): Promise<RateLimitResult> {

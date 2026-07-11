@@ -585,6 +585,20 @@ describe("MemoryRateLimitStore saturation signal", () => {
     for (let i = 0; i <= 10_000; i++) await limiter.check(`ip:${i}`); // 10_001 distinct keys
 
     expect(calls).toBe(1); // the auto-built store's cap engaged and surfaced through the limiter
+    // …and the continuous counter is reachable THROUGH the limiter (no store handle),
+    // so a caller on the auto-built path can still poll saturation — 1 eviction so far.
+    expect(limiter.saturationEvictions).toBe(1);
+  });
+
+  it("reports saturationEvictions as undefined when the store is not an in-memory one", async () => {
+    // A SQL/Redis-shaped custom store has no in-memory cap to saturate, so the
+    // accessor is undefined rather than a misleading 0.
+    const custom: RateLimitStore = { update: async (_key, mutate) => mutate(undefined) };
+    const limiter = new RateLimiter({ store: custom, capacity: 5, refillPerSecond: 1, clock });
+
+    await limiter.check("user");
+
+    expect(limiter.saturationEvictions).toBeUndefined();
   });
 });
 
