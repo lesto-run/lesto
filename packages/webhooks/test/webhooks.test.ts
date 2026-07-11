@@ -543,6 +543,26 @@ describe("byte-exact Uint8Array bodies (binary-webhook HMAC)", () => {
     expect(result).toEqual({ verified: true });
   });
 
+  it("extracts the event from a valid-UTF-8 JSON Uint8Array body (the decode-then-extract arm)", () => {
+    // The binary tests above never carry a parseable envelope, so the success
+    // path that decodes bytes -> UTF-8 -> JSON to surface `event` had no witness.
+    // A valid-UTF-8 JSON body IS byte-exact, so verification AND event extraction
+    // both run over the raw bytes.
+    const ts = 1_700_000_000_000;
+    const jsonBody = new TextEncoder().encode('{"event":"order.created","data":{"id":7}}');
+
+    const prefix = Buffer.from(`${ts}.`, "utf8");
+    const signedBytes = new Uint8Array(prefix.length + jsonBody.length);
+    signedBytes.set(prefix, 0);
+    signedBytes.set(jsonBody, prefix.length);
+    const signature = createHmac("sha256", secret).update(signedBytes).digest("hex");
+
+    const headers = { [SIGNATURE_HEADER]: signature, [TIMESTAMP_HEADER]: String(ts) };
+    const result = verifyRequest({ body: jsonBody, headers }, { secret, now: ts });
+
+    expect(result).toEqual({ verified: true, event: "order.created" });
+  });
+
   it("verifyRequest rejects a binary body when the signature was computed over DIFFERENT bytes", () => {
     const ts = 1_700_000_000_000;
     const tampered = Uint8Array.from(body);

@@ -112,8 +112,10 @@ export function buildWebhooksApp(deps: {
       return c.json({ orderId: body.orderId, enqueued: jobId }, 202);
     })
     .post("/incoming", (c) => {
-      // Read the RAW bytes — `c.req.rawBody`, never the JSON-decoded `c.req.body`
-      // — so `verifyRequest` hashes exactly what the deliverer signed. Every
+      // Read the RAW body — never the JSON-decoded `c.req.body` — so
+      // `verifyRequest` hashes exactly what the deliverer signed. This UTF-8 JSON
+      // payload round-trips, so `rawBody` (the string) is byte-exact here; for a
+      // binary webhook reach for the byte-exact `c.req.rawBytes` (Uint8Array). Every
       // transport (in-process `handle`, `@lesto/runtime`'s node server,
       // `@lesto/cloudflare`'s edge decode) populates it; its absence means the
       // request carried no body at all.

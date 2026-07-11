@@ -71,28 +71,31 @@ recomputes the HMAC in constant time, and — on success — extracts `event` fr
 the **signed** body (never the unsigned `x-lesto-event` header, which a forger
 can set to anything).
 
-Verify over the **raw bytes**: `c.req.rawBody` is the exact undecoded request
-body every Lesto transport captures. Never verify `c.req.body` — it is the
-decoded value, and re-stringifying it can change whitespace or key order and
+Verify over the **raw bytes**: `c.req.rawBytes` is the exact undecoded request
+body (a `Uint8Array`) every Lesto transport captures, so the HMAC is byte-exact
+even for a non-UTF-8 body (protobuf, an image, a multipart upload). `c.req.rawBody`
+is the UTF-8 *string* view of the same bytes — byte-exact only for a UTF-8 body,
+so prefer `rawBytes` for signature verification. Never verify `c.req.body` — it is
+the decoded value, and re-stringifying it can change whitespace or key order and
 break the signature.
 
 ```ts
 import { verifyRequest } from "@lesto/webhooks";
 
 app.post("/hook", (c) => {
-  const rawBody = c.req.rawBody; // the EXACT signed bytes, never c.req.body
-  if (rawBody === undefined) {
+  const rawBytes = c.req.rawBytes; // the EXACT signed bytes (Uint8Array), never c.req.body
+  if (rawBytes === undefined) {
     return c.json({ error: "raw body required" }, 400);
   }
 
-  const result = verifyRequest({ body: rawBody, headers: c.req.headers }, { secret });
+  const result = verifyRequest({ body: rawBytes, headers: c.req.headers }, { secret });
 
   if (!result.verified) {
     return c.json({ verified: false, reason: result.reason }, 401);
   }
 
   // result.event is set only when the signed body is an { event, data } envelope.
-  // ...handle the verified payload (JSON.parse(rawBody))
+  // ...handle the verified payload (for a UTF-8 JSON body, JSON.parse(c.req.rawBody)).
 });
 ```
 
@@ -157,8 +160,10 @@ stays the portable global `fetch` so the Workers edge build is unaffected.
 ## Notes and gotchas
 
 - **Verify the raw bytes.** Always hand `verifyRequest` the exact bytes from
-  `c.req.rawBody`, never the decoded `c.req.body` — re-serialization can change
-  whitespace or key order and break the signature.
+  `c.req.rawBytes` (a `Uint8Array`, byte-exact for any body), never the decoded
+  `c.req.body` — re-serialization can change whitespace or key order and break the
+  signature. `c.req.rawBody` (the UTF-8 string) is byte-exact only for a UTF-8
+  body, so it breaks HMAC on a binary webhook; reach for `rawBytes`.
 - **Trust the signed body, not the headers.** `verifyRequest` reports `event`
   from the signed `{ event, data }` payload; the `x-lesto-event` header is
   unsigned convenience metadata. Branch on `result.event`.
