@@ -180,6 +180,24 @@ describe("S3Backend list() pagination", () => {
       details: { operation: "list", truncated: true },
     });
   });
+
+  it("refuses a truncated page with an EMPTY continuation token instead of looping forever", async () => {
+    // `IsTruncated>true` with an empty `<NextContinuationToken></…>` is malformed:
+    // resuming from an empty token re-fetches page 1, an infinite loop. The guard
+    // must treat empty like absent and fail loud (not spin).
+    const xml =
+      "<ListBucketResult><IsTruncated>true</IsTruncated>" +
+      "<NextContinuationToken></NextContinuationToken>" +
+      "<Contents><Key>a/1</Key></Contents></ListBucketResult>";
+    const { backend, calls } = makeBackend(() => new Response(xml, { status: 200 }));
+
+    await expect(backend.list()).rejects.toMatchObject({
+      code: "STORAGE_BACKEND_ERROR",
+      details: { operation: "list", truncated: true },
+    });
+    // It refused on the first page — it did NOT re-request in a loop.
+    expect(calls).toHaveLength(1);
+  });
 });
 
 describe("S3Backend error surfacing", () => {

@@ -61,6 +61,9 @@ export class S3Backend implements StorageBackend {
     this.now = options.now ?? (() => new Date());
   }
 
+  // DEFERRED (tracked in L-35aaf8da): put/get are full-`Buffer` — no streaming,
+  // no multipart upload, and `put` sends no Content-Type. The review recommends
+  // adopting aws4fetch behind this StorageBackend facade to close these together.
   async put(key: string, data: Buffer): Promise<void> {
     const body = new Uint8Array(data);
     const response = await this.send("PUT", key, body, await hashHex(body));
@@ -279,9 +282,12 @@ function parseListPage(xml: string): ListPage {
   if (!/<IsTruncated>true<\/IsTruncated>/.test(xml)) return { keys, nextToken: undefined };
 
   const match = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(xml);
-  // A truncated page always carries the token for the next; its absence is a
-  // malformed response we refuse loudly rather than silently drop the rest.
-  if (match === null) {
+  // A truncated page always carries a NON-EMPTY token for the next page. An
+  // absent OR empty token is a malformed response we refuse loudly rather than
+  // silently drop the rest — and, critically, an empty token would otherwise
+  // resume from `continuation-token=`, which most servers answer with page 1
+  // again: an infinite loop that never terminates. Guard both.
+  if (match === null || match[1] === "") {
     throw new StorageError(
       "STORAGE_BACKEND_ERROR",
       "S3 list returned a truncated page without a continuation token.",
@@ -289,7 +295,7 @@ function parseListPage(xml: string): ListPage {
     );
   }
 
-  return { keys, nextToken: decodeXmlEntities(match[1]!) };
+  return { keys, nextToken: decodeXmlEntities(match[1]) };
 }
 
 /** Pull `<Key>` values out of an S3 `ListObjectsV2` XML response. */
