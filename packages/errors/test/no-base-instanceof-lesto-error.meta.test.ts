@@ -66,11 +66,10 @@ function lintSource(source: string): LintOutcome {
   const fixture = join(dir, "fixture.ts");
   writeFileSync(fixture, source);
 
-  const result = spawnSync(
-    process.execPath,
-    [oxlintBin, "--config", rootConfig, fixture],
-    { cwd: repoRoot, encoding: "utf8" },
-  );
+  const result = spawnSync(process.execPath, [oxlintBin, "--config", rootConfig, fixture], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
 
   if (result.error) throw result.error;
 
