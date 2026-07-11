@@ -7,7 +7,10 @@
 
 import { LestoError } from "@lesto/errors";
 
-export type RateLimitErrorCode = "RATELIMIT_STORE_CONFLICT" | "RATELIMIT_STORE_CAPACITY_MISMATCH";
+export type RateLimitErrorCode =
+  | "RATELIMIT_STORE_CONFLICT"
+  | "RATELIMIT_STORE_CAPACITY_MISMATCH"
+  | "RATELIMIT_STORE_REFILL_MISMATCH";
 
 /** Anything the rate-limit store can refuse to do. */
 export class RateLimitError extends LestoError<RateLimitErrorCode> {

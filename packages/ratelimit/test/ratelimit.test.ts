@@ -358,3 +358,168 @@ describe("RateLimiter store-capacity ownership", () => {
     expect((await limiter.check("login:ghost", 0)).remaining).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// MemoryRateLimitStore hard cap (maxBuckets) — L-976b4302
+//
+// Eviction-on-refill bounds the BENIGN/idle case, but not an adversarial one: a
+// cost-1 request (a failed login, every per-IP request) drains its bucket BELOW
+// full, so a flood of distinct keys accretes below-ceiling buckets that
+// eviction-on-refill will not drop until they slowly refill — long enough to
+// exhaust memory. The hard `maxBuckets` cap closes that: over budget, the store
+// evicts the bucket CLOSEST TO FULL (least-throttled → safest), so a targeted,
+// heavily-throttled bucket is the LAST evicted and a flood cannot push it out.
+// These tests defend the bound AND that closest-to-full invariant — for both the
+// refill-aware store and the refill-unaware fallback.
+// ---------------------------------------------------------------------------
+
+describe("MemoryRateLimitStore hard cap (maxBuckets)", () => {
+  it("rejects a non-positive-integer maxBuckets at construction", () => {
+    // A NaN/Infinity/zero/fractional cap has no well-defined eviction and would
+    // silently unbound the store — fail LOUD at construction instead.
+    expect(() => new MemoryRateLimitStore({ maxBuckets: 0 })).toThrow();
+    expect(() => new MemoryRateLimitStore({ maxBuckets: -1 })).toThrow();
+    expect(() => new MemoryRateLimitStore({ maxBuckets: 1.5 })).toThrow();
+    expect(() => new MemoryRateLimitStore({ maxBuckets: Number.NaN })).toThrow();
+    expect(() => new MemoryRateLimitStore({ maxBuckets: Number.POSITIVE_INFINITY })).toThrow();
+
+    // A positive integer is accepted.
+    expect(() => new MemoryRateLimitStore({ maxBuckets: 1 })).not.toThrow();
+  });
+
+  it("bounds the Map under a below-ceiling flood eviction-on-refill cannot reach", async () => {
+    // Each key is hit ONCE at cost 1: first-seen (full 5) → spend 1 → stored at 4,
+    // BELOW the ceiling, so eviction-on-refill never fires. Without the hard cap the
+    // Map would grow to 100; with it, it never exceeds maxBuckets.
+    const bounded = new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, maxBuckets: 4 });
+    const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
+
+    for (let i = 0; i < 100; i++) {
+      expect((await limiter.check(`ip:${i}`)).allowed).toBe(true); // 5 -> 4, never full
+    }
+
+    expect(bounded.size).toBe(4);
+  });
+
+  it("evicts closest-to-full first, so a flood cannot push out a throttled bucket", async () => {
+    const bounded = new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, maxBuckets: 3 });
+    const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
+
+    // Drain the victim to empty — actively throttled, the farthest thing from full.
+    for (let i = 0; i < 5; i++) await limiter.check("login:victim"); // 5 -> 0
+    expect((await limiter.check("login:victim")).allowed).toBe(false); // throttled
+
+    // Flood distinct keys, each stored near-full (4). The clock is frozen, so nothing
+    // refills: every overflow must evict, and closest-to-full always picks a flood
+    // bucket (4) over the victim (0). The victim is never the eviction target.
+    for (let i = 0; i < 100; i++) {
+      await limiter.check(`login:flood-${i}`); // 5 -> 4
+    }
+
+    expect(bounded.size).toBe(3); // bounded
+
+    // The victim survived AND is still throttled — the flood bought nothing. Were it
+    // evicted, it would re-materialize full and this check would ALLOW.
+    expect((await limiter.check("login:victim")).allowed).toBe(false);
+  });
+
+  it("lazily sweeps buckets that refilled to full while idle, in bulk, on overflow", async () => {
+    const bounded = new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, maxBuckets: 3 });
+    const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
+
+    // Three keys each drained to 4 and then left idle — persisted, below the ceiling,
+    // so eviction-on-refill never fired for them.
+    await limiter.check("a"); // 5 -> 4
+    await limiter.check("b");
+    await limiter.check("c");
+    expect(bounded.size).toBe(3);
+
+    // Idle a full second: a, b, c all refill to the ceiling (4 -> 5), but nothing
+    // RE-checks them, so they linger — the exact leak the sweep exists to reclaim.
+    advance(1000);
+
+    // A 4th key tips the store over budget. The overflow sweep computes each bucket's
+    // fullness AS OF NOW: a, b, c read 5 (full) and are dropped losslessly, leaving
+    // only the freshly-written d. Reclaimed in one pass, not one-at-a-time.
+    await limiter.check("d"); // 5 -> 4
+    expect(bounded.size).toBe(1);
+  });
+
+  it("bounds and protects the throttled bucket even with NO refill rate (the coarse fallback)", async () => {
+    // capacity but no refillPerSecond → the store cannot age buckets, so it ranks by
+    // stored tokens instead. Still a hard bound, and still monotone: a drained bucket
+    // stores fewer tokens than a fresh one, so the throttled victim is protected.
+    const bounded = new MemoryRateLimitStore({ capacity: 5, maxBuckets: 3 });
+    const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
+
+    for (let i = 0; i < 5; i++) await limiter.check("login:victim"); // 5 -> 0
+    expect((await limiter.check("login:victim")).allowed).toBe(false);
+
+    for (let i = 0; i < 50; i++) {
+      await limiter.check(`login:flood-${i}`); // 5 -> 4
+    }
+
+    expect(bounded.size).toBe(3); // bounded by stored-token rank
+    expect((await limiter.check("login:victim")).allowed).toBe(false); // victim protected
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RateLimiter store↔limiter refill-rate pairing — L-976b4302
+//
+// The store ages idle buckets at ITS refillPerSecond and the limiter refills at
+// ITS own: a drift lets the store think a still-throttled bucket has refilled to
+// full and evict it (a bypass), or never age buckets it should. Same silent-drift
+// hazard as the capacity pairing (L-e2d3493b) — guarded the same LOUD way.
+// ---------------------------------------------------------------------------
+
+describe("RateLimiter store-refill pairing", () => {
+  it("refuses an injected MemoryRateLimitStore whose refillPerSecond differs from the limiter's", () => {
+    const construct = (): RateLimiter =>
+      new RateLimiter({
+        store: new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 2 }),
+        capacity: 5,
+        refillPerSecond: 1,
+        clock,
+      });
+
+    expect(construct).toThrow(RateLimitError);
+
+    let thrown: unknown;
+    try {
+      construct();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as RateLimitError).code).toBe("RATELIMIT_STORE_REFILL_MISMATCH");
+    expect((thrown as RateLimitError).details).toMatchObject({
+      storeRefillPerSecond: 2,
+      limiterRefillPerSecond: 1,
+    });
+  });
+
+  it("accepts an injected store whose capacity AND refillPerSecond both match", () => {
+    expect(
+      () =>
+        new RateLimiter({
+          store: new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1 }),
+          capacity: 5,
+          refillPerSecond: 1,
+          clock,
+        }),
+    ).not.toThrow();
+  });
+
+  it("leaves a store with a capacity but no refillPerSecond alone — nothing to drift", () => {
+    expect(
+      () =>
+        new RateLimiter({
+          store: new MemoryRateLimitStore({ capacity: 5 }),
+          capacity: 5,
+          refillPerSecond: 1,
+          clock,
+        }),
+    ).not.toThrow();
+  });
+});

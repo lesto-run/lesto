@@ -17,7 +17,6 @@ import { currentContext } from "@lesto/web";
 import type { LestoRequest, Middleware } from "@lesto/web";
 
 import { RateLimiter } from "./limiter";
-import { MemoryRateLimitStore } from "./store";
 
 const TOO_MANY_REQUESTS = 429;
 const MS_PER_SECOND = 1000;
@@ -182,19 +181,20 @@ export function rateLimit(options: RateLimitOptions): Middleware {
   // store. Either way the limiter is built once, so its buckets outlive a single
   // request (the whole point of a bucket).
   //
-  // The store is DELIBERATELY uncapped (we pass it explicitly rather than let the
-  // RateLimiter default a capacity-matched one). Handing this per-IP store a
-  // `capacity` would be false confidence: eviction-on-full only ever drops a
-  // bucket the moment it sits AT the ceiling, but this middleware spends cost 1 on
-  // every request, so an IP's bucket is always stored below the ceiling and never
-  // qualifies — a cap here would look like a memory bound while bounding nothing.
-  // (Eviction earns its keep on identity's cost-0 *peek* path, where a full bucket
-  // does get written.) The real per-IP memory bound is a separate tracked task
-  // (L-976b4302); until then this store is honestly unbounded.
+  // We let the RateLimiter construct the store: it builds a MemoryRateLimitStore
+  // at this middleware's own capacity and refill rate, which (L-976b4302) is
+  // bounded by a hard `maxBuckets` cap and, over budget, evicts the bucket closest
+  // to full first. That matters most HERE: this per-IP store is keyed by the client
+  // IP, so a flood of distinct (or spoofed) IPs would otherwise grow it without
+  // bound. Eviction-on-refill alone cannot bound it — the middleware spends cost 1
+  // on every request, so an IP's bucket is stored below the ceiling and only
+  // refills back to full while idle — but the hard cap does, and closest-to-full
+  // order means a targeted IP actively being throttled is the LAST thing evicted.
+  // Handing the limiter a store ourselves would only risk the capacity/rate drift
+  // it now guards against.
   const limiter =
     options.limiter ??
     new RateLimiter({
-      store: new MemoryRateLimitStore(),
       capacity: options.capacity,
       refillPerSecond: options.refillPerSecond,
     });

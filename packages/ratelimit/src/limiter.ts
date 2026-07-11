@@ -1,4 +1,5 @@
 import { RateLimitError } from "./errors";
+import { refilledTokens } from "./refill";
 import { MemoryRateLimitStore } from "./store";
 import { systemClock } from "./time";
 
@@ -7,13 +8,13 @@ import type { BucketState, Clock, RateLimitResult, RateLimitStore } from "./type
 export interface RateLimiterOptions {
   /**
    * Where buckets live between checks. OPTIONAL: omit it and the limiter builds
-   * its own {@link MemoryRateLimitStore} at *its own* `capacity`, so the store's
-   * eviction ceiling can never drift from the limiter's spend ceiling — the
-   * common path is drift-proof by construction. Inject one to share a store
-   * across limiters or to back the limiter with SQL/Redis. An injected
-   * {@link MemoryRateLimitStore} whose `capacity` is set MUST equal `capacity`
-   * below; the limiter refuses a mismatch LOUDLY at construction rather than let
-   * eviction misfire in production (see the ctor).
+   * its own {@link MemoryRateLimitStore} at *its own* `capacity` and
+   * `refillPerSecond`, so the store's eviction math can never drift from the
+   * limiter's — the common path is drift-proof by construction. Inject one to
+   * share a store across limiters or to back the limiter with SQL/Redis. An
+   * injected {@link MemoryRateLimitStore} whose `capacity` or `refillPerSecond`
+   * is set MUST equal the values below; the limiter refuses a mismatch LOUDLY at
+   * construction rather than let eviction misfire in production (see the ctor).
    */
   readonly store?: RateLimitStore;
 
@@ -60,26 +61,43 @@ export class RateLimiter {
     //     throttled bucket whose tokens sit in [storeCap, limiterCap) reads as
     //     "full", is evicted, and re-materializes full on the next check — the
     //     limiter silently WEAKENED / bypassed.
-    // So, with no store injected, we build one at our OWN capacity (the common
-    // path cannot drift); and an INJECTED MemoryRateLimitStore whose capacity is
-    // set must MATCH ours, or we refuse LOUD with a coded error at construction
-    // rather than degrade unnoticed. A store with no capacity (uncapped, or a
-    // SQL/Redis store that self-eviction does not apply to) has nothing to drift,
-    // so it is left alone.
-    if (
-      options.store instanceof MemoryRateLimitStore &&
-      options.store.capacity !== undefined &&
-      options.store.capacity !== this.capacity
-    ) {
-      throw new RateLimitError(
-        "RATELIMIT_STORE_CAPACITY_MISMATCH",
-        `The injected MemoryRateLimitStore's capacity (${options.store.capacity}) must equal the ` +
-          `RateLimiter's capacity (${this.capacity}) — a mismatch breaks self-eviction silently.`,
-        { storeCapacity: options.store.capacity, limiterCapacity: this.capacity },
-      );
+    // So, with no store injected, we build one at our OWN capacity AND refill rate
+    // (the common path cannot drift); and an INJECTED MemoryRateLimitStore whose
+    // capacity or rate is set must MATCH ours, or we refuse LOUD with a coded error
+    // at construction rather than degrade unnoticed. Both feed the store's fullness
+    // math (capacity is the eviction ceiling; the rate ages idle buckets), so both
+    // must agree. A store with neither set (uncapped, or a SQL/Redis store that
+    // self-eviction does not apply to) has nothing to drift, so it is left alone.
+    if (options.store instanceof MemoryRateLimitStore) {
+      if (options.store.capacity !== undefined && options.store.capacity !== this.capacity) {
+        throw new RateLimitError(
+          "RATELIMIT_STORE_CAPACITY_MISMATCH",
+          `The injected MemoryRateLimitStore's capacity (${options.store.capacity}) must equal the ` +
+            `RateLimiter's capacity (${this.capacity}) — a mismatch breaks self-eviction silently.`,
+          { storeCapacity: options.store.capacity, limiterCapacity: this.capacity },
+        );
+      }
+
+      if (
+        options.store.refillPerSecond !== undefined &&
+        options.store.refillPerSecond !== this.refillPerSecond
+      ) {
+        throw new RateLimitError(
+          "RATELIMIT_STORE_REFILL_MISMATCH",
+          `The injected MemoryRateLimitStore's refillPerSecond (${options.store.refillPerSecond}) ` +
+            `must equal the RateLimiter's refillPerSecond (${this.refillPerSecond}) — a mismatch ages ` +
+            `buckets at the wrong rate and evicts actively-throttled ones.`,
+          {
+            storeRefillPerSecond: options.store.refillPerSecond,
+            limiterRefillPerSecond: this.refillPerSecond,
+          },
+        );
+      }
     }
 
-    this.store = options.store ?? new MemoryRateLimitStore({ capacity: this.capacity });
+    this.store =
+      options.store ??
+      new MemoryRateLimitStore({ capacity: this.capacity, refillPerSecond: this.refillPerSecond });
   }
 
   async check(key: string, cost = 1): Promise<RateLimitResult> {
@@ -123,9 +141,8 @@ export class RateLimiter {
   private refilled(existing: BucketState | undefined, now: number): number {
     if (existing === undefined) return this.capacity;
 
-    const elapsedSeconds = (now - existing.updatedAt) / MS_PER_SECOND;
-    const accrued = elapsedSeconds * this.refillPerSecond;
-
-    return Math.min(this.capacity, existing.tokens + accrued);
+    // The same formula the store uses to age buckets — shared so the two can never
+    // disagree on how full a bucket is (see `refilledTokens`).
+    return refilledTokens(existing, now, this.capacity, this.refillPerSecond);
   }
 }
