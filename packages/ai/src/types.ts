@@ -84,8 +84,14 @@ export interface StreamDelta {
    * chunks — which the shared stream engine accumulates and hands back here as ONE complete
    * {@link ToolCall} once the stream drains, so a tool-driven consumer reads it without reassembling
    * fragments itself and a text-only consumer simply ignores it. Present ONLY on the tool-call
-   * deltas (which carry `text: ""`), never on a text delta; the same calls also ride on
-   * {@link StreamFinal.toolCalls} for a consumer that only reads the return value.
+   * deltas (which carry `text: ""`), never on a text delta.
+   *
+   * ⚠️ These are the SAME calls that ride on {@link StreamFinal.toolCalls} — the inline delta and
+   * the final accounting are two VIEWS of one set, emitted at the same moment (a call surfaces only
+   * once its argument JSON is complete, i.e. at drain), not two independent occurrences. Read
+   * exactly ONE channel — the inline `toolCall` deltas (for incremental display) OR
+   * `final.toolCalls` (the return value) — never both, or every call is double-counted. (Which
+   * channel a streamed `runAgent` standardizes on is settled with that work — see L-e28345df.)
    */
   readonly toolCall?: ToolCall;
 }
@@ -112,6 +118,9 @@ export interface StreamFinal {
    * is byte-unchanged. This is the field a future streamed `runAgent` will read to drive the tool
    * loop off a streamed turn (finding F5); the current `runAgent` still uses non-streamed
    * `generateText`, so this field is produced and exposed but not yet consumed internally.
+   *
+   * ⚠️ These are the SAME calls surfaced inline on the {@link StreamDelta.toolCall} deltas, not a
+   * separate set — read ONE channel or the other, never both (see that field's note).
    */
   readonly toolCalls?: readonly ToolCall[];
 }
