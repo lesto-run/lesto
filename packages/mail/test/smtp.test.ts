@@ -566,6 +566,61 @@ class PrebufferedSocket implements SmtpSocket {
   }
 }
 
+/**
+ * A fake SMTP server that always answers, but SLOWLY: it delivers each scripted
+ * reply `stepDelayMs` after the event that triggers it (the banner one delay
+ * after a reader attaches; each command's reply one delay after that command is
+ * written). No step is ever dead — every step is merely slow — so this is the
+ * greylisting / tarpit profile where the TOTAL time, not any single step, is
+ * what blows the whole-dialogue budget. Delivery rides `setTimeout`, so a test
+ * on fake timers drives it deterministically with `vi.advanceTimersByTimeAsync`.
+ */
+class TarpitSocket implements SmtpSocket {
+  written: string[] = [];
+
+  ended = false;
+
+  private dataListener: ((chunk: string) => void) | undefined;
+
+  private queue: string[];
+
+  private readonly stepDelayMs: number;
+
+  constructor(replies: string[], stepDelayMs: number) {
+    this.queue = [...replies];
+    this.stepDelayMs = stepDelayMs;
+  }
+
+  write(data: string): void {
+    this.written.push(data);
+    this.scheduleNext();
+  }
+
+  on(event: "data" | "error" | "close", listener: (arg: never) => void): void {
+    if (event === "data") {
+      this.dataListener = listener as (chunk: string) => void;
+      // The banner is the server's first "step": delivered after one delay.
+      this.scheduleNext();
+    }
+  }
+
+  removeAllListeners(): void {
+    this.dataListener = undefined;
+  }
+
+  end(): void {
+    this.ended = true;
+  }
+
+  private scheduleNext(): void {
+    const next = this.queue.shift();
+
+    if (next !== undefined) {
+      setTimeout(() => this.dataListener?.(next), this.stepDelayMs);
+    }
+  }
+}
+
 describe("SmtpConnection lost-wakeup and dialogue timeout (F15)", () => {
   it("resolves a reply already buffered before readLine parks", async () => {
     const socket = new PrebufferedSocket([
@@ -631,6 +686,119 @@ describe("SmtpConnection lost-wakeup and dialogue timeout (F15)", () => {
       await vi.advanceTimersByTimeAsync(1000);
 
       await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails a slow-but-progressing dialogue at the aggregate budget, not per step", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // A server that answers EVERY command in 900ms — under the 1000ms limit,
+      // so no single step ever times out — yet 7 such steps run ~6.3s total.
+      // The pre-fix code re-arms a fresh 1000ms timer per read, so each 900ms
+      // reply beats its own timer and the whole dialogue simply completes,
+      // dragging past the queue's visibility window into a duplicate send. The
+      // fix caps each wait to the remaining WHOLE-dialogue budget, so the send
+      // fails at the 1000ms aggregate deadline instead.
+      const socket = new TarpitSocket(
+        [
+          "220 ready\r\n",
+          "250 ok\r\n", // EHLO
+          "250 ok\r\n", // MAIL FROM
+          "250 ok\r\n", // RCPT TO
+          "354 go\r\n", // DATA
+          "250 queued\r\n", // body
+          "221 bye\r\n", // QUIT
+        ],
+        900,
+      );
+      const transport = createSmtpTransport({
+        host: "h",
+        port: 25,
+        secure: false,
+        timeoutMs: 1000,
+        connect: async () => socket,
+      });
+
+      const sending = transport.send({ ...base(), from: "f@app.com" });
+
+      // Capture the outcome via handlers attached UP FRONT: the eventual
+      // rejection always has a handler (no unhandled-rejection window), and a
+      // still-pending send — the pre-fix bug — reads as `undefined` rather than
+      // hanging the test, so the RED failure is a clean assertion miss.
+      let outcome:
+        | { status: "resolved" }
+        | { status: "rejected"; error: unknown }
+        | undefined;
+      const observed = sending.then(
+        () => {
+          outcome = { status: "resolved" };
+        },
+        (error: unknown) => {
+          outcome = { status: "rejected", error };
+        },
+      );
+
+      // Let connect resolve and the first read park its timer, then advance to
+      // exactly the aggregate deadline. The banner arrives at 900ms, leaving the
+      // SECOND read capped to the final 100ms of budget; it trips at 1000ms —
+      // long before the dialogue's ~6.3s natural end.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      // Fixed: rejected by the aggregate deadline, AFTER the first step (EHLO)
+      // completed — proving the failure is accumulated across steps, not a
+      // first-read stall. Pre-fix: still pending here (its next per-step timer
+      // is at ~1900ms), so `outcome` is undefined and this assertion fails RED.
+      expect(outcome).toMatchObject({
+        status: "rejected",
+        error: { code: "MAIL_TRANSPORT_SMTP_TIMEOUT", details: { timeoutMs: 1000 } },
+      });
+      expect(socket.written.some((l) => l.startsWith("EHLO"))).toBe(true);
+
+      // Drain the socket's remaining delivery timers so real timers restore clean.
+      await vi.runAllTimersAsync();
+      await observed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("completes a slow-but-in-budget dialogue without tripping the deadline", async () => {
+    vi.useFakeTimers();
+
+    try {
+      // Every step takes 50ms; 7 steps ≈ 350ms, comfortably inside the 1000ms
+      // budget. The whole-dialogue cap must never fail a legitimately fast
+      // dialogue — the deadline math only fires once the budget is truly spent.
+      const socket = new TarpitSocket(
+        [
+          "220 ready\r\n",
+          "250 ok\r\n", // EHLO
+          "250 ok\r\n", // MAIL FROM
+          "250 ok\r\n", // RCPT TO
+          "354 go\r\n", // DATA
+          "250 queued\r\n", // body
+          "221 bye\r\n", // QUIT
+        ],
+        50,
+      );
+      const transport = createSmtpTransport({
+        host: "h",
+        port: 25,
+        secure: false,
+        timeoutMs: 1000,
+        connect: async () => socket,
+      });
+
+      const sending = transport.send({ ...base(), from: "f@app.com" });
+      await vi.runAllTimersAsync();
+
+      await expect(sending).resolves.toBeUndefined();
+      expect(socket.written.some((l) => l.startsWith("QUIT"))).toBe(true);
+      expect(socket.ended).toBe(true);
     } finally {
       vi.useRealTimers();
     }

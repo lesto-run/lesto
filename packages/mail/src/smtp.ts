@@ -58,15 +58,23 @@ export interface SmtpTransportConfig {
   readonly ehloName?: string;
 
   /**
-   * Fail the send if the server does not reply to a step of the dialogue within
-   * this many ms. Defaults to 20_000.
+   * Fail the send if the WHOLE server dialogue does not complete within this
+   * many ms. Defaults to 20_000.
+   *
+   * This is a single whole-dialogue budget, not a per-step timeout: the clock
+   * starts when the connection opens and every reply-wait is capped to the time
+   * still left (see {@link SmtpConnection.readLine}). A per-step timer only
+   * bounds each step, so a server that answers just under the limit on step
+   * after step — the SMTP greylisting/tarpitting profile — could accumulate
+   * unbounded total time with no single step ever tripping; the budget closes
+   * that hole.
    *
    * Keep it comfortably below the queue's job visibility window (30_000ms by
-   * default in `@lesto/queue`): a stalled server must fail the send — and
-   * release the worker — BEFORE the visibility deadline lapses, or the queue
-   * reclaims the still-"running" job and delivers it a SECOND time. The timeout
-   * is what turns an at-least-once stall into a clean retry instead of a
-   * guaranteed duplicate send.
+   * default in `@lesto/queue`): a stalled — or merely slow-but-progressing —
+   * server must fail the send, and release the worker, BEFORE the visibility
+   * deadline lapses, or the queue reclaims the still-"running" job and delivers
+   * it a SECOND time. The budget is what turns an at-least-once stall into a
+   * clean retry instead of a guaranteed duplicate send.
    */
   readonly timeoutMs?: number;
 
@@ -174,9 +182,20 @@ class SmtpConnection {
 
   private readonly timeoutMs: number;
 
+  /**
+   * The absolute deadline for the ENTIRE dialogue, fixed once when the
+   * connection opens (and deliberately NOT reset on {@link rebind}, so the
+   * STARTTLS upgrade spends the same budget). Each reply-wait is capped to the
+   * time still left before this instant — see {@link readLine} for why one
+   * whole-dialogue budget, not a fresh per-step timer, is what keeps a slow
+   * server from outliving the queue's job-visibility window.
+   */
+  private readonly deadline: number;
+
   constructor(socket: SmtpSocket, timeoutMs: number) {
     this.socket = socket;
     this.timeoutMs = timeoutMs;
+    this.deadline = Date.now() + timeoutMs;
     this.bind();
   }
 
@@ -257,21 +276,30 @@ class SmtpConnection {
     }
 
     return new Promise<string>((resolve, reject) => {
-      // Bound the wait. A server that accepts the connection then stalls must
-      // not hold us open indefinitely: a queued send runs inside the worker's
-      // visibility window, and a dialogue that hangs past it gets reclaimed and
-      // delivered a second time. Failing the read with a coded error releases
-      // the worker first, so a stall is a clean retry, never a duplicate send.
+      // Bound the wait against ONE whole-dialogue deadline, not this step alone.
+      // A send runs ~7 sequential reads (220/EHLO/MAIL/RCPT/DATA/body/QUIT, more
+      // with AUTH). Arming a fresh full-length timer per read bounds each STEP
+      // but leaves the TOTAL unbounded: a server that answers just under the
+      // limit every time — precisely the SMTP greylisting/tarpitting profile —
+      // drags the dialogue on for step * timeoutMs while no single step ever
+      // trips. That accumulated total is the hazard: a queued send runs inside
+      // the worker's visibility window, and a dialogue that outlives it gets
+      // reclaimed and delivered a SECOND time. So cap each wait to the budget
+      // still REMAINING before `deadline` (0 once it is spent, firing on the
+      // next tick) — the whole dialogue can never outlast `timeoutMs`, and the
+      // send fails and releases the worker before the visibility deadline,
+      // turning a stall into a clean retry, never a duplicate send.
+      const remaining = Math.max(0, Math.min(this.timeoutMs, this.deadline - Date.now()));
       const timer = setTimeout(() => {
         this.pending = undefined;
         reject(
           new SmtpTransportError(
             "MAIL_TRANSPORT_SMTP_TIMEOUT",
-            `SMTP server did not reply within ${this.timeoutMs}ms.`,
+            `SMTP dialogue did not complete within ${this.timeoutMs}ms.`,
             { timeoutMs: this.timeoutMs },
           ),
         );
-      }, this.timeoutMs);
+      }, remaining);
 
       this.pending = { resolve, reject, timer };
     });
