@@ -47,24 +47,42 @@ is guaranteed to see that publish.
 
 ## Publish and await delivery
 
-`publish` returns a `Promise<number>` — the count of listeners notified. It
-delivers to each subscriber in subscription order and **awaits** any listener
-that returns a promise before moving to the next one, so the returned promise
-resolves only once the whole chain has finished:
+`publish` returns a `Promise<PublishResult>` — `{ delivered, failed }`, where
+`delivered` is the count of listeners that ran cleanly and `failed` is the list
+of errors from listeners that threw or rejected (in delivery order). It delivers
+to each subscriber in subscription order and **awaits** any listener that returns
+a promise before moving to the next one, so the returned promise resolves only
+once the whole chain has finished:
 
 ```ts
 hub.subscribe("orders", async (message) => {
   await recordToLedger(message); // publish() waits for this
 });
 
-const notified = await hub.publish("orders", { id: 7 });
-// notified === number of listeners that ran
+const { delivered, failed } = await hub.publish("orders", { id: 7 });
+// delivered === number of listeners that ran cleanly
+// failed === errors from listeners that threw (delivery continued past them)
 ```
 
-Publishing to a channel with no subscribers returns `0` and does nothing else —
-it's a safe no-op, not an error. Because delivery is sequential and awaited,
-ordering between listeners is deterministic and a slow async listener delays the
-ones after it; this is a serial hub, not a parallel dispatcher.
+One listener throwing (or rejecting) **never aborts delivery to the rest** — it
+is isolated and collected into `failed`, the same invariant `fanout()` enforces
+for a dead socket. `publish` itself never throws, so a fire-and-forget
+`void hub.publish(...)` stays safe. Publishing to a channel with no subscribers
+yields `{ delivered: 0, failed: [] }` — a safe no-op, not an error. Because
+delivery is sequential and awaited, ordering between listeners is deterministic
+and a slow async listener delays the ones after it; this is a serial hub, not a
+parallel dispatcher.
+
+> **Breaking change (0.2.0).** `publish` previously returned `Promise<number>`
+> (the bare notified count). It now returns `Promise<PublishResult>` so one
+> throwing listener no longer aborts the rest. Migrate by reading `.delivered`:
+>
+> ```ts
+> // before
+> const notified = await hub.publish("orders", msg);
+> // after
+> const { delivered } = await hub.publish("orders", msg);
+> ```
 
 ## The `Listener` type
 
