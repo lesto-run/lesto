@@ -72,11 +72,18 @@ await identity.register("ada@example.com", "correct horse battery staple");
 // The user clicks the link; verifyEmail is idempotent.
 await identity.verifyEmail(tokenFromLink);
 
-// Login is gated on verification by default.
-const { user, session } = await identity.login(
-  "ada@example.com",
-  "correct horse battery staple",
-);
+// Login is gated on verification by default. It returns a discriminated union:
+// `{ status: "authenticated", user, session }`, or — when the account has a
+// confirmed second factor — `{ status: "totp_required", user, challenge }`, so a
+// session is NEVER minted on the password alone. Branch on `status`.
+const result = await identity.login("ada@example.com", "correct horse battery staple");
+
+if (result.status === "authenticated") {
+  // fully signed in — set the session cookie
+} else {
+  // hold the `result.challenge`, prompt for the second factor, then call
+  // identity.completeTotpChallenge(result.challenge, code)
+}
 ```
 
 `register` is enumeration-safe: a colliding email returns the same
@@ -90,15 +97,21 @@ with `IDENTITY_LOGIN_THROTTLED` before the database or the KDF is touched. A
 successful login spends nothing, so a real user is never locked out by their
 own sign-in.
 
-To set the cookie from a handler, use the cookie helpers `@lesto/identity` ships:
+To set the cookie from a handler, use the cookie helpers `@lesto/identity` ships.
+Set the session cookie ONLY on the `authenticated` arm — the `totp_required` arm
+has no session yet:
 
 ```ts
 import { readSessionToken, sessionCookie, clearSessionCookie } from "@lesto/identity";
 
-const { session } = await identity.login(email, password);
+const result = await identity.login(email, password);
+if (result.status !== "authenticated") {
+  // carry result.challenge to the second-factor step (see Two-factor, below)
+  return { status: 303, headers: { Location: "/login/totp" } };
+}
 return {
   status: 303,
-  headers: { Location: "/app", "Set-Cookie": sessionCookie(session.token) },
+  headers: { Location: "/app", "Set-Cookie": sessionCookie(result.session.token) },
 };
 ```
 
@@ -131,19 +144,31 @@ const { recoveryCodes } = await identity.confirmTotp(sessionToken, code);
 // Show recoveryCodes once — only their KDF hashes are stored.
 ```
 
-After a password login, run the second-factor challenge. These methods take the
-numeric `user.id`, not a session token. Both a live code and a single-use
-recovery code are accepted:
+When a user has a confirmed factor, `login` returns `{ status: "totp_required",
+user, challenge }` **instead of a session** — the password alone never signs them
+in. Complete the login by exchanging the signed `challenge` plus a live code for a
+session; a session is minted only on success. Both a live TOTP code and a
+single-use recovery code are accepted:
 
 ```ts
-if (await identity.hasTotp(user.id)) {
-  if (usingRecoveryCode) {
-    await identity.verifyRecoveryCode(user.id, code);
-  } else {
-    await identity.verifyTotpChallenge(user.id, code);
-  }
+const result = await identity.login(email, password);
+
+if (result.status === "totp_required") {
+  // Prompt for the second factor, then exchange the challenge for a session.
+  // The challenge is a signed, short-lived proof that the password verified — a
+  // valid code alone, without it, cannot mint a session.
+  const { session } = await identity.completeTotpChallenge(
+    result.challenge,
+    code,
+    { recovery: usingRecoveryCode },
+  );
+  // set the session cookie from session.token
 }
 ```
+
+The lower-level `verifyTotpChallenge(user.id, code)` / `verifyRecoveryCode(user.id,
+code)` primitives still exist for apps that manage their own session lifecycle, but
+they mint no session and do not gate `login` — prefer `completeTotpChallenge`.
 
 A wrong, expired, or replayed code throws `IDENTITY_INVALID_TOTP` — enumeration-quiet,
 so it never reveals whether a factor exists. Wire a `totpRateLimiter` to bound an

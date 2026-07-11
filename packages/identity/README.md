@@ -21,8 +21,20 @@ const identity = createIdentity({
 
 await identity.register("ada@example.com", "correct horse battery staple");
 await identity.verifyEmail(tokenFromLink);
-const { session } = identity.login("ada@example.com", "correct horse battery staple");
+// login() returns a discriminated union — a session is never minted on the
+// password alone when the account has a confirmed second factor.
+const result = await identity.login("ada@example.com", "correct horse battery staple");
+if (result.status === "authenticated") {
+  // result.session — signed in
+} else {
+  // result.status === "totp_required": complete with
+  // identity.completeTotpChallenge(result.challenge, code)
+}
 ```
+
+> `login()` reads the caller's confirmed-factor state on every call, so install
+> `totpMigration` alongside `usersMigration` — a deployment missing the
+> `totp_factors` table errors once the password verifies.
 
 Composes `@lesto/auth` (scrypt hashing, store-backed sessions, signed tokens),
 `@lesto/db` + `@lesto/migrate` (the `users` schema), and `@lesto/csrf`. Mail is
