@@ -175,17 +175,34 @@ export function isNotNull(column: Column<unknown, boolean, boolean>): Condition 
   };
 }
 
-/** Combine conditions with `AND`. Single-arg returns the arg unchanged. */
+/**
+ * Combine conditions with `AND`. Single-arg returns the arg unchanged; zero args
+ * are the vacuously-true empty conjunction (`1 = 1`) — the dynamic-filter pattern
+ * that collects no clauses and expects "no filter" runs unfiltered.
+ */
 export function and(...conditions: Condition[]): Condition {
   return combine("AND", conditions);
 }
 
-/** Combine conditions with `OR`. Single-arg returns the arg unchanged. */
+/**
+ * Combine conditions with `OR`. Single-arg returns the arg unchanged; zero args
+ * are the vacuously-false empty disjunction (`1 = 0`) — "any of nothing" matches
+ * no row, mirroring {@link inList} on the empty set.
+ */
 export function or(...conditions: Condition[]): Condition {
   return combine("OR", conditions);
 }
 
 function combine(joiner: "AND" | "OR", conditions: Condition[]): Condition {
+  // Zero conditions is the joiner's identity element, and it must render as valid
+  // SQL — never a bare `WHERE ` (a syntax error). An empty AND is vacuously TRUE
+  // (`1 = 1`, unfiltered); an empty OR is vacuously FALSE (`1 = 0`, matches nothing,
+  // like `inList([])`). This keeps the WHERE well-formed and composes correctly when
+  // nested: `x AND ()` folds to `x AND TRUE` (= x), `x OR ()` to `x OR FALSE` (= x).
+  if (conditions.length === 0) {
+    return { sql: joiner === "AND" ? "1 = 1" : "1 = 0", params: [] };
+  }
+
   // A single combined condition is just itself — avoid `( x )` noise in SQL.
   if (conditions.length === 1) return conditions[0]!;
 
