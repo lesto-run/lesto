@@ -324,3 +324,28 @@ list frozen. No P0 objection to the plan.
   silently. The criteria list is **frozen now**; adding or removing a criterion
   requires its own decision-log entry. The external audit is unfunded — price it
   by end of L2 so it can't ambush the mid-2027 target.
+- **2026-07-10 — post-launch sequencing (`lesto.live` GA + priority order):** a
+  two-lens review (opus red-team + opus chief-arch) then a fable chief-architect
+  ruling settled four decisions the GA epic (`L-3c9f8069`) had left implicit.
+  Ratified by the owner 2026-07-10. **(a) Post-launch priority: funnel
+  follow-through → published benchmarks → `lesto.live` GA (a background hardening
+  track, not a preemptor) → in-house OAuth AS (stays deferred per the same-day
+  MA-track ruling).** `lesto.live` is the **L3** flagship (Dec 2026→mid-2027, §Phase
+  L3), *not* L2 — it moves neither §0 primary metric directly (category-share is
+  the monthly agent-demo + distribution; agent-activation is on-ramp + dev-MCP), so
+  it feeds L3 rather than leading. **Two tripwires that legitimately reorder it:**
+  DCR connect-failures in agent-activation telemetry pull the narrow DCR slice (not
+  the whole AS) to #2; a credible framework-level local-first fast-follower pulls GA
+  to #2 (moat depth is the §5-risk-3 defense and only defends if it's GA-first).
+  **(b) The 3 Tier-4 packages publish as a labeled preview BATCHED into the first
+  weekly release train after GA-3a** (the parameter-authz helper, the ADR's own
+  "publish blocker") — no dedicated train (every train is a 49-package train
+  anyway), no defer-to-GA (L3 design partners need something installable). **(c) An
+  app-shell-precache service worker is IN GA scope** (ADR 0042 non-goal sharpened;
+  distinct from the rejected SW sync engine) and adds criterion (d) to the
+  messaging.md:82 claim-flip gate, so the unqualified "offline" headline is
+  reachable rather than a permanent asterisk. **(d) The single-writer sync tier is
+  positioned as database-side infrastructure** ("one process beside your Postgres;
+  your app stays edge-native"; messaging.md §5/§8) to pre-empt the "not actually
+  edge-native?" gotcha. No ratified ADR decision was reversed; all outcomes are
+  bounded amendments (ADR 0042, messaging.md §5/§8, this entry) + board edges.

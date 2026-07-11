@@ -336,7 +336,11 @@ in memory; see the 2026-07-02 cross-tab amendment.**
 - **No row data on the ADR 0040 topic wire** — that invariant is preserved; Tier 4 is a separate
   endpoint and wire.
 - **No background-sync (Service Worker) dependency** (`docs/PERF-SECURITY-2026.md`) — sync runs in
-  the leader tab, not a background-sync registration.
+  the leader tab, not a background-sync registration. **(2026-07-10 sharpening: this rejects a SW
+  *sync engine*, not a SW *app-shell precache*. A precache SW that caches only static assets — so a
+  fully-offline reload serves the shell — is IN GA scope and does zero sync; the leader tab remains
+  the sole sync driver. The unqualified "offline" headline (messaging.md:82 criterion (d)) depends on
+  it.)**
 
 ## Rejected alternatives
 
