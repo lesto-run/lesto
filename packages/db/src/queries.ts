@@ -183,32 +183,69 @@ function renderSelect<T extends Table>(
     // Postgres takes a bare `OFFSET` (or the equivalent `LIMIT ALL`). This is
     // the second dialect fork, decided here at render time from `dialect`.
     const tail = limitOffsetSql(state.limit, state.offset, options.dialect);
-    if (tail) parts.push(tail);
+    if (tail.sql) {
+      parts.push(tail.sql);
+      params.push(...tail.params);
+    }
   }
 
   return { sql: parts.join(" "), params };
 }
 
 /**
- * The `LIMIT`/`OFFSET` tail (empty when neither is set). SQLite needs a `LIMIT` for
- * an `OFFSET` to take effect, so an offset-without-limit spells `LIMIT -1 OFFSET n`,
- * which Postgres rejects (it takes a bare `OFFSET`). The one dialect fork — shared by
- * the single-table and the join renderers so they can never disagree on it.
+ * Refuse a `LIMIT`/`OFFSET` bound that is not a non-negative integer.
+ *
+ * The types say `.limit(count: number)`, but a cast lies — `.limit("1; DROP
+ * TABLE users; --" as number)` reaches here as a string. Binding it as a `?`
+ * param already neutralises the injection, but a non-integer bound is still a
+ * bug (a driver would reject or silently mis-bind it), so we fail LOUD and
+ * coded at the render chokepoint rather than hand the driver garbage. `NaN`,
+ * `Infinity`, floats and negatives are all rejected by the integer test.
+ */
+function assertLimitBound(value: unknown, clause: "limit" | "offset"): void {
+  if (value === undefined) return;
+
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new DbError(
+      "DB_INVALID_LIMIT",
+      `\`${clause}\` must be a non-negative integer, received ${JSON.stringify(value)}.`,
+      { clause, value },
+    );
+  }
+}
+
+/**
+ * The `LIMIT`/`OFFSET` tail as a (sql, params) pair (empty when neither is set).
+ * Every user-supplied bound rides a `?` placeholder — the module's binding
+ * invariant applies to LIMIT/OFFSET too — and is validated to a non-negative
+ * integer first (a cast that smuggles a string is refused, coded, not
+ * interpolated). SQLite needs a `LIMIT` for an `OFFSET` to take effect, so an
+ * offset-without-limit spells `LIMIT -1 OFFSET ?` (the `-1` no-cap sentinel is a
+ * framework constant, never user input), which Postgres rejects (it takes a bare
+ * `OFFSET`). The one dialect fork — shared by the single-table and the join
+ * renderers so they can never disagree on it.
  */
 function limitOffsetSql(
   limit: number | undefined,
   offset: number | undefined,
   dialect: Dialect,
-): string {
+): { sql: string; params: number[] } {
+  assertLimitBound(limit, "limit");
+  assertLimitBound(offset, "offset");
+
   if (limit !== undefined) {
-    return offset === undefined ? `LIMIT ${limit}` : `LIMIT ${limit} OFFSET ${offset}`;
+    return offset === undefined
+      ? { sql: "LIMIT ?", params: [limit] }
+      : { sql: "LIMIT ? OFFSET ?", params: [limit, offset] };
   }
 
   if (offset !== undefined) {
-    return dialect === "postgres" ? `OFFSET ${offset}` : `LIMIT -1 OFFSET ${offset}`;
+    return dialect === "postgres"
+      ? { sql: "OFFSET ?", params: [offset] }
+      : { sql: "LIMIT -1 OFFSET ?", params: [offset] };
   }
 
-  return "";
+  return { sql: "", params: [] };
 }
 
 interface CountRow {
@@ -419,7 +456,10 @@ function renderJoin(state: JoinState, dialect: Dialect): { sql: string; params: 
   if (state.orderBy) parts.push(`ORDER BY ${state.orderBy}`);
 
   const tail = limitOffsetSql(state.limit, state.offset, dialect);
-  if (tail) parts.push(tail);
+  if (tail.sql) {
+    parts.push(tail.sql);
+    params.push(...tail.params);
+  }
 
   return { sql: parts.join(" "), params };
 }

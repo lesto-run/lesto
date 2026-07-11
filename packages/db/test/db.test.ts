@@ -30,6 +30,7 @@ import {
 import type {
   Column,
   Db,
+  Dialect,
   InferInsert,
   InferRow,
   InferUpdate,
@@ -924,8 +925,10 @@ describe("select modifiers", () => {
     it("postgres dialect: offset-without-limit renders a bare OFFSET (no LIMIT -1)", async () => {
       // Capture the SQL the dialect renders without needing a real Postgres: the
       // `LIMIT -1` idiom is a SQLite-ism Postgres rejects, so the PG path must emit
-      // a bare `OFFSET`. We assert the rendered statement, not a row set.
+      // a bare `OFFSET`. The offset value rides a `?` param (F1); we assert the
+      // rendered statement shape, not a row set.
       let captured = "";
+      let capturedParams: unknown[] = [];
       const capture: SqlDatabase = {
         prepare: (stmt) => {
           captured = stmt;
@@ -933,7 +936,11 @@ describe("select modifiers", () => {
           return {
             run: async () => ({ changes: 0 }),
             get: async () => undefined,
-            all: async () => [],
+            all: async (params = []) => {
+              capturedParams = [...params];
+
+              return [];
+            },
           };
         },
         exec: async () => {},
@@ -943,8 +950,9 @@ describe("select modifiers", () => {
       const pg = createDb(capture, { dialect: "postgres" });
       await pg.select().from(users).orderBy(users.email).offset(1).all();
 
-      expect(captured).toContain("OFFSET 1");
+      expect(captured).toContain("OFFSET ?");
       expect(captured).not.toContain("LIMIT -1");
+      expect(capturedParams).toEqual([1]);
     });
   });
 
@@ -963,6 +971,184 @@ describe("select modifiers", () => {
         await db.select().from(users).orderBy(users.score, "desc").limit(1).offset(99).count(),
       ).toBe(3);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LIMIT / OFFSET injection guard (F1)
+//
+// The module header promises "every user-supplied value rides a `?`
+// placeholder". LIMIT/OFFSET must honour that too: bound as params AND
+// validated to be non-negative integers, so a payload cast through the number
+// type (`.limit("1; DROP TABLE users; --" as number)`) is rejected loud rather
+// than interpolated verbatim into the statement.
+// ---------------------------------------------------------------------------
+
+// A capture harness that records the (sql, params) the DSL hands the driver, so
+// a test can inspect the generated statement directly (no vacuous assertions).
+function captureQuery(dialect?: Dialect): {
+  db: Db;
+  last: () => { sql: string; params: readonly unknown[] };
+} {
+  let capturedSql = "";
+  let capturedParams: readonly unknown[] = [];
+  const record = (stmt: string, bound: unknown[] = []) => {
+    capturedSql = stmt;
+    capturedParams = [...bound];
+  };
+  const handle: SqlDatabase = {
+    exec: async () => {},
+    prepare: (stmt) => ({
+      run: async (bound = []) => {
+        record(stmt, bound);
+
+        return { changes: 0 };
+      },
+      get: async (bound = []) => {
+        record(stmt, bound);
+
+        return undefined;
+      },
+      all: async (bound = []) => {
+        record(stmt, bound);
+
+        return [];
+      },
+    }),
+    transaction: async (fn) => fn(handle),
+  };
+
+  return {
+    db: createDb(handle, dialect ? { dialect } : {}),
+    last: () => ({ sql: capturedSql, params: capturedParams }),
+  };
+}
+
+describe("limit/offset injection guard (F1)", () => {
+  const injection = "1; DROP TABLE users; --";
+
+  it("binds a numeric limit as a ? param — never interpolated", async () => {
+    const { db: cdb, last } = captureQuery();
+    await cdb.select().from(users).limit(5).all();
+
+    const { sql: stmt, params } = last();
+    expect(stmt).toContain("LIMIT ?");
+    expect(stmt).not.toMatch(/LIMIT\s+5\b/);
+    expect(params).toEqual([5]);
+  });
+
+  it("binds limit + offset as ? params, in placeholder order", async () => {
+    const { db: cdb, last } = captureQuery();
+    await cdb.select().from(users).limit(5).offset(10).all();
+
+    const { sql: stmt, params } = last();
+    expect(stmt).toContain("LIMIT ? OFFSET ?");
+    expect(params).toEqual([5, 10]);
+  });
+
+  it("postgres offset-without-limit binds a bare OFFSET ? (no LIMIT -1)", async () => {
+    const { db: cdb, last } = captureQuery("postgres");
+    await cdb.select().from(users).offset(3).all();
+
+    const { sql: stmt, params } = last();
+    expect(stmt).toContain("OFFSET ?");
+    expect(stmt).not.toContain("LIMIT -1");
+    expect(params).toEqual([3]);
+  });
+
+  it("sqlite offset-without-limit binds LIMIT -1 OFFSET ? (offset still a param)", async () => {
+    const { db: cdb, last } = captureQuery();
+    await cdb.select().from(users).offset(3).all();
+
+    const { sql: stmt, params } = last();
+    expect(stmt).toContain("LIMIT -1 OFFSET ?");
+    expect(params).toEqual([3]);
+  });
+
+  it("rejects a non-numeric (injection) limit with DB_INVALID_LIMIT — payload never reaches SQL", async () => {
+    const { db: cdb, last } = captureQuery();
+    let thrown: unknown;
+    try {
+      await cdb
+        .select()
+        .from(users)
+        .limit(injection as unknown as number)
+        .all();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DbError);
+    expect((thrown as DbError).code).toBe("DB_INVALID_LIMIT");
+    // Nothing was ever prepared — the payload never made it into a statement.
+    expect(last().sql).toBe("");
+  });
+
+  it("rejects a non-numeric offset with DB_INVALID_LIMIT", async () => {
+    const { db: cdb } = captureQuery();
+    let thrown: unknown;
+    try {
+      await cdb
+        .select()
+        .from(users)
+        .offset(injection as unknown as number)
+        .all();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DbError);
+    expect((thrown as DbError).code).toBe("DB_INVALID_LIMIT");
+  });
+
+  it("rejects a negative limit", async () => {
+    const { db: cdb } = captureQuery();
+    let thrown: unknown;
+    try {
+      await cdb.select().from(users).limit(-1).all();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as DbError).code).toBe("DB_INVALID_LIMIT");
+  });
+
+  it("rejects a non-integer limit (float and NaN)", async () => {
+    const { db: cdb } = captureQuery();
+
+    let floatThrown: unknown;
+    try {
+      await cdb.select().from(users).limit(1.5).all();
+    } catch (error) {
+      floatThrown = error;
+    }
+    expect((floatThrown as DbError).code).toBe("DB_INVALID_LIMIT");
+
+    let nanThrown: unknown;
+    try {
+      await cdb.select().from(users).limit(Number.NaN).all();
+    } catch (error) {
+      nanThrown = error;
+    }
+    expect((nanThrown as DbError).code).toBe("DB_INVALID_LIMIT");
+  });
+
+  it("guards the join renderer through the same chokepoint", async () => {
+    const { db: cdb } = captureQuery();
+    let thrown: unknown;
+    try {
+      await cdb
+        .select()
+        .from(users)
+        .innerJoin(alias(users, "u2"), eq(users.id, users.id))
+        .limit(injection as unknown as number)
+        .all();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DbError);
+    expect((thrown as DbError).code).toBe("DB_INVALID_LIMIT");
   });
 });
 
