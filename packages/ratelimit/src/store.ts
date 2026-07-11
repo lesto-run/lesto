@@ -175,20 +175,24 @@ export class MemoryRateLimitStore implements RateLimitStore {
    * Only runs once the cap is actually exceeded, so a store that never fills past
    * it (the common case) pays nothing beyond the `set` that was already happening.
    * Each `update` inserts at most one new key, so the Map exceeds the cap by at
-   * most one and the closest-to-full loop runs at most once — an O(n) pass over a
-   * bounded Map, the same cost profile as `@lesto/cache`'s overflow eviction.
+   * most one: the full-refill sweep may reclaim several at once, and if that alone
+   * does not restore the bound a single closest-to-full eviction does. One O(n)
+   * pass over a bounded Map, the same cost profile as `@lesto/cache`'s overflow
+   * eviction.
    */
   private evictToBound(now: number): void {
     const capacity = this.capacity;
     const refillPerSecond = this.refillPerSecond;
+    const refillAware = capacity !== undefined && refillPerSecond !== undefined;
 
     // Sweep fully-refilled buckets first (refill-aware only). A bucket that has
     // refilled to its ceiling as of `now` is byte-identical to a first-seen key,
     // so dropping it is lossless — eviction-on-refill applied to buckets that
     // refilled while idle and so were never re-checked. Mirrors `@lesto/cache`
     // spending expired entries before it evicts a live one: reclaim the dead
-    // before touching the living.
-    if (capacity !== undefined && refillPerSecond !== undefined) {
+    // before touching the living. It may bring the Map back under the cap on its
+    // own, in which case there is nothing left to evict below.
+    if (refillAware) {
       for (const [key, state] of this.buckets) {
         if (refilledTokens(state, now, capacity, refillPerSecond) >= capacity) {
           this.buckets.delete(key);
@@ -196,32 +200,31 @@ export class MemoryRateLimitStore implements RateLimitStore {
       }
     }
 
-    // Still over the cap: every remaining bucket is actively throttled (below its
-    // ceiling). Evict the closest to full — the least-throttled, so a targeted
-    // near-empty bucket is the last to go and a flood of distinct keys cannot push
-    // it out (see the class doc). A refill-unaware store lacks the clock to age
-    // buckets, so it ranks by stored tokens — a coarser but still monotone proxy.
-    while (this.buckets.size > this.maxBuckets) {
-      let victimKey: string | undefined;
-      let victimFullness = -Infinity;
+    if (this.buckets.size <= this.maxBuckets) return;
 
-      for (const [key, state] of this.buckets) {
-        const fullness =
-          capacity !== undefined && refillPerSecond !== undefined
-            ? refilledTokens(state, now, capacity, refillPerSecond)
-            : state.tokens;
+    // Still over the cap by one: every remaining bucket is actively throttled
+    // (below its ceiling). Evict the single closest to full — the least-throttled,
+    // so a targeted near-empty bucket is the last to go and a flood of distinct
+    // keys cannot push it out (see the class doc). A refill-unaware store lacks the
+    // clock to age buckets, so it ranks by stored tokens — a coarser but still
+    // monotone proxy. The Map is non-empty here (`size > maxBuckets >= 1`), so the
+    // first bucket seeds the victim and `chosen` is always resolved to a real key.
+    let victimKey = "";
+    let victimFullness = 0;
+    let chosen = false;
 
-        if (fullness > victimFullness) {
-          victimFullness = fullness;
-          victimKey = key;
-        }
+    for (const [key, state] of this.buckets) {
+      const fullness = refillAware
+        ? refilledTokens(state, now, capacity, refillPerSecond)
+        : state.tokens;
+
+      if (!chosen || fullness > victimFullness) {
+        chosen = true;
+        victimFullness = fullness;
+        victimKey = key;
       }
-
-      // Unreachable while `size > maxBuckets >= 1` (the loop guard implies a
-      // non-empty Map), but a defined victim is the precondition for `delete`.
-      if (victimKey === undefined) break;
-
-      this.buckets.delete(victimKey);
     }
+
+    this.buckets.delete(victimKey);
   }
 }
