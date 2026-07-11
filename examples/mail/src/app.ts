@@ -15,7 +15,9 @@
  * Cloudflare Worker has no steady process to run a drain loop on. The drain is
  * bounded to the job THIS request enqueued — it calls `queue.runOnce()` only
  * until `queue.find(jobId)` reports that job terminal, not until the whole queue
- * is empty, so one request never processes another concurrent request's jobs.
+ * is empty. `runOnce()` still claims whatever job is next in FIFO order, so a
+ * request may run a few of another request's ready jobs on the way to its own —
+ * it just stops the instant its own job settles, instead of draining everything.
  * `/send` enqueues with `maxAttempts: 1` so a single attempt yields an immediate,
  * honest verdict — `delivered: true`, or `delivered: false` with the failure
  * reason (the transport error MESSAGE, from `job.lastError` — not the machine
