@@ -15,6 +15,12 @@ export type AiErrorCode =
   | "AI_HTTP_ERROR"
   /** The provider's streaming (SSE) response was malformed and could not be parsed. */
   | "AI_STREAM_MALFORMED"
+  /**
+   * The provider returned a 2xx response the parser could not make sense of — e.g. an
+   * OpenAI-compatible endpoint whose tool-call `arguments` string was not valid JSON object.
+   * Distinct from `AI_HTTP_ERROR` (the transport succeeded) and `AI_STREAM_MALFORMED` (a stream frame).
+   */
+  | "AI_RESPONSE_MALFORMED"
   /** The model asked to call a tool that was not registered for this run. */
   | "AI_TOOL_NOT_FOUND"
   /** The agent loop hit its `maxSteps` budget without the model stopping — a runaway, refused loudly. */

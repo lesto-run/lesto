@@ -94,3 +94,34 @@ export function toolUseMessage(id: string, name: string, input: Record<string, u
     usage: { input_tokens: 4, output_tokens: 6 },
   };
 }
+
+/** Shorthand for a non-tool OpenAI chat-completion body with a single text answer. */
+export function openaiTextMessage(text: string): unknown {
+  return {
+    choices: [{ message: { role: "assistant", content: text }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 3, completion_tokens: 5 },
+  };
+}
+
+/** Shorthand for an OpenAI chat-completion body that asks for one tool (arguments as a JSON string). */
+export function openaiToolUseMessage(
+  id: string,
+  name: string,
+  input: Record<string, unknown>,
+): unknown {
+  return {
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            { id, type: "function", function: { name, arguments: JSON.stringify(input) } },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+    usage: { prompt_tokens: 4, completion_tokens: 6 },
+  };
+}

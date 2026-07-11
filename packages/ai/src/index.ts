@@ -22,6 +22,12 @@
 export { createAnthropic, DEFAULT_MODEL_ID, parseResponse, parseStream } from "./anthropic";
 export type { AnthropicConfig } from "./anthropic";
 
+// Provider (any OpenAI chat-completions-compatible endpoint — OpenAI, LM Studio, Ollama,
+// vLLM, LiteLLM, OpenRouter — behind the same LanguageModel interface). One additive file,
+// no new dependency: the second provider ADR 0021 §1 designed the interface to accept.
+export { createOpenAICompatible } from "./openai-compatible";
+export type { OpenAICompatibleConfig } from "./openai-compatible";
+
 // Model layer — Increment 1
 export { generateText, streamText } from "./generate";
 
