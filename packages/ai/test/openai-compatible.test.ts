@@ -265,6 +265,100 @@ describe("createOpenAICompatible — request assembly", () => {
   });
 });
 
+describe("max_tokens field-name policy — reasoning models need max_completion_tokens", () => {
+  // Read the assembled request body for a given config + call options. Every assertion pairs the
+  // positive (the expected field carries the value) with the negative (the OTHER field is absent),
+  // so the "no max_tokens" half can never go vacuous — exactly ONE of the two is ever present.
+  const bodyOf = async (
+    config: Partial<Parameters<typeof createOpenAICompatible>[0]>,
+    options: Partial<GenerateOptions> = {},
+  ): Promise<Record<string, unknown>> => {
+    const m = model(config);
+    const request = m.buildRequest({ ...baseOptions(m), ...options });
+    return (await request.json()) as Record<string, unknown>;
+  };
+
+  it("sends max_completion_tokens (never max_tokens) for a reasoning defaultModelId — the DOA-on-OpenAI bug", async () => {
+    // createOpenAICompatible({ baseURL:'https://api.openai.com/v1', defaultModelId:'o3' }) sent
+    // `max_tokens`, which OpenAI's reasoning models 400 on — a documented first-party target dead on
+    // arrival. The field name must flip to `max_completion_tokens` off the effective model id.
+    const withCap = await bodyOf({ defaultModelId: "o3" }, { maxTokens: 256 });
+    expect(withCap["max_completion_tokens"]).toBe(256);
+    expect("max_tokens" in withCap).toBe(false);
+
+    // The token VALUE is orthogonal to the field NAME: a defaulted cap rides the same key.
+    const defaulted = await bodyOf({ defaultModelId: "o3" });
+    expect(defaulted["max_completion_tokens"]).toBe(1024);
+    expect("max_tokens" in defaulted).toBe(false);
+  });
+
+  it("keys off the EFFECTIVE per-call model id, not just the construction-time default", async () => {
+    // One chat-model instance; a single call overrides to a reasoning model. The field must follow
+    // the effective id per call, so a mixed fleet on one instance stays wire-valid both ways.
+    const overridden = await bodyOf({ defaultModelId: "gpt-4o-mini" }, { modelId: "o1-mini" });
+    expect(overridden["max_completion_tokens"]).toBe(1024);
+    expect("max_tokens" in overridden).toBe(false);
+
+    const plain = await bodyOf({ defaultModelId: "gpt-4o-mini" });
+    expect(plain["max_tokens"]).toBe(1024);
+    expect("max_completion_tokens" in plain).toBe(false);
+  });
+
+  it("lets an explicit maxTokensField win over the heuristic in BOTH directions", async () => {
+    // (i) A local model aliased to a bare reasoning id on a server that only knows max_tokens: pin it.
+    const pinnedLegacy = await bodyOf({ defaultModelId: "o3", maxTokensField: "max_tokens" });
+    expect(pinnedLegacy["max_tokens"]).toBe(1024);
+    expect("max_completion_tokens" in pinnedLegacy).toBe(false);
+
+    // (ii) A future/renamed reasoning id the heuristic doesn't recognize: force the new field.
+    const pinnedNew = await bodyOf({
+      defaultModelId: "llama3.2",
+      maxTokensField: "max_completion_tokens",
+    });
+    expect(pinnedNew["max_completion_tokens"]).toBe(1024);
+    expect("max_tokens" in pinnedNew).toBe(false);
+  });
+
+  it.each([
+    // Reasoning ids → max_completion_tokens.
+    ["o1", "max_completion_tokens"],
+    ["o1-mini", "max_completion_tokens"],
+    ["o1-pro", "max_completion_tokens"],
+    ["o3", "max_completion_tokens"],
+    ["o3-mini", "max_completion_tokens"],
+    ["o4-mini", "max_completion_tokens"],
+    ["gpt-5", "max_completion_tokens"],
+    ["gpt-5-mini", "max_completion_tokens"],
+    ["gpt-5.1", "max_completion_tokens"],
+    // Chat + local ids → max_tokens (the anchored, case-sensitive rule must NOT over-match).
+    ["gpt-4o", "max_tokens"],
+    ["gpt-4o-mini", "max_tokens"],
+    ["gpt-4.1", "max_tokens"],
+    ["gpt-3.5-turbo", "max_tokens"],
+    ["chatgpt-4o-latest", "max_tokens"],
+    ["llama3.2", "max_tokens"],
+    ["local-model", "max_tokens"],
+    ["olmo2", "max_tokens"], // id-initial `o`, but no digit follows — not a substring match
+    ["o3de", "max_tokens"], // digit not on a hyphen/end boundary — not `o3`
+    ["openai/o3", "max_tokens"], // `o3` mid-id, not anchored — OpenRouter normalizes upstream
+  ])("chooses the right field for %s", async (modelId, expectedField) => {
+    const otherField = expectedField === "max_tokens" ? "max_completion_tokens" : "max_tokens";
+    const body = await bodyOf({ defaultModelId: modelId });
+
+    expect(body[expectedField]).toBe(1024);
+    expect(otherField in body).toBe(false);
+  });
+
+  it("applies the same field policy to the STREAM request builder (mechanism sits in the shared body())", async () => {
+    const m = model({ defaultModelId: "o3" });
+
+    const body = (await m.buildStreamRequest(baseOptions(m)).json()) as Record<string, unknown>;
+
+    expect(body["max_completion_tokens"]).toBe(1024);
+    expect("max_tokens" in body).toBe(false);
+  });
+});
+
 describe("parseResponse", () => {
   it("assembles text, tool calls (arguments parsed to input), stop reason, and usage", async () => {
     const m = model();

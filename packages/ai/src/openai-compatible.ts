@@ -25,7 +25,9 @@
  *   // Ollama's OpenAI-compatible endpoint:
  *   createOpenAICompatible({ baseURL: "http://localhost:11434/v1", defaultModelId: "llama3.2" });
  *
- *   // OpenAI itself (chat-completions models — see the `max_tokens` caveat on that field below):
+ *   // OpenAI itself — chat-completions models (`gpt-4o-mini`) AND reasoning models (`o3`, `gpt-5`)
+ *   // alike: the output-cap wire field (`max_tokens` vs `max_completion_tokens`) is chosen per model
+ *   // id automatically, overridable via `maxTokensField` (see that config field):
  *   createOpenAICompatible({ baseURL: "https://api.openai.com/v1", apiKey: env.OPENAI_API_KEY, defaultModelId: "gpt-4o-mini" });
  *
  * The normalized vocabulary (`Message`, `ToolCall`, `StopReason`, `Usage`) is
@@ -59,6 +61,21 @@ import type {
 /** A sensible output ceiling when a call does not name one — mirrors `anthropic.ts`. */
 const DEFAULT_MAX_TOKENS = 1024;
 
+/**
+ * Model ids that require `max_completion_tokens` instead of `max_tokens` — OpenAI's reasoning
+ * models: the o-series (`o1`, `o1-mini`, `o1-pro`, `o3`, `o3-mini`, `o4-mini`, …) and the gpt-5
+ * family (`gpt-5`, `gpt-5-mini`, `gpt-5.1`, …). Sending `max_tokens` to one of these is a hard 400.
+ *
+ * Deliberately tight: ANCHORED at the id start (never a substring — `gpt-4o` and `openai/o3` must
+ * NOT match) and CASE-SENSITIVE (OpenAI ids are lowercase). The bias is intentional and asymmetric:
+ * an unrecognized future reasoning id fails LOUD (a 400 → `AI_HTTP_ERROR`, fixed by pinning
+ * `maxTokensField`), whereas an over-match would SILENTLY uncap a local model on a server that just
+ * ignores the unknown field — the fail-open this package forbids. When it rots, it rots loud. The
+ * one case the heuristic can't see: a local model deliberately aliased to a bare reasoning id (e.g. a
+ * vLLM fine-tune served as `o3`) on such a server — that needs an explicit `maxTokensField: "max_tokens"`.
+ */
+const REASONING_MODEL_ID = /^(?:o\d+(?:-|$)|gpt-5(?:[.-]|$))/;
+
 export interface OpenAICompatibleConfig {
   /**
    * The API base URL, up to and including the version segment — e.g.
@@ -87,6 +104,18 @@ export interface OpenAICompatibleConfig {
   readonly headers?: Readonly<Record<string, string>>;
   /** The HTTP transport. Defaults to global `fetch`; inject a fake in tests. */
   readonly transport?: Transport;
+  /**
+   * Force the output-cap wire field NAME, overriding the built-in per-model heuristic. `max_tokens`
+   * is what chat-completions models and every local target (LM Studio/Ollama/vLLM/LiteLLM) want;
+   * OpenAI's reasoning models (o-series, gpt-5 family) require `max_completion_tokens`. Leave it
+   * unset and the effective model id picks the field automatically (see {@link REASONING_MODEL_ID});
+   * set it when the heuristic can't see the truth — a renaming proxy, a self-hosted reasoning model
+   * on a nonstandard id, or a local model aliased to a reasoning-shaped id. Applies to every call on
+   * this instance and wins unconditionally over the heuristic (explicit beats inferred). The two
+   * literals are the wire field names verbatim, so a typo is a compile error, never a silently
+   * ignored field. Only the field NAME changes — the token value (`maxTokens`) is untouched.
+   */
+  readonly maxTokensField?: "max_tokens" | "max_completion_tokens";
 }
 
 /**
@@ -113,16 +142,24 @@ export function createOpenAICompatible(config: OpenAICompatibleConfig): Language
   // `stream` flag (and, when streaming, asking the server to include a final usage
   // chunk) — assembling it once keeps the two builders honest.
   const body = (options: GenerateOptions, stream: boolean): string => {
+    const modelId = options.modelId ?? defaultModelId;
+
     const payload: Record<string, unknown> = {
-      model: options.modelId ?? defaultModelId,
-      // NOTE: OpenAI's reasoning models (o-series and successors) reject `max_tokens` and
-      // require `max_completion_tokens` — a call against one 400s (loud, `AI_HTTP_ERROR`,
-      // not silent). `max_tokens` is correct for chat-completions models and every local
-      // target (LM Studio/Ollama/vLLM). A per-model field-name policy is tracked as a follow-up.
-      max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
+      model: modelId,
       messages: toWireMessages(options.system, options.messages),
       stream,
     };
+
+    // The output cap rides under one of two field names. OpenAI's reasoning models (o-series and
+    // the gpt-5 family) REJECT `max_tokens` with a 400 and require `max_completion_tokens`;
+    // chat-completions models and every local target (LM Studio/Ollama/vLLM/LiteLLM) want
+    // `max_tokens`. Pick the NAME per effective model id — an explicit `maxTokensField` override
+    // wins, else the `REASONING_MODEL_ID` heuristic — and send exactly ONE of the two (OpenAI 400s
+    // on the pair). The VALUE is identical either way; only the key it rides under changes.
+    const maxTokensField =
+      config.maxTokensField ??
+      (REASONING_MODEL_ID.test(modelId) ? "max_completion_tokens" : "max_tokens");
+    payload[maxTokensField] = options.maxTokens ?? DEFAULT_MAX_TOKENS;
 
     // OpenAI omits usage from a stream unless asked; request the terminal usage chunk
     // so a streamed call reports the same `Usage` a non-streamed one does. Current
