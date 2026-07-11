@@ -1,7 +1,12 @@
 # ADR 0021 — App-builder AI primitives: a provider-agnostic model layer, agent loop, retrieval seam, and evals
 
-- **Status:** Proposed
-- **Date:** 2026-06-18
+- **Status:** **Accepted — ratified as-own 2026-07-10.** The 2026-07-10 build-vs-buy portfolio
+  review (decision `L-0993ff3e`) re-litigated the model layer (adopt the Vercel AI SDK behind the
+  `LanguageModel` seam vs keep the owned `fetch`-native wire); the delegated fable-chief-architect
+  ruled **own** (~0.9 confidence) and the owner ratified. See the **Build-vs-buy re-litigation**
+  section for the framing and the **Ratification amendment (2026-07-10)** at the end for the
+  ruling, conditions, and flip-to-buy tripwire.
+- **Date:** 2026-06-18 (proposed); **2026-07-10** (ratified as-own).
 - **Deciders:** tech lead + owner
 - **Supersedes nothing. Extends ADR 0005 (validation at the boundary), ADR 0006 (async seam), ADR 0013 (durable stores), ADR 0018 (relational data layer / pgvector-adjacent substrate). Distinct from ADR 0014 (plugin system) and the MCP control plane.**
 - **Decision in one line:** **IN.** Lesto enters the app-builder-AI lane with a new PREVIEW package `@lesto/ai`, scoped as four increments and built dependency-free over `fetch`, exactly as the framework does TOTP over `node:crypto` rather than a library.
@@ -235,3 +240,34 @@ closed so the seam is honest and un-bypassed; a written "owned-wire maintenance 
 who tracks Anthropic/OpenAI wire drift and the trip-wire that would re-open this; and the
 `createLlmJudge`/model-id coupling (F24) fixed so the seam is provider-agnostic in fact, not
 just in type.
+
+## Ratification amendment (2026-07-10) — own the model layer
+
+**Ruling (fable chief-architect on `L-0993ff3e`, owner-ratified 2026-07-10): OWN. Do not adopt the
+Vercel AI SDK.** The `LanguageModel` seam is preserved either way, so the call is pure
+maintenance economics, and post-`sse.ts` they favour owning: a provider is now ~60 lines of
+request builder + ~60 of response parser + ~40 of pure `interpretFrame` + wire types (the shared
+`src/sse.ts` engine absorbed the stream-lifecycle correctness once, not per-provider). The
+review's cited pains are implementation bugs, not structural arguments — F25 fixed
+(`00d3309`); F23/F24 are seam **violations** to close, not reasons to replace what's behind the
+seam; F5 is the one real parity gap and is a P0 fixed regardless. The Vercel SDK is a heavy,
+fast-moving dep whose provider interface has broken across majors (`LanguageModelV1`→`V2`), drags
+`zod` in, ships a registry/UI-hooks surface Lesto would use ~5% of, and dissolves the
+injected-`Transport` test story — the exact churn class the zero-dep thesis exists to avoid.
+
+**Chosen instead of vendoring (the "vendor only the type defs" middle path is REJECTED — Lesto's
+normalized types deliberately differ, so vendoring adds drift bookkeeping for nothing):**
+- **A scheduled wire-parity canary** (`L-a005d83b`): real Anthropic + one OpenAI-compat endpoint,
+  streaming + tools (+ caching once added), golden assertions on a non-PR cron — converting
+  "hand-track forever" into "a red canary tells you when to spend an afternoon."
+- **An optional Vercel-SDK adapter escape hatch** (satellite/example, **never core**): ~100 lines
+  wrapping any Vercel-SDK model as a Lesto `LanguageModel`, so the exotic-provider-matrix tail is
+  rented at the edge while core stays zero-dep.
+
+**Flip-to-buy tripwire (the seam makes a later flip cheap, which is why owning now is safe):**
+sustained parity churn > ~2–3 agent-days/month for a quarter on wire-chasing, OR a product
+requirement for the broad multi-modal provider matrix as a headline feature.
+
+**Conditions carried:** F5 (`L-a65b7ede`), F23 (`L-74c3cf1e`), F24 (`ddb830a1`) close so the seam
+is honest and un-bypassed; the canary is the "owned-wire maintenance budget" trip-wire. Prompt
+caching on the owned wire and the adapter escape hatch are filed as follow-ups.

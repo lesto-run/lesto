@@ -10,14 +10,22 @@
   review — see the **Amendment trail** at the end. The 100k-PBKDF2 pin this supersedes is
   **correct and stays** until the replacement lands **and its mandatory two-stage rollout
   completes** — 100k that works beats 600k that throws on every deployed-Worker login.
-  - **Phase-0 spike DONE (2026-07-10, board `L-557c95dd`) — backend resolved: A-wasm** (see
-    the **Phase-0 spike outcome** section below and `spikes/adr-0046-edge-kdf/FINDINGS.md`).
-    A-js measured **~10–16× slower per derive on a deployed Worker** (≈0.5–0.8 s vs A-wasm's
-    ≈40–50 ms) and busts the R4 enrollment budget → the ratified decision procedure falls to
-    **A-wasm**; Option C is not triggered. IT4 (wasm code-gen restriction) is **confirmed** on
-    current workerd. This flip of the Q1 *default* + its wasm-pipeline cost, and the
-    **Stage-2-only Workers-Paid re-run gate**, are the two items awaiting **owner ratification**;
-    the fable chief-architect + opus red-team amendments **A11–A17** are folded into the text.
+  - **Phase-0 spike DONE (2026-07-10, board `L-557c95dd`) — backend resolved: A-wasm; OWNER-RATIFIED
+    2026-07-10.** (see the **Phase-0 spike outcome** section below and
+    `spikes/adr-0046-edge-kdf/FINDINGS.md`). A-js measured **~10–16× slower per derive on a
+    deployed Worker** (≈0.5–0.8 s vs A-wasm's ≈40–50 ms) and busts the R4 enrollment budget → the
+    ratified decision procedure falls to **A-wasm**; Option C is not triggered. IT4 (wasm code-gen
+    restriction) is **confirmed** on current workerd. The Q1 *default* flip to **A-wasm** and its
+    wasm-pipeline cost are **ratified** (owner, 2026-07-10, via the delegated fable-chief-architect
+    ruling) under the chief-architect's three conditions: **C1** — Stage 2 (the mint-default flip)
+    stays gated on the Workers-Paid envelope re-run (`L-3bb43929`) against a **numeric login-timeout
+    budget the OWNER writes before that re-run** (deliberately not fixed here, so the gate is not
+    post-hoc fitted — suggested starting point p95 cpuTime+overhead ≤ 250 ms, p95 e2e ≤ 750 ms);
+    **C2** — no release containing the facade ships until the IT3 vendored-first-party-wasm bar is
+    met (`L-cd31248e`); **C3** — the design keeps assuming 128 MB (A12; the ~256 MiB Free-plan
+    measurement is not banked) and the A16 Node/Bun verify path (`L-3ab85cc4`) is specified before
+    the facade lands. Stage-1 facade/verify-support (`L-93f03791`) proceeds now. The
+    fable-chief-architect + opus red-team amendments **A11–A17** are folded into the text.
 - **Date:** 2026-07-10.
 - **Deciders:** tech lead + owner (authored under board task `L-cea1370e`); **ratified
   2026-07-10** by the delegated red-team + chief-architect review the owner directed.
