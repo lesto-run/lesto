@@ -29,6 +29,14 @@ const PREFLIGHT_METHOD = "OPTIONS";
 const PREFLIGHT_HEADER = "access-control-request-method";
 
 /**
+ * The request header a preflight uses to announce the headers the real request
+ * will carry. With no static allow-list configured, {@link corsHeaders} reflects
+ * this value into `Access-Control-Allow-Headers` so the browser lets those
+ * headers through — the reason a default-policy cross-origin JSON fetch works.
+ */
+const REQUEST_HEADERS_HEADER = "access-control-request-headers";
+
+/**
  * A CORS middleware for the given policy.
  *
  * Two jobs, both delegating the actual policy to {@link corsHeaders}:
@@ -51,7 +59,11 @@ const PREFLIGHT_HEADER = "access-control-request-method";
  */
 export function cors(options: CorsOptions = {}): Middleware {
   return async (request, next) => {
-    const headers = corsHeaders(request.headers["origin"], options);
+    const headers = corsHeaders(
+      request.headers["origin"],
+      options,
+      request.headers[REQUEST_HEADERS_HEADER],
+    );
 
     // A preflight is the middleware's to answer: a bodiless 204 with the policy
     // headers. It is an OPTIONS that the browser tagged with the request-method

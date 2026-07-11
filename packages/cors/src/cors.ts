@@ -23,21 +23,65 @@ export class CorsError extends LestoError<CorsErrorCode> {
   }
 }
 
+/**
+ * A predicate over the request's `Origin`: return `true` to allow it.
+ *
+ * The escape hatch for a policy no static list can express — a per-tenant
+ * subdomain, an allow-list read from a config store, "any `*.example.com`".
+ * When it approves an origin we echo *that exact origin* back (never `"*"`), so
+ * it composes with credentials the way an allow-list does — you own getting the
+ * predicate right.
+ */
+export type CorsOriginPredicate = (origin: string) => boolean;
+
+/**
+ * Who may call us.
+ *
+ *   - `"*"` (the default) — any origin. Cannot be paired with credentials.
+ *   - a string — one exact origin.
+ *   - a string[] — an allow-list of exact origins.
+ *   - a `RegExp` — echo the origin when the pattern matches it.
+ *   - a {@link CorsOriginPredicate} — echo the origin when the callback approves.
+ *
+ * Every non-wildcard form echoes back only an origin it approved, so the
+ * response is origin-dependent and rides `Vary: Origin`.
+ */
+export type CorsOrigin = "*" | string | string[] | RegExp | CorsOriginPredicate;
+
 export interface CorsOptions {
-  /** Who may call us. `"*"` (the default) allows any origin. */
-  origin?: "*" | string | string[];
+  /** Who may call us. `"*"` (the default) allows any origin. See {@link CorsOrigin}. */
+  origin?: CorsOrigin;
 
   /** Methods advertised on `Access-Control-Allow-Methods`. */
   methods?: string[];
 
-  /** Headers advertised on `Access-Control-Allow-Headers`. */
+  /**
+   * Headers advertised on `Access-Control-Allow-Headers`.
+   *
+   * A *static* allow-list. When omitted, a preflight reflects the browser's
+   * `Access-Control-Request-Headers` instead (see {@link corsHeaders}), so the
+   * common case — a cross-origin JSON fetch preflighting `Content-Type` — works
+   * with no configuration. Set this to pin the surface to a fixed list.
+   */
   headers?: string[];
+
+  /**
+   * Response headers to reveal to the caller's script via
+   * `Access-Control-Expose-Headers`.
+   *
+   * Without this a browser hides every response header from a cross-origin read
+   * except the CORS-safelisted few, so a client cannot read a custom
+   * `X-Total-Count` / `X-Request-Id` it can see on a same-origin request. Names
+   * listed here are exposed to `fetch`/`XMLHttpRequest`.
+   */
+  exposeHeaders?: string[];
 
   /**
    * Whether to send `Access-Control-Allow-Credentials: true`.
    *
-   * Requires an explicit `origin` (a string or array allow-list). Pairing this
-   * with the wildcard `"*"` throws {@link CorsError} `CORS_WILDCARD_WITH_CREDENTIALS`.
+   * Requires an explicit `origin` (a string, array, `RegExp`, or predicate —
+   * anything but `"*"`). Pairing this with the wildcard `"*"` throws
+   * {@link CorsError} `CORS_WILDCARD_WITH_CREDENTIALS`.
    */
   credentials?: boolean;
 
@@ -67,34 +111,45 @@ interface ResolvedOrigin {
  * here (see `corsHeaders`), because reflecting an arbitrary `Origin` with
  * `Access-Control-Allow-Credentials: true` is a credentialed-CORS bypass — any
  * site could then read authenticated responses. To allow credentials you must
- * name the origins explicitly (a string or array allow-list), and only a member
- * of that list is ever echoed back.
+ * name the origins explicitly (a string, array, `RegExp`, or predicate), and
+ * only an origin that policy approves is ever echoed back.
  */
-function resolveOrigin(
-  requestOrigin: string | undefined,
-  policy: "*" | string | string[],
-): ResolvedOrigin {
+function resolveOrigin(requestOrigin: string | undefined, policy: CorsOrigin): ResolvedOrigin {
   // Wildcard policy. Credentials with "*" never reaches here, so a plain "*"
   // is always safe to advertise — it can never be paired with credentials.
   if (policy === "*") {
     return { allowOrigin: "*" };
   }
 
-  // Allow-list policy: echo the request origin only when it is a member.
-  if (Array.isArray(policy)) {
-    if (requestOrigin !== undefined && policy.includes(requestOrigin)) {
-      return { allowOrigin: requestOrigin };
-    }
-
+  // Every remaining form is an allow-list that echoes back the *presented*
+  // origin. A request with no `Origin` can match none of them — we never test a
+  // policy against `undefined`, and never echo a header for an absent origin.
+  if (requestOrigin === undefined) {
     return { allowOrigin: undefined };
   }
 
-  // Single exact-match policy: echo it only when the request matches.
-  if (requestOrigin === policy) {
-    return { allowOrigin: policy };
+  // Array allow-list: echo the request origin only when it is a member.
+  if (Array.isArray(policy)) {
+    return { allowOrigin: policy.includes(requestOrigin) ? requestOrigin : undefined };
   }
 
-  return { allowOrigin: undefined };
+  // Regex allow-list: echo the origin when the pattern matches it. Test on a
+  // stateless copy — a `/g` or `/y` source carries mutable `lastIndex` across
+  // calls, so reusing the caller's regex would flip its verdict on alternate
+  // requests. Dropping those flags makes each request an independent match.
+  if (policy instanceof RegExp) {
+    const stateless = new RegExp(policy.source, policy.flags.replace(/[gy]/g, ""));
+
+    return { allowOrigin: stateless.test(requestOrigin) ? requestOrigin : undefined };
+  }
+
+  // Predicate allow-list: echo the origin when the callback approves it.
+  if (typeof policy === "function") {
+    return { allowOrigin: policy(requestOrigin) ? requestOrigin : undefined };
+  }
+
+  // Single exact-match string policy: echo it only when the request matches.
+  return { allowOrigin: requestOrigin === policy ? policy : undefined };
 }
 
 /**
@@ -102,11 +157,18 @@ function resolveOrigin(
  *
  * @param requestOrigin the request's `Origin` header, or `undefined` if absent.
  * @param options the CORS policy. Omitted fields fall back to permissive defaults.
+ * @param requestedHeaders the request's `Access-Control-Request-Headers` header
+ *   (the header list a preflight announces), or `undefined` when absent. With no
+ *   static {@link CorsOptions.headers} allow-list, this value is reflected into
+ *   `Access-Control-Allow-Headers` so a browser's preflight — the one a
+ *   cross-origin JSON `fetch` fires for `Content-Type` — is not rejected out of
+ *   the box. It is meaningful only on a preflight; a real request omits it.
  * @returns a header map. Empty `{}` (no `Access-Control-Allow-Origin`) means deny.
  */
 export function corsHeaders(
   requestOrigin: string | undefined,
   options: CorsOptions = {},
+  requestedHeaders?: string | undefined,
 ): Record<string, string> {
   const policy = options.origin ?? "*";
   const credentials = options.credentials ?? false;
@@ -147,8 +209,23 @@ export function corsHeaders(
     "Access-Control-Allow-Methods": (options.methods ?? DEFAULT_METHODS).join(", "),
   };
 
+  // `Access-Control-Allow-Headers`. A static allow-list, when configured, pins
+  // the surface to exactly those names. Otherwise reflect what the preflight
+  // asked for: without this, the default policy sends no allow-headers at all,
+  // and a cross-origin JSON fetch — which preflights `Content-Type` — is blocked
+  // out of the box. A reflected value is request-dependent, so it rides `Vary`.
+  let reflectsRequestHeaders = false;
+
   if (options.headers !== undefined) {
     headers["Access-Control-Allow-Headers"] = options.headers.join(", ");
+  } else if (requestedHeaders !== undefined) {
+    headers["Access-Control-Allow-Headers"] = requestedHeaders;
+    reflectsRequestHeaders = true;
+  }
+
+  // What the browser may reveal to the caller's script beyond the safelisted few.
+  if (options.exposeHeaders !== undefined) {
+    headers["Access-Control-Expose-Headers"] = options.exposeHeaders.join(", ");
   }
 
   if (credentials) {
@@ -159,9 +236,23 @@ export function corsHeaders(
     headers["Access-Control-Max-Age"] = String(options.maxAge);
   }
 
-  // The response varies by origin under any non-wildcard policy.
+  // `Vary` names every request header this response was computed from, so a
+  // shared cache keyed on URL alone can never replay one caller's response to
+  // another: `Origin` under any non-wildcard policy, and
+  // `Access-Control-Request-Headers` whenever the allow-headers were reflected
+  // from it (including under the wildcard default).
+  const varyOn: string[] = [];
+
   if (variesByOrigin) {
-    headers["Vary"] = "Origin";
+    varyOn.push("Origin");
+  }
+
+  if (reflectsRequestHeaders) {
+    varyOn.push("Access-Control-Request-Headers");
+  }
+
+  if (varyOn.length > 0) {
+    headers["Vary"] = varyOn.join(", ");
   }
 
   return headers;

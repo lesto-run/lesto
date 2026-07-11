@@ -117,4 +117,28 @@ describe("cors middleware", () => {
 
     expect(response.headers["Access-Control-Allow-Origin"]).toBe("*");
   });
+
+  it("reflects Access-Control-Request-Headers on a preflight with the default policy", async () => {
+    // The out-of-the-box case: a cross-origin JSON fetch sends `Content-Type:
+    // application/json`, which forces a preflight tagged with
+    // `Access-Control-Request-Headers: content-type`. With no static allow-list
+    // the default policy must reflect that list back, or the browser blocks the
+    // real request for want of an `Access-Control-Allow-Headers`.
+    const middleware = cors();
+
+    const response = await middleware(
+      requestWith({
+        method: "OPTIONS",
+        headers: {
+          origin: "https://app.example.com",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type",
+        },
+      }),
+      async () => okResponse,
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers["Access-Control-Allow-Headers"]).toBe("content-type");
+  });
 });

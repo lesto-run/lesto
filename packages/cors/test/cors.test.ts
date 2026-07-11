@@ -4,6 +4,9 @@ import { corsHeaders, CorsError } from "../src/cors";
 
 const DEFAULT_METHODS = "GET, HEAD, PUT, PATCH, POST, DELETE";
 
+/** A predicate origin policy: allow any subdomain of `trusted.example`. */
+const trustedSuffix = (origin: string): boolean => origin.endsWith(".trusted.example");
+
 describe("corsHeaders — wildcard origin", () => {
   it("defaults to a wildcard policy when no options are given", () => {
     expect(corsHeaders("https://app.example.com")).toEqual({
@@ -151,5 +154,118 @@ describe("corsHeaders — methods, headers, maxAge, credentials", () => {
       "Access-Control-Max-Age": "0",
       Vary: "Origin",
     });
+  });
+
+  it("exposes response headers via Access-Control-Expose-Headers", () => {
+    expect(
+      corsHeaders("https://app.example.com", { exposeHeaders: ["X-Total-Count", "X-Request-Id"] }),
+    ).toEqual({
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": DEFAULT_METHODS,
+      "Access-Control-Expose-Headers": "X-Total-Count, X-Request-Id",
+    });
+  });
+});
+
+describe("corsHeaders — reflecting Access-Control-Request-Headers", () => {
+  it("reflects the requested headers when no static allow-list is set (and varies on them)", () => {
+    // The out-of-the-box preflight: a cross-origin JSON fetch announces
+    // `content-type`. With no `headers` list configured we must echo it back, or
+    // the browser blocks the real request. The value is request-derived, so the
+    // response varies on `Access-Control-Request-Headers` even under wildcard.
+    expect(corsHeaders("https://app.example.com", {}, "content-type")).toEqual({
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": DEFAULT_METHODS,
+      "Access-Control-Allow-Headers": "content-type",
+      Vary: "Access-Control-Request-Headers",
+    });
+  });
+
+  it("prefers a static allow-list over reflection when one is configured", () => {
+    // A configured list pins the surface: the requested value is ignored, and
+    // the response no longer varies on it.
+    expect(
+      corsHeaders("https://app.example.com", { headers: ["Authorization"] }, "content-type"),
+    ).toEqual({
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": DEFAULT_METHODS,
+      "Access-Control-Allow-Headers": "Authorization",
+    });
+  });
+
+  it("stacks Origin and Access-Control-Request-Headers in Vary under a non-wildcard policy", () => {
+    expect(
+      corsHeaders(
+        "https://app.example.com",
+        { origin: "https://app.example.com" },
+        "content-type, x-custom",
+      ),
+    ).toEqual({
+      "Access-Control-Allow-Origin": "https://app.example.com",
+      "Access-Control-Allow-Methods": DEFAULT_METHODS,
+      "Access-Control-Allow-Headers": "content-type, x-custom",
+      Vary: "Origin, Access-Control-Request-Headers",
+    });
+  });
+
+  it("reflects nothing for a denied origin, even when headers were requested", () => {
+    // A denied origin earns no Access-Control-* headers at all — the reflection
+    // never happens because the deny path returns before it.
+    expect(
+      corsHeaders(
+        "https://evil.example.com",
+        { origin: "https://app.example.com" },
+        "content-type",
+      ),
+    ).toEqual({ Vary: "Origin" });
+  });
+});
+
+describe("corsHeaders — RegExp and predicate origins", () => {
+  it("echoes an origin a RegExp matches, and denies one it does not", () => {
+    const policy = /^https:\/\/[a-z]+\.example\.com$/;
+
+    expect(corsHeaders("https://app.example.com", { origin: policy })).toEqual({
+      "Access-Control-Allow-Origin": "https://app.example.com",
+      "Access-Control-Allow-Methods": DEFAULT_METHODS,
+      Vary: "Origin",
+    });
+
+    expect(corsHeaders("https://app.evil.com", { origin: policy })).toEqual({ Vary: "Origin" });
+  });
+
+  it("gives a stateful /g RegExp the same verdict on repeated calls", () => {
+    // A `/g` source carries a mutable `lastIndex`; reusing the caller's regex
+    // would flip true/false on alternate requests. We match on a stateless copy,
+    // so the same origin is allowed every time.
+    const policy = /^https:\/\/app\.example\.com$/g;
+
+    for (let i = 0; i < 3; i++) {
+      expect(corsHeaders("https://app.example.com", { origin: policy })).toEqual({
+        "Access-Control-Allow-Origin": "https://app.example.com",
+        "Access-Control-Allow-Methods": DEFAULT_METHODS,
+        Vary: "Origin",
+      });
+    }
+  });
+
+  it("echoes an origin a predicate approves, and denies one it rejects", () => {
+    expect(
+      corsHeaders("https://tenant.trusted.example", { origin: trustedSuffix, credentials: true }),
+    ).toEqual({
+      "Access-Control-Allow-Origin": "https://tenant.trusted.example",
+      "Access-Control-Allow-Methods": DEFAULT_METHODS,
+      "Access-Control-Allow-Credentials": "true",
+      Vary: "Origin",
+    });
+
+    expect(corsHeaders("https://tenant.evil.example", { origin: trustedSuffix })).toEqual({
+      Vary: "Origin",
+    });
+  });
+
+  it("denies a RegExp or predicate policy when the request carries no origin", () => {
+    expect(corsHeaders(undefined, { origin: /.*/ })).toEqual({ Vary: "Origin" });
+    expect(corsHeaders(undefined, { origin: () => true })).toEqual({ Vary: "Origin" });
   });
 });
