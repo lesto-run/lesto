@@ -155,10 +155,24 @@ const DEFAULT_THROTTLE_WINDOW_MS = 15 * 60 * 1000;
  * exist, so it mirrors the default {@link MemorySessionStore}: a per-process
  * floor with zero configuration. That floor is real on a long-lived Node server
  * (the bucket persists across requests in one process), but WEAK on serverless /
- * edge (a fresh isolate resets it) and per-node on a multi-node fleet. For a
- * DURABLE, fleet-wide cap wire a limiter over `sqlRateLimitStore` (the option
- * docs show the shape); pass `false` to opt out deliberately. login and TOTP each
- * get their OWN instance, so the two buckets never interact.
+ * edge (a fresh isolate resets it) and per-node on a multi-node fleet.
+ *
+ * A second, distinct residual is MEMORY, and it bites WORST exactly where the
+ * throttle floor is strongest — the long-lived Node process. Self-eviction bounds
+ * the Map only for buckets sitting FULL (a first-seen key, a cost-0 peek); a
+ * *failed* login burns a token, so its `login:<email>` bucket is stored BELOW the
+ * ceiling and is retained for the whole ~15-minute refill window. Under an
+ * adversarial flood of distinct emails the Map therefore still grows (bounded by
+ * flood-rate × window, NOT by a hard cap) — the in-memory default is a per-process
+ * FLOOR, not a memory-bounded ceiling (residual L-976b4302). The durable fix is
+ * the SAME one below: a limiter over `sqlRateLimitStore`, whose rows a periodic
+ * `sweep` reclaims, is what gives a long-lived Node deploy a bounded, fleet-wide
+ * cap.
+ *
+ * For a DURABLE, fleet-wide (and memory-bounded) cap wire a limiter over
+ * `sqlRateLimitStore` (the option docs show the shape); pass `false` to opt out
+ * deliberately. login and TOTP each get their OWN instance, so the two buckets
+ * never interact.
  */
 const defaultRateLimiter = (clock: Clock | undefined): RateLimiter =>
   new RateLimiter({
@@ -168,7 +182,13 @@ const defaultRateLimiter = (clock: Clock | undefined): RateLimiter =>
     // Map without bound (a memory-exhaustion DoS) and leak one entry per distinct
     // email even under benign traffic. A full bucket == a first-seen key, so evicting
     // it loses no throttle state; an actively-throttled (partially-drained) bucket is
-    // never full and so never evicted. See `MemoryRateLimitStore`.
+    // never full and so never evicted. That eviction bounds the BENIGN/idle case —
+    // but NOT an adversarial one: a *failed* login drains the bucket below full, so
+    // under a flood of distinct emails each entry is retained for the whole refill
+    // window and the Map still grows. This limiter is a per-process FLOOR, not a hard
+    // memory cap (residual L-976b4302); the durable, memory-bounded fix is a
+    // `sqlRateLimitStore`-backed `loginRateLimiter` (see the docstring above and
+    // {@link IdentityOptions.loginRateLimiter}). See `MemoryRateLimitStore`.
     store: new MemoryRateLimitStore({ capacity: DEFAULT_THROTTLE_CAPACITY }),
     capacity: DEFAULT_THROTTLE_CAPACITY,
     refillPerSecond: DEFAULT_THROTTLE_CAPACITY / (DEFAULT_THROTTLE_WINDOW_MS / 1000),
@@ -441,8 +461,12 @@ export interface IdentityOptions {
    * or pass `false` to disable the throttle entirely (a deliberate opt-out, e.g.
    * when an outer tier already bounds attempts). ⚠️ The default is IN-MEMORY: a
    * per-process floor that resets on a serverless/edge isolate recycle and does
-   * not span a multi-node fleet — wire a SQL-backed limiter for a durable,
-   * fleet-wide cap in production (see {@link defaultRateLimiter}).
+   * not span a multi-node fleet. It is also a floor, NOT a hard memory cap even on
+   * a long-lived Node deploy: a *failed* attempt keeps its `login:<email>` bucket
+   * below the eviction ceiling for the refill window, so an adversarial flood of
+   * distinct emails still grows the store's Map (bounded by flood-rate × window,
+   * not capped; residual L-976b4302). Wire a SQL-backed limiter for a durable,
+   * fleet-wide, memory-bounded cap in production (see {@link defaultRateLimiter}).
    *
    * `login` checks the resolved limiter under the key `login:<normalizedEmail>`
    * before it answers, and burns one token on each *failed* attempt; once the
