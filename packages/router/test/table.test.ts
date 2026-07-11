@@ -90,6 +90,47 @@ describe("RouteTable resolution order + misses", () => {
   });
 });
 
+describe("RouteTable.allowedMethods", () => {
+  it("returns every distinct method registered at a path, in registration order", () => {
+    const table = new RouteTable<string>();
+
+    table.add("GET", "/things/:id", "show");
+    table.add("PUT", "/things/:id", "update");
+    table.add("DELETE", "/things/:id", "destroy");
+
+    expect(table.allowedMethods("/things/42")).toEqual(["GET", "PUT", "DELETE"]);
+  });
+
+  it("de-dupes a method registered more than once at a path", () => {
+    const table = new RouteTable<string>();
+
+    // Two GET patterns both match `/a` (a specific one shadowing a broader one);
+    // the method appears once in the Allow set, not twice.
+    table.add("GET", "/a", "first");
+    table.add("GET", "/:rest", "second");
+
+    expect(table.allowedMethods("/a")).toEqual(["GET"]);
+  });
+
+  it("yields [] for a path no pattern matches — the genuine-404 signal", () => {
+    const table = new RouteTable<string>();
+
+    table.add("GET", "/a", "a");
+
+    expect(table.allowedMethods("/nope")).toEqual([]);
+  });
+
+  it("never decodes params, so a malformed percent-encoding does not throw here", () => {
+    const table = new RouteTable<string>();
+
+    table.add("POST", "/q/:term", "search");
+
+    // `match` would raise ROUTER_MALFORMED_PARAM decoding `%zz`; the verb-agnostic
+    // method probe only runs the matcher, so it reports the method without throwing.
+    expect(table.allowedMethods("/q/%zz")).toEqual(["POST"]);
+  });
+});
+
 describe("RouteTable.list", () => {
   it("lists every route's verb + pattern in registration order", () => {
     const table = new RouteTable<string>();

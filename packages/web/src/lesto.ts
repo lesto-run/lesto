@@ -142,6 +142,55 @@ const raisingHandler =
   };
 
 /**
+ * The `Allow` header value for a known path: its registered methods, plus `HEAD`
+ * whenever `GET` is present.
+ *
+ * A route registered for `GET` also answers `HEAD` (RFC 9110 §9.1 makes the pair a
+ * MUST — see {@link headResponseHandler}), so `HEAD` belongs in the advertised set
+ * even though no explicit `HEAD` route exists. Everything else is listed verbatim,
+ * in resolution order, comma-joined.
+ */
+const allowHeaderValue = (methods: readonly string[]): string => {
+  const list =
+    methods.includes("GET") && !methods.includes("HEAD") ? [...methods, "HEAD"] : [...methods];
+
+  return list.join(", ");
+};
+
+/**
+ * The terminal for a known path hit with an unsupported verb — a 405 carrying the
+ * `Allow` header (RFC 9110 §15.5.6), run after the app's global middleware like the
+ * 404 terminal. A FACTORY (not a shared constant) for the same cross-request-leak
+ * reason {@link notFound} is: middleware that mutates the response it sees must not
+ * poison the object every later 405 returns.
+ */
+const methodNotAllowedHandler =
+  (allow: string): Handler =>
+  () => ({
+    status: 405,
+    headers: { "content-type": "text/plain", allow },
+    body: "Method Not Allowed",
+  });
+
+/**
+ * A terminal that answers a `HEAD` by running the path's `GET` chain and dropping
+ * the body — the RFC 9110 §9.1 MUST that a resource answering `GET` also answers
+ * `HEAD`, with identical headers and no body (§9.3.2).
+ *
+ * `getChain` is the GET route's already-composed chain (its app middleware baked
+ * in), so it runs EXACTLY as the GET would — same guards, same headers, same
+ * status — and we return that response with an empty body. It is only reached when
+ * no explicit `HEAD` route matched the path, so a hand-registered HEAD still wins.
+ */
+const headResponseHandler =
+  (getChain: readonly Handler[]): Handler =>
+  async (c) => {
+    const response = await runChain(getChain, c);
+
+    return { ...response, body: "" };
+  };
+
+/**
  * Run a handler chain over a context, returning the response it produces.
  *
  * Each layer gets a memoized `next`: a handler may answer (return a response),
@@ -605,22 +654,31 @@ export class Lesto {
    *
    * Matches method + path once, builds the {@link Context} with the captured
    * params, and runs the route's handler chain. No match still runs the app's
-   * top-level `.use` middleware (wrapping a 404 terminal), so global concerns —
+   * top-level `.use` middleware (wrapping the terminal below), so global concerns —
    * a CORS preflight to an unrouted `OPTIONS`, a rate-limit on an unknown path —
-   * are answered for every request, matched or not. A path that fails to route
-   * because a param is a malformed percent-encoding (`match` throws a coded
-   * `ROUTER_MALFORMED_PARAM`) is treated the same way: the global middleware runs
-   * around a terminal that re-raises the coded error, so it still reaches the
+   * are answered for every request, matched or not.
+   *
+   * Three miss outcomes, distinguished so the status is honest (RFC 9110):
+   *   - **`HEAD` with a `GET` route but no explicit `HEAD`** — a resource that
+   *     answers `GET` MUST also answer `HEAD` (§9.1), so we run the GET chain and
+   *     drop the body ({@link headResponseHandler}), rather than 404 it.
+   *   - **A known path hit with an unsupported verb** — a 405 carrying an `Allow`
+   *     header of the path's methods (§15.5.6), NOT a 404.
+   *   - **A genuinely unknown path** — the plain 404 as before.
+   *
+   * A path that fails to route because a param is a malformed percent-encoding
+   * (`match` throws a coded `ROUTER_MALFORMED_PARAM`) still runs the global
+   * middleware around a terminal that re-raises the coded error, so it reaches the
    * transport as a 400 without slipping past CORS/rate-limit. The declared return
-   * is the string-bodied {@link LestoResponse} dispatch contract;
-   * a handler may produce a wider body (bytes, a stream — a page streams its
-   * HTML), which the transport, not this contract, writes — so it is narrowed
-   * back here.
+   * is the string-bodied {@link LestoResponse} dispatch contract; a handler may
+   * produce a wider body (bytes, a stream — a page streams its HTML), which the
+   * transport, not this contract, writes — so it is narrowed back here.
    */
   async handle(method: string, path: string, options?: HandleOptions): Promise<LestoResponse> {
     const matcher = this.matcher();
 
     let match: Match<readonly Handler[]> | undefined;
+    let headMatch: Match<readonly Handler[]> | undefined;
     let malformed: unknown;
 
     try {
@@ -633,12 +691,26 @@ export class Lesto {
       malformed = error;
     }
 
+    // No explicit route answered a HEAD: fall back to the path's GET route (RFC 9110
+    // §9.1 — GET implies HEAD). A malformed param on THAT route defers to the same
+    // coded refusal, so a bad `HEAD /q/%zz` still surfaces a 400, not a 404.
+    if (match === undefined && malformed === undefined && method === "HEAD") {
+      try {
+        headMatch = matcher.match("GET", path);
+      } catch (error) {
+        malformed = error;
+      }
+    }
+
     const request: LestoRequest = {
       method,
       path,
       // A miss carries no params; keep it NULL-PROTOTYPE like a match's params (see
       // `RouteTable.match`) so `c.param("constructor")` is `undefined`, not a method.
-      params: match?.params ?? (Object.create(null) as Record<string, string | string[]>),
+      // A HEAD fallback carries the matched GET route's params.
+      params:
+        (match ?? headMatch)?.params ??
+        (Object.create(null) as Record<string, string | string[]>),
       query: options?.query ?? {},
       headers: options?.headers ?? {},
       body: options?.body,
@@ -646,13 +718,31 @@ export class Lesto {
       ...(options?.rawBytes === undefined ? {} : { rawBytes: options.rawBytes }),
     };
 
-    // A match runs its baked chain (middleware + handler/page); a miss still runs
-    // the app's global middleware, around a 404 for an unknown path or a re-raise
-    // for a malformed param — either way CORS/rate-limit see every request.
-    const chain =
-      match !== undefined
-        ? match.value
-        : [...this.useChain, malformed === undefined ? notFoundHandler : raisingHandler(malformed)];
+    let chain: readonly Handler[];
+
+    if (match !== undefined) {
+      // A direct match runs its baked chain (middleware + handler/page) unchanged.
+      chain = match.value;
+    } else if (headMatch !== undefined) {
+      // The GET chain already carries the app middleware; do NOT re-wrap it in
+      // `useChain` — `headResponseHandler` runs it and strips the body.
+      chain = [headResponseHandler(headMatch.value)];
+    } else if (malformed !== undefined) {
+      // A malformed-param path: global middleware runs around a re-raise (a 400).
+      chain = [...this.useChain, raisingHandler(malformed)];
+    } else {
+      // A known path hit with an unsupported verb is a 405 + `Allow`; only a path
+      // no route matches at all is a 404. Either terminal still runs the global
+      // middleware, so CORS/rate-limit see every request.
+      const allowed = matcher.allowedMethods(path);
+
+      chain = [
+        ...this.useChain,
+        allowed.length === 0
+          ? notFoundHandler
+          : methodNotAllowedHandler(allowHeaderValue(allowed)),
+      ];
+    }
 
     const response = await runChain(chain, new Context(request));
 

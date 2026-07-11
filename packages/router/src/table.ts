@@ -158,6 +158,30 @@ export class RouteTable<T> {
     return undefined;
   }
 
+  /**
+   * Every distinct method whose pattern matches `path`, in first-registered order.
+   *
+   * The verb-agnostic companion to {@link match}: where `match` answers "which
+   * route runs this method+path", this answers "which methods does this path
+   * accept at all" — the set an `Allow` header lists when a known path is hit with
+   * an unmatched verb (a 405, not a 404). It runs each entry's matcher WITHOUT
+   * decoding params, so — unlike `match` — it never raises `ROUTER_MALFORMED_PARAM`
+   * and never throws; a path no pattern matches yields `[]`, the genuine-404 signal
+   * the caller distinguishes from a wrong-verb-on-a-known-path 405. De-duped,
+   * preserving insertion (resolution) order.
+   */
+  allowedMethods(path: string): string[] {
+    const methods: string[] = [];
+
+    for (const entry of this.entries) {
+      if (entry.regExp.exec(path) === null) continue;
+
+      if (!methods.includes(entry.method)) methods.push(entry.method);
+    }
+
+    return methods;
+  }
+
   /** Every registered route's verb + pattern, in resolution order, for inspection. */
   list(): ReadonlyArray<{ method: string; pattern: string }> {
     return this.entries.map((entry) => ({ method: entry.method, pattern: entry.pattern }));

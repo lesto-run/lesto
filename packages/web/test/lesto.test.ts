@@ -201,6 +201,105 @@ describe("lesto verbs + dispatch", () => {
   });
 });
 
+describe("lesto HEAD + 405 (RFC 9110 §9.1 / §15.5.6)", () => {
+  it("answers HEAD with the GET handler's headers + status but no body", async () => {
+    let ran = 0;
+
+    const app = lesto().get("/thing", (c) => {
+      ran += 1;
+
+      return c.text("the body", 200);
+    });
+
+    const response = await app.handle("HEAD", "/thing");
+
+    // The GET handler ran (so a HEAD sees the same headers/status a GET would)…
+    expect(ran).toBe(1);
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toBe("text/plain");
+    // …but the body is dropped — a HEAD carries none (§9.3.2).
+    expect(response.body).toBe("");
+  });
+
+  it("answers HEAD on a dynamic route (the F9 regression: was a 404)", async () => {
+    const app = lesto().get("/listings/:id", (c) => c.json({ id: c.param("id") }));
+
+    const response = await app.handle("HEAD", "/listings/42");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toBe("");
+  });
+
+  it("runs the GET route's app middleware for a HEAD fallback", async () => {
+    const order: string[] = [];
+
+    const app = lesto()
+      .use(async (_c, next) => {
+        order.push("mw");
+
+        return next();
+      })
+      .get("/thing", (c) => c.text("ok"));
+
+    await app.handle("HEAD", "/thing");
+
+    // The middleware baked into the GET chain runs exactly once for the HEAD, too.
+    expect(order).toEqual(["mw"]);
+  });
+
+  it("a HEAD on a genuinely unknown path is still a 404", async () => {
+    const app = lesto().get("/known", (c) => c.text("ok"));
+
+    expect((await app.handle("HEAD", "/missing")).status).toBe(404);
+  });
+
+  it("a HEAD fallback on a malformed-param path re-raises the coded refusal (a 400)", async () => {
+    // The GET route matches `/q/%zz`, but decoding `%zz` throws — the HEAD fallback
+    // defers to the same coded refusal a GET would, so it surfaces a 400, not a 404.
+    const app = lesto().get("/q/:term", (c) => c.text("ok"));
+
+    await expect(app.handle("HEAD", "/q/%zz")).rejects.toMatchObject({
+      code: "ROUTER_MALFORMED_PARAM",
+    });
+  });
+
+  it("returns 405 + Allow for a known path hit with an unsupported verb", async () => {
+    const app = lesto()
+      .get("/things/:id", (c) => c.text("show"))
+      .put("/things/:id", (c) => c.text("update"));
+
+    const response = await app.handle("DELETE", "/things/7");
+
+    expect(response.status).toBe(405);
+    expect(response.body).toBe("Method Not Allowed");
+
+    // Allow lists the registered verbs, and HEAD because GET is present.
+    const allow = (response.headers["allow"] as string).split(", ");
+    expect(allow).toContain("GET");
+    expect(allow).toContain("PUT");
+    expect(allow).toContain("HEAD");
+    expect(allow).not.toContain("DELETE");
+  });
+
+  it("omits HEAD from Allow when the path has no GET route", async () => {
+    const app = lesto().post("/submit", (c) => c.text("ok"));
+
+    const response = await app.handle("GET", "/submit");
+
+    expect(response.status).toBe(405);
+    expect(response.headers["allow"]).toBe("POST");
+  });
+
+  it("still runs global middleware before the 405 terminal (so CORS can short-circuit)", async () => {
+    const app = lesto()
+      .use(fromRequestMiddleware(corsLike))
+      .get("/r", (c) => c.text("ok"));
+
+    // An OPTIONS on a known path would 405, but the CORS preflight answers first.
+    expect((await app.handle("OPTIONS", "/r")).status).toBe(204);
+  });
+});
+
 describe("lesto middleware (.use) + per-route chain", () => {
   it("wraps routes registered after .use, outermost first", async () => {
     const order: string[] = [];
