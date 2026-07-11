@@ -668,6 +668,23 @@ async function dispatchHardened(
   timeoutMs: number | undefined,
   abortTimeout: () => void,
 ): Promise<AnyLestoResponse> {
+  // Authority-confusion guard — the edge twin of `@lesto/runtime`'s
+  // `parseRequestTarget` (F19). A well-formed origin-form target is a single-slash
+  // absolute path; a target that began `//host/path` (or the `/\` variant WHATWG
+  // folds to the same) survives into `url.pathname` as a `//`-prefixed path. A front
+  // proxy that ACL-matched the raw `//evil/admin` as authority `evil` + path `/admin`
+  // would forward it, and we would then route `//evil/admin` — the authority
+  // discarded, the ACL bypassed. Refuse it with a 400 before it can route, exactly as
+  // the node tier does. (`new URL` folds `/\` to `//`, so the single `//` test covers
+  // both shapes — a separate `/\` branch here would be unreachable.)
+  if (url.pathname.startsWith("//")) {
+    return {
+      status: 400,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+      body: bodyForStatus(400),
+    };
+  }
+
   const decoded = await decodeBody(request, headers["content-type"], maxBodyBytes);
 
   if (!decoded.ok) {

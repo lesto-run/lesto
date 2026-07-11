@@ -218,6 +218,30 @@ describe("toFetchHandler", () => {
     expect(calls).toEqual([]); // never reached the app
   });
 
+  it("refuses an authority-form target (//evil/admin) with 400 before dispatch — the edge F19 guard", async () => {
+    // `//evil/admin` survives into `url.pathname` as `//evil/admin`. A front proxy
+    // that ACL-matched the raw target as authority `evil` + path `/admin` would
+    // forward it; routing it here would bypass that ACL. It must be refused before
+    // it reaches the app — the edge twin of the node runtime's F19 fix.
+    const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
+
+    const response = await toFetchHandler(dispatch)(new Request("https://example.com//evil/admin"));
+
+    expect(response.status).toBe(400);
+    expect(calls).toEqual([]); // never routed
+  });
+
+  it("refuses the `/\\` backslash authority variant too (WHATWG folds it to `//`)", async () => {
+    const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
+
+    const response = await toFetchHandler(dispatch)(
+      new Request("https://example.com/\\evil/admin"),
+    );
+
+    expect(response.status).toBe(400);
+    expect(calls).toEqual([]); // never routed
+  });
+
   it("keeps a non-JSON body as raw text", async () => {
     const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
 
