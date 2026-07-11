@@ -11,6 +11,14 @@
  * `cancel()` masking the real error, usage recovery), and owning it once means the next such
  * fix lands once instead of having to be hand-transplanted into every provider.
  *
+ * The frame/field scan is spec-general, not just tuned to the two current providers: `\r\n` and
+ * bare `\r` line endings are normalized to `\n` before the `\n\n` boundary scan (a CRLF-emitting
+ * provider would otherwise never produce the `\n\n` this engine looks for, buffering the whole
+ * stream to close and losing every delta at once), and a frame's `data:` lines are joined with
+ * `\n` rather than only the first one being read (per the SSE spec). Both current providers only
+ * ever emit LF frames with a single `data:` line, so this is a no-op for them today — but a
+ * future provider that doesn't is handled correctly on day one instead of silently mishandled.
+ *
  * A provider supplies only a pure {@link FrameInterpreter}; the wire shapes stay in the
  * provider file. Internal — deliberately NOT re-exported from `index.ts`.
  */
@@ -129,15 +137,16 @@ export async function* parseSseStream(
   };
 
   try {
-    // Read chunks, accumulate, and emit one delta per complete `\n\n`-terminated frame. A partial
-    // frame stays buffered until the next chunk completes it, so a token split across two network
-    // reads is never lost or double-counted.
+    // Read chunks, normalize their line endings to `\n` (SSE permits `\r\n` and a bare `\r` too;
+    // only `\n` is scanned for below), and emit one delta per complete `\n\n`-terminated frame. A
+    // partial frame stays buffered until the next chunk completes it, so a token — or a line
+    // ending — split across two network reads is never lost or double-counted.
     for (;;) {
       const { done, value } = await reader.read();
 
       if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
+      buffer = normalizeLineEndings(buffer + decoder.decode(value, { stream: true }));
 
       let boundary = buffer.indexOf("\n\n");
 
@@ -165,7 +174,7 @@ export async function* parseSseStream(
     // connection (incomplete JSON): tolerate that quietly — the stream just ended early, so end
     // with the deltas already yielded rather than raising AI_STREAM_MALFORMED on a truncation. A
     // malformed frame mid-stream still throws (in `parseFrame`, above).
-    buffer += decoder.decode();
+    buffer = normalizeLineEndings(buffer + decoder.decode());
 
     let last: ParsedFrame | undefined;
     try {
@@ -228,19 +237,38 @@ export async function* parseSseStream(
 }
 
 /**
- * Split one SSE frame down to its `data:` payload, skip the sentinels, parse the JSON, and hand it
- * to the provider's {@link FrameInterpreter}. A `data:` line present but not valid JSON is refused
- * loudly as `AI_STREAM_MALFORMED`; the terminal `data: [DONE]` sentinel and a comment/`event:`-only
- * frame (no `data:` line) are ignored.
+ * Normalize one accumulated buffer's line endings to bare `\n`, ahead of the `\n\n`-boundary scan
+ * and the field-line split in {@link parseFrame} — both of which only ever look for `\n`. The SSE
+ * spec permits a line to end in `\r\n`, a bare `\r`, OR `\n`; without this a CRLF-emitting provider
+ * never produces the `\n\n` the boundary scan looks for, so the whole stream buffers to close and
+ * the final flush (which reads only the first `data:` line — see {@link parseFrame}) drops
+ * everything after it. Run over the WHOLE accumulated buffer (not just the newest chunk) each time
+ * so the result is the same regardless of how the underlying reads happen to chunk the bytes.
+ */
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
+/**
+ * Split one SSE frame down to its `data:` payload(s), skip the sentinels, parse the JSON, and hand
+ * it to the provider's {@link FrameInterpreter}. Per the SSE spec a frame MAY carry more than one
+ * `data:` line — ALL of them are read and joined with `\n` (never just the first), so a
+ * pretty-printed/multi-line JSON payload round-trips intact instead of being truncated to whatever
+ * the first line alone happens to parse (or fail to parse) as. The joined payload, if present but
+ * not valid JSON, is refused loudly as `AI_STREAM_MALFORMED`; the terminal `data: [DONE]` sentinel
+ * and a comment/`event:`-only frame (no `data:` line at all) are ignored.
  */
 function parseFrame(frame: string, interpret: FrameInterpreter): ParsedFrame | undefined {
-  const dataLine = frame.split("\n").find((line) => line.startsWith("data:"));
+  const dataLines = frame
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trim());
 
-  if (dataLine === undefined) {
+  if (dataLines.length === 0) {
     return undefined;
   }
 
-  const raw = dataLine.slice("data:".length).trim();
+  const raw = dataLines.join("\n");
 
   if (raw === "" || raw === "[DONE]") {
     return undefined;
