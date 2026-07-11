@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AuthError,
+  describeHashCost,
   generateToken,
   hashPassword,
   LestoError,
@@ -187,6 +188,67 @@ describe("needsRehash", () => {
   it("returns false for a malformed string (nothing to rehash from)", () => {
     expect(needsRehash("not a hash")).toBe(false);
     expect(needsRehash("scrypt$bad$8$1$aa$bb")).toBe(false);
+  });
+});
+
+describe("describeHashCost", () => {
+  const SALT_HEX = "a".repeat(32); // 16 bytes, the salt width both backends use
+  const SCRYPT_KEY = "b".repeat(128); // 64 bytes, scrypt's derived-key width
+  const PBKDF2_KEY = "c".repeat(64); // 32 bytes, PBKDF2's derived-key width
+
+  it("reads current-format scrypt work factors", () => {
+    expect(describeHashCost(`scrypt$${2 ** 17}$8$1$${SALT_HEX}$${SCRYPT_KEY}`)).toEqual({
+      algorithm: "scrypt",
+      n: 2 ** 17,
+      r: 8,
+      p: 1,
+    });
+  });
+
+  it("reads a LEGACY parameterless scrypt row back at its true cost (N=2^14)", () => {
+    // The 3-segment pre-versioned form carries no params; the describer must infer
+    // the cost it was actually minted under — matching the verifier's own parse, so
+    // the two can never disagree. (This arm was previously untested.)
+    expect(describeHashCost(`scrypt$${SALT_HEX}$${SCRYPT_KEY}`)).toEqual({
+      algorithm: "scrypt",
+      n: 2 ** 14,
+      r: 8,
+      p: 1,
+    });
+  });
+
+  it("reads the pbkdf2 iteration count", () => {
+    expect(describeHashCost(`pbkdf2$sha256$100000$${SALT_HEX}$${PBKDF2_KEY}`)).toEqual({
+      algorithm: "pbkdf2",
+      iterations: 100_000,
+    });
+  });
+
+  it("never carries the salt or derived key (secret-free)", () => {
+    const encoded = JSON.stringify(
+      describeHashCost(`scrypt$${2 ** 17}$8$1$${SALT_HEX}$${SCRYPT_KEY}`),
+    );
+
+    expect(encoded).not.toContain(SALT_HEX);
+    expect(encoded).not.toContain(SCRYPT_KEY);
+  });
+
+  it("collapses an unrecognized or corrupt row to unknown", () => {
+    // Not a hash at all.
+    expect(describeHashCost("not a hash")).toEqual({ algorithm: "unknown" });
+    // A newer/other writer's prefix (e.g. argon2id before its arm lands) — routes to
+    // the scrypt describer, which rejects the prefix → unknown.
+    expect(describeHashCost(`argon2id$19$2$1$${SALT_HEX}$${SCRYPT_KEY}`)).toEqual({
+      algorithm: "unknown",
+    });
+    // scrypt prefix but non-numeric N → the scrypt describer fails closed → unknown.
+    expect(describeHashCost(`scrypt$bad$8$1$${SALT_HEX}$${SCRYPT_KEY}`)).toEqual({
+      algorithm: "unknown",
+    });
+    // pbkdf2 prefix but a mis-sized key → the web describer fails closed → unknown.
+    expect(describeHashCost(`pbkdf2$sha256$100000$${SALT_HEX}$deadbeef`)).toEqual({
+      algorithm: "unknown",
+    });
   });
 });
 

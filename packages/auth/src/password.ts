@@ -36,8 +36,19 @@
  */
 
 import { AuthError } from "./errors";
-import { hashPasswordScrypt, needsRehashScrypt, verifyPasswordScrypt } from "./password-scrypt";
-import { hashPasswordWeb, needsRehashWeb, PBKDF2_PREFIX, verifyPasswordWeb } from "./password-web";
+import {
+  describeCostScrypt,
+  hashPasswordScrypt,
+  needsRehashScrypt,
+  verifyPasswordScrypt,
+} from "./password-scrypt";
+import {
+  describeCostWeb,
+  hashPasswordWeb,
+  needsRehashWeb,
+  PBKDF2_PREFIX,
+  verifyPasswordWeb,
+} from "./password-web";
 import { selectPasswordAlgorithm } from "./runtime";
 
 /** True iff `stored` is a PBKDF2 hash (so verify/needsRehash route to the web backend). */
@@ -97,4 +108,34 @@ export async function verifyPassword(password: string, stored: string): Promise<
  */
 export function needsRehash(stored: string): boolean {
   return isPbkdf2(stored) ? needsRehashWeb(stored) : needsRehashScrypt(stored);
+}
+
+/**
+ * A secret-free description of the KDF a stored hash was minted under — the
+ * algorithm tag and its cost parameters, and NOTHING that could reconstruct the
+ * hash (never the salt, never the derived key). Consumers put it on audit events
+ * (e.g. `@lesto/identity`'s `password_rehashed`) so a monitor can tell a cost
+ * UP-grade from a strength-reducing DOWN-grade.
+ */
+export type PasswordHashCost =
+  | { readonly algorithm: "scrypt"; readonly n: number; readonly r: number; readonly p: number }
+  | { readonly algorithm: "pbkdf2"; readonly iterations: number }
+  | { readonly algorithm: "unknown" };
+
+/**
+ * Describe the KDF cost a stored hash was minted under — algorithm tag + cost
+ * parameters ONLY, never the salt or derived key, so the result is safe to put on
+ * an event a sink logs freely. Total and non-throwing: dispatches on the stored
+ * prefix exactly as {@link verifyPassword} / {@link needsRehash} do, delegates to
+ * each backend's own cost reader (which reuses that backend's `parseStored`, so this
+ * can NEVER drift from what actually verifies), and collapses anything it does not
+ * recognize — a corrupt row, or a format from a newer writer — to
+ * `{ algorithm: "unknown" }`. When a new backend lands (e.g. argon2id, ADR 0046),
+ * its arm is added HERE, in one place, rather than re-spelled by every consumer.
+ */
+export function describeHashCost(stored: string): PasswordHashCost {
+  if (isPbkdf2(stored)) return describeCostWeb(stored) ?? { algorithm: "unknown" };
+
+  // scrypt (current or legacy); a future argon2id arm slots in above this line.
+  return describeCostScrypt(stored) ?? { algorithm: "unknown" };
 }

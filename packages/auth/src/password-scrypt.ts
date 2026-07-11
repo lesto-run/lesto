@@ -263,3 +263,27 @@ export function needsRehashScrypt(stored: string): boolean {
 
   return N < DEFAULT_N || r < DEFAULT_R || p < DEFAULT_P;
 }
+
+/**
+ * Describe the cost a stored scrypt hash was minted under — the algorithm tag and
+ * work factors ONLY, projecting away the salt and derived key so the result is safe
+ * to put on an audit event a sink logs freely (never the salt, never the key).
+ *
+ * Reuses {@link parseStored}, so it can never drift from what the verifier accepts
+ * and it reads a legacy parameterless row back at its true cost (N=2^14). Returns
+ * `undefined` for any string this backend did not mint, so the {@link ./password}
+ * facade's `describeHashCost` can fall through to the next backend.
+ */
+export function describeCostScrypt(
+  stored: string,
+):
+  | { readonly algorithm: "scrypt"; readonly n: number; readonly r: number; readonly p: number }
+  | undefined {
+  const parsed = parseStored(stored);
+
+  if (parsed === undefined) return undefined;
+
+  const { N, r, p } = parsed.params;
+
+  return { algorithm: "scrypt", n: N, r, p };
+}

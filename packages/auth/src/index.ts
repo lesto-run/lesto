@@ -18,7 +18,8 @@
  * WebAuthn/passkey + magic-link factors are designed in ADR 0020 (follow-ups).
  */
 
-export { hashPassword, needsRehash, verifyPassword } from "./password";
+export { describeHashCost, hashPassword, needsRehash, verifyPassword } from "./password";
+export type { PasswordHashCost } from "./password";
 
 // The explicit per-algorithm backends, for callers that must pin one (e.g. minting
 // PBKDF2 from Node for a DB an edge app will read; see the cross-runtime caveat in

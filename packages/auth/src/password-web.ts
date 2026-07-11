@@ -306,3 +306,22 @@ export function needsRehashWeb(stored: string): boolean {
 
   return parsed.iterations !== DEFAULT_ITERATIONS;
 }
+
+/**
+ * Describe the cost a stored PBKDF2 hash was minted under — the algorithm tag and
+ * iteration count ONLY, projecting away the salt and derived key so the result is
+ * safe to log on an audit event (never the salt, never the key).
+ *
+ * Reuses {@link parseStored}, so it can never drift from what the verifier accepts;
+ * returns `undefined` for anything this backend did not mint, so the
+ * {@link ./password} facade's `describeHashCost` can fall through.
+ */
+export function describeCostWeb(
+  stored: string,
+): { readonly algorithm: "pbkdf2"; readonly iterations: number } | undefined {
+  const parsed = parseStored(stored);
+
+  if (parsed === undefined) return undefined;
+
+  return { algorithm: "pbkdf2", iterations: parsed.iterations };
+}
