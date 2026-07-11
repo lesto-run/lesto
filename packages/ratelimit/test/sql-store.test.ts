@@ -324,8 +324,9 @@ describe("sqlRateLimitStore.sweep", () => {
 });
 
 describe("isUniqueViolation", () => {
-  it("is true for the PG SQLSTATE, true for SQLITE_CONSTRAINT* and the message shape", () => {
+  it("is true for the PG SQLSTATE, true for SQLITE_CONSTRAINT_UNIQUE/_PRIMARYKEY, and the message shape", () => {
     expect(isUniqueViolation({ code: "23505" })).toBe(true);
+    expect(isUniqueViolation({ code: "SQLITE_CONSTRAINT_UNIQUE" })).toBe(true);
     expect(isUniqueViolation({ code: "SQLITE_CONSTRAINT_PRIMARYKEY" })).toBe(true);
     expect(isUniqueViolation(new Error("UNIQUE constraint failed: t.key"))).toBe(true);
   });
@@ -337,6 +338,17 @@ describe("isUniqueViolation", () => {
     expect(isUniqueViolation("nope")).toBe(false);
     expect(isUniqueViolation(null)).toBe(false);
     expect(isUniqueViolation(undefined)).toBe(false);
+  });
+
+  it("is false for SQLITE_CONSTRAINT_NOTNULL/_CHECK/_FOREIGNKEY/_TRIGGER — a shared NOT NULL/CHECK/FK failure must never be swallowed as a fake unique-conflict retry", () => {
+    // Structured non-unique SQLite constraint codes: these share the
+    // `SQLITE_CONSTRAINT` prefix with the unique/primary-key codes, but must NOT
+    // match — e.g. a null password_hash hitting a NOT NULL column on the shared
+    // `users` table must fail LOUD, never be retried as a benign birth-race.
+    expect(isUniqueViolation({ code: "SQLITE_CONSTRAINT_NOTNULL" })).toBe(false);
+    expect(isUniqueViolation({ code: "SQLITE_CONSTRAINT_CHECK" })).toBe(false);
+    expect(isUniqueViolation({ code: "SQLITE_CONSTRAINT_FOREIGNKEY" })).toBe(false);
+    expect(isUniqueViolation({ code: "SQLITE_CONSTRAINT_TRIGGER" })).toBe(false);
   });
 });
 

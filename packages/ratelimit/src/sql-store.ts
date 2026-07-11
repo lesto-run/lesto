@@ -46,11 +46,24 @@ interface RateLimitRow {
   updated_at: number | string;
 }
 
+/** The two structured SQLite codes that are actually unique-ish, not merely `SQLITE_CONSTRAINT*`. */
+const SQLITE_UNIQUE_CODES = new Set(["SQLITE_CONSTRAINT_UNIQUE", "SQLITE_CONSTRAINT_PRIMARYKEY"]);
+
 /**
  * Detect a unique-constraint violation, structurally — never by parsing prose
- * loosely. Postgres uses SQLSTATE `23505`; SQLite reports a message containing
- * `UNIQUE constraint failed` or a code beginning `SQLITE_CONSTRAINT`. Exported
- * so the predicate's truth table is directly covered.
+ * loosely, and never by a loose `SQLITE_CONSTRAINT` prefix match. Postgres uses
+ * SQLSTATE `23505`; SQLite reports a message containing `UNIQUE constraint
+ * failed`, or — on drivers that expose a structured code — exactly
+ * `SQLITE_CONSTRAINT_UNIQUE` or `SQLITE_CONSTRAINT_PRIMARYKEY`.
+ *
+ * `SQLITE_CONSTRAINT_NOTNULL` / `_CHECK` / `_FOREIGNKEY` / `_TRIGGER` share the
+ * `SQLITE_CONSTRAINT` prefix but are NOT unique violations — this store is
+ * shared by @lesto/identity's `register()` against the `users` table (four
+ * NOT NULL columns plus a UNIQUE email), so treating the prefix alone as the
+ * signal would swallow a genuine NOT NULL/CHECK/FK failure (e.g. a hasher
+ * resolving `null` into `password_hash NOT NULL`) as a fake unique-conflict
+ * retry — a silent, wrong "success". Exported so the predicate's truth table
+ * is directly covered.
  */
 export function isUniqueViolation(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
@@ -59,7 +72,7 @@ export function isUniqueViolation(error: unknown): boolean {
 
   if (record.code === "23505") return true;
 
-  if (typeof record.code === "string" && record.code.startsWith("SQLITE_CONSTRAINT")) return true;
+  if (typeof record.code === "string" && SQLITE_UNIQUE_CODES.has(record.code)) return true;
 
   if (typeof record.message === "string" && record.message.includes("UNIQUE constraint failed")) {
     return true;
