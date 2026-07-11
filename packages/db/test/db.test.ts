@@ -514,6 +514,22 @@ describe("joins", () => {
     expect(tail.map((r) => r.posts.title)).toEqual(["On Looms"]);
   });
 
+  it("allowlists the join sort direction — a cast-smuggled payload collapses to ASC", async () => {
+    let captured = "";
+    const spy = createDb(adapt(jraw), { onQuery: (event) => (captured = event.sql) });
+    const payload = "asc, (SELECT password FROM authors LIMIT 1)" as "asc" | "desc";
+
+    await spy
+      .select()
+      .from(posts)
+      .innerJoin(authors, eq(posts.authorId, authors.id))
+      .orderBy(posts.title, payload)
+      .all();
+
+    expect(captured).toContain("ASC");
+    expect(captured).not.toContain("SELECT password");
+  });
+
   it("get returns one namespaced row, or undefined for no match", async () => {
     const hit = await jdb
       .select()
@@ -869,6 +885,21 @@ describe("select modifiers", () => {
         .all();
 
       expect(rows.map((r) => r.email)).toEqual(["c@x", "a@x"]);
+    });
+
+    // `direction` is typed `"asc" | "desc"`, but a cast lies — the SAME threat as
+    // the LIMIT/OFFSET injection, on the ORDER BY sibling. `direction` cannot ride
+    // a `?` placeholder (it's a keyword), so it MUST be allowlisted, not interpolated.
+    it("allowlists the sort direction — a cast-smuggled payload collapses to ASC", async () => {
+      let captured = "";
+      const spy = createDb(adapt(raw), { onQuery: (event) => (captured = event.sql) });
+      const payload = "asc, (SELECT password_hash FROM users LIMIT 1)" as "asc" | "desc";
+
+      await spy.select().from(users).orderBy(users.email, payload).all();
+
+      expect(captured).toContain('ORDER BY "email" ASC');
+      expect(captured).not.toContain("password_hash");
+      expect(captured).not.toContain("SELECT password_hash");
     });
   });
 
@@ -1393,6 +1424,27 @@ describe("conditions", () => {
 
     expect(and(single)).toBe(single);
     expect(or(single)).toBe(single);
+  });
+
+  it("and() / or() with zero args — the vacuous identity, valid SQL not a bare `WHERE ` (F11)", async () => {
+    // The dynamic-filter pattern collects zero conditions and expects "no filter".
+    // Zero conditions is the operator's identity: an empty `and()` is vacuously
+    // TRUE (unfiltered — every row), an empty `or()` vacuously FALSE (an "any of
+    // nothing" match — no row) — mirroring `inList([])`'s `1 = 0`. Either way the
+    // fragment stays valid SQL, never the malformed `WHERE ` (a syntax error).
+    expect(and()).toEqual({ sql: "1 = 1", params: [] });
+    expect(or()).toEqual({ sql: "1 = 0", params: [] });
+
+    // Driven end-to-end against the 3 seeded users — must run, not throw.
+    expect(await db.select().from(users).where(and()).all()).toHaveLength(3);
+    expect(await db.select().from(users).where(or()).all()).toEqual([]);
+
+    // A mix of empty and non-empty combine() nesting still composes: `x AND ()`
+    // folds to `x AND TRUE` (= x), while `x OR ()` folds to `x OR FALSE` (= x).
+    // Only b@x carries an `emailVerifiedAt`, so each nested form matches one row.
+    const verified = isNotNull(users.emailVerifiedAt);
+    expect(await db.select().from(users).where(and(verified, and())).all()).toHaveLength(1);
+    expect(await db.select().from(users).where(or(verified, or())).all()).toHaveLength(1);
   });
 
   it("boolean values bind as 1/0 in eq/ne (both arms)", () => {

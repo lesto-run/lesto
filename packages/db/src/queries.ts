@@ -172,7 +172,7 @@ function renderSelect<T extends Table>(
   if (options.respectLimitOrder) {
     if (state.orderBy) {
       parts.push(
-        `ORDER BY ${quoteIdentifier(state.orderBy.column)} ${state.orderBy.direction.toUpperCase()}`,
+        `ORDER BY ${quoteIdentifier(state.orderBy.column)} ${state.orderBy.direction === "desc" ? "DESC" : "ASC"}`,
       );
     }
 
@@ -523,7 +523,7 @@ function makeJoinQuery<S extends Shape>(
   return {
     where: (condition) => next({ where: condition }),
     orderBy: (column, direction = "asc") =>
-      next({ orderBy: `${qualified(column)} ${direction.toUpperCase()}` }),
+      next({ orderBy: `${qualified(column)} ${direction === "desc" ? "DESC" : "ASC"}` }),
     limit: (count) => next({ limit: count }),
     offset: (count) => next({ offset: count }),
 
