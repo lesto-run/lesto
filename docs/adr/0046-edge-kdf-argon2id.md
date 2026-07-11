@@ -20,7 +20,10 @@
     ruling) under the chief-architect's three conditions: **C1** — Stage 2 (the mint-default flip)
     stays gated on the Workers-Paid envelope re-run (`L-3bb43929`) against a **numeric login-timeout
     budget the OWNER writes before that re-run** (deliberately not fixed here, so the gate is not
-    post-hoc fitted — suggested starting point p95 cpuTime+overhead ≤ 250 ms, p95 e2e ≤ 750 ms);
+    post-hoc fitted; **no number is pre-seeded here on purpose** — the measured A-wasm result
+    (~40–50 ms CPU) would clear any casually-chosen threshold, so a "suggested" budget IS the
+    post-hoc fit the gate exists to prevent. The owner writes the budget blind, tracked by `L-b4ab57ba`
+    which **blocks** the re-run `L-3bb43929`);
     **C2** — no release containing the facade ships until the IT3 vendored-first-party-wasm bar is
     met (`L-cd31248e`); **C3** — the design keeps assuming 128 MB (A12; the ~256 MiB Free-plan
     measurement is not banked) and the A16 Node/Bun verify path (`L-3ab85cc4`) is specified before
@@ -157,10 +160,16 @@ semaphore is **mandatory, not optional**. `p=1` matches the no-threads reality o
   Risks); the wasm route must clear the workerd code-gen restriction and the publish pipeline;
   defender-side CPU on workerd is estimated, not measured (spike-gated below).
 
-Two implementation routes, **in the ratified order of preference** (Q1): **A-js first**, A-wasm as
-fallback — chosen by the spike on the acceptance gate below:
+> **⚠️ SPIKE-RESOLVED 2026-07-10 → backend = A-wasm (owner-ratified).** The A-js-first ordering in
+> this subsection is the **pre-spike paper preference**; the Phase-0 deployed-Worker gate
+> **resolved against it** (A-js measured ~10–16× slower, busting R4). The current backend is
+> **A-wasm** — see **§Phase-0 spike outcome** and the Status block. The text below is retained as
+> the decision-procedure record, not the live choice.
 
-- **A-js *(ratified default)*** — `@noble/hashes`' pure-JS `argon2id`. Zero assets, zero code-gen
+Two implementation routes, **in the (pre-spike) order of preference** (Q1): **A-js first**, A-wasm as
+fallback — chosen by the spike on the acceptance gate below (**spike resolved this to A-wasm**):
+
+- **A-js *(pre-spike default; spike-rejected)*** — `@noble/hashes`' pure-JS `argon2id`. Zero assets, zero code-gen
   concerns, one audited-family zero-dep package, identical bytes on every runtime, rides the existing
   publish pipeline untouched. This maximally preserves `@lesto/auth`'s "pure-TS, one-workspace-dep"
   property and sidesteps the entire binary-asset-through-the-pipeline risk class the 0.1.6→0.1.7 saga
@@ -189,9 +198,10 @@ recovery-code enrollment, with the derive semaphore engaged), measuring:
   actually exercised;
 - bundle delta and cold start.
 
-**Acceptance:** prefer **A-js** if it clears the p95 budget under combined load with memory headroom;
-fall to **A-wasm** only if A-js busts the budget; fall to **Option C (noble-scrypt)** only if BOTH
-argon2 routes fail on workerd.
+**Acceptance (procedure — SPIKE-RESOLVED to A-wasm 2026-07-10):** prefer **A-js** if it clears the
+p95 budget under combined load with memory headroom; fall to **A-wasm** only if A-js busts the
+budget; fall to **Option C (noble-scrypt)** only if BOTH argon2 routes fail on workerd. *Outcome: A-js
+busted the budget → **A-wasm** selected; Option C not triggered (see §Phase-0 spike outcome).*
 
 ### Option B — stay on 100k PBKDF2 and compensate
 
@@ -419,7 +429,7 @@ cost, it does not decide whether they exist.
   parameters (`split_part(password_hash, '$', 1)`), watch `argon2id$…` share rise; no action is
   *required* on the tail.
 
-## Phase-0 spike outcome (2026-07-10 — board `L-557c95dd`; awaiting owner ratification of the flip)
+## Phase-0 spike outcome (2026-07-10 — board `L-557c95dd`; backend flip OWNER-RATIFIED 2026-07-10)
 
 Ran the hard gate: a real deployed Cloudflare Worker (`*.workers.dev`, compat 2026-06-01, colo
 EWR), both routes at m=19456/t=2/p=1, timed by `wrangler tail` `cpuTime` (authoritative — workerd
@@ -482,9 +492,9 @@ fable chief-architect + an opus red-team (which corrected an over-stated first-d
   A1's budget). This is the *point* of a KDF; it stays comfortably inside the paid plan's default CPU
   limit, and the free plan was already excluded by any real KDF.
 - **Surface:** a third permanent backend (format, parser, guards, tests, docs) and either a `.wasm`
-  asset threaded through the publish pipeline (A-wasm) or one pinned pure-JS dependency in
-  `@lesto/auth` (A-js, the ratified default) — each a standing maintenance and supply-chain commitment
-  in the most security-sensitive package.
+  asset threaded through the publish pipeline (A-wasm — **the spike-resolved, ratified backend**) or one pinned pure-JS dependency in
+  `@lesto/auth` (A-js, the pre-spike default, **rejected**) — each a standing maintenance and supply-chain commitment
+  in the most security-sensitive package. *(As ratified: the `.wasm`-through-the-pipeline commitment is the one incurred.)*
 - **Timing enumeration during the mixed-corpus window — larger and longer-lived than the prior draft
   admitted (M6).** An argon2id decoy (~200–500 ms JS) does not cost the same as an unconverted
   `pbkdf2$100k` verify (~50 ms) — a ~10× wall-time delta, larger than the scrypt→PBKDF2 delta the
@@ -506,10 +516,14 @@ fable chief-architect + an opus red-team (which corrected an over-stated first-d
 
 ## Ratified answers to the open questions
 
-1. **Backend route + supply chain → A-js (`@noble/hashes` pure-JS argon2id) is the ratified default
+1. **[SPIKE-RESOLVED 2026-07-10 → A-wasm, OWNER-RATIFIED. The A-js-default preference stated in this
+   answer was the *pre-spike* paper ordering; the deployed-Worker gate resolved AGAINST it (A-js
+   ~10–16× slower, busted R4). See §Phase-0 spike outcome + §Amendment trail A11.]** Backend route +
+   supply chain → *(pre-spike)* A-js (`@noble/hashes` pure-JS argon2id) is the default
    preference, spike-gated on the rewritten gate above; A-wasm (a vendored first-party build
-   preferred over any third-party npm wasm) is the fallback if A-js busts the login-timeout budget;
-   Option C noble-scrypt only if both argon2 routes fail on workerd.** Rationale: A-js rides the
+   preferred over any third-party npm wasm) is the fallback if A-js busts the login-timeout budget
+   *(→ it did; A-wasm selected)*;
+   Option C noble-scrypt only if both argon2 routes fail on workerd. Rationale: A-js rides the
    existing publish pipeline untouched and adds no binary-asset class (the 0.1.6→0.1.7 saga's exact
    cost), keeping `@lesto/auth` a pure-TS package with one auditable dep and identical bytes on every
    runtime. License/audit verification (incl. noble-argon2's audit scope) is an implementation-time
@@ -550,10 +564,11 @@ fable chief-architect + an opus red-team (which corrected an over-stated first-d
 
 ## Residual risks knowingly accepted at ratification
 
-- **R1 — Spike-gated backend.** All deployed-Worker perf/memory numbers are estimates until the
-  spike; ratification of the *backend* is conditional on the rewritten spike passing, with the
-  noble-scrypt fallback if workerd falsifies both argon2 routes. The decision to *move off 100k
-  PBKDF2 to a memory-hard edge KDF* is unconditional.
+- **R1 — Spike-gated backend → RESOLVED 2026-07-10.** The spike RAN on a deployed Worker; the
+  backend is **A-wasm** (owner-ratified), with the noble-scrypt fallback un-triggered (neither argon2
+  route failed). The Free-plan *operational-envelope* numbers remain estimates until the Workers-Paid
+  re-run (`L-3bb43929`) — that gates Stage 2, not the backend selection. The decision to *move off
+  100k PBKDF2 to a memory-hard edge KDF* was, and stays, unconditional.
 - **R2 — Mixed-corpus timing residual.** The argon2id decoy cost ≠ an unconverted-pbkdf2 verify cost;
   same enumeration-timing class as the scrypt→pbkdf2 window, larger in magnitude (~10×) and
   longer-lived (M4/M6), bounded by rate limiter + monitoring, accepted as documented.
@@ -587,7 +602,9 @@ over-claim.
 
 Folded in from the deployed-Worker spike and its fable-chief-architect + opus-red-team review
 (the review corrected an over-stated first-draft A-js figure; see `spikes/adr-0046-edge-kdf/`).
-These invert the Q1 *default* and touch load-bearing claims — **awaiting owner ratification**.
+These invert the Q1 *default* and touch load-bearing claims — **OWNER-RATIFIED 2026-07-10** (via the
+delegated fable-chief-architect ruling + owner go-ahead; the specific conditions C1–C3 ride the
+chief-architect ruling and await explicit owner confirmation on the C1 numeric budget — see C1 note).
 
 - **A11 — gate outcome recorded:** backend = **A-wasm**, inverting the Q1 A-js default; perf
   figures move from "Claims not verified" to measured-with-caveat (Free plan; envelope re-run

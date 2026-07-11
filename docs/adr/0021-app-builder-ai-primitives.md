@@ -235,11 +235,14 @@ the SDK maintains (the fast-drifting wire schema), NOT the SDK's provider-regist
 framework-bound UI-streaming hooks. Keeps zero *runtime* vendor dep + edge portability while
 renting the schema-tracking that is the actual tax.
 
-**To ratify 0021 as-own, these must be TRUE (else the ratification is hollow):** F5/F23/F24
-closed so the seam is honest and un-bypassed; a written "owned-wire maintenance budget" naming
-who tracks Anthropic/OpenAI wire drift and the trip-wire that would re-open this; and the
-`createLlmJudge`/model-id coupling (F24) fixed so the seam is provider-agnostic in fact, not
-just in type.
+**These conditions ride the ratification as BLOCKING follow-ups (goalpost stated honestly):** the
+direction (own) is ratified now; F5/F23/F24 are **open, not yet closed** — so by the strict "must be
+TRUE else the ratification is hollow" bar this is a *ratify-the-direction, track-the-conditions* call,
+NOT a "conditions already met" one. They must close before a release **markets** the AI wire as
+production-honest: F5/F23/F24 closed so the seam is honest and un-bypassed; a written "owned-wire
+maintenance budget" (the canary `L-a005d83b`) naming who tracks Anthropic/OpenAI wire drift and the
+trip-wire that would re-open this; and the `createLlmJudge`/model-id coupling (F24) fixed so the seam
+is provider-agnostic in fact, not just in type.
 
 ## Ratification amendment (2026-07-10) — own the model layer
 
@@ -250,7 +253,8 @@ request builder + ~60 of response parser + ~40 of pure `interpretFrame` + wire t
 `src/sse.ts` engine absorbed the stream-lifecycle correctness once, not per-provider). The
 review's cited pains are implementation bugs, not structural arguments — F25 fixed
 (`00d3309`); F23/F24 are seam **violations** to close, not reasons to replace what's behind the
-seam; F5 is the one real parity gap and is a P0 fixed regardless. The Vercel SDK is a heavy,
+seam; F5 is the one real parity gap and is a P0 **to be fixed regardless** (`L-a65b7ede`, open — not
+yet done). The Vercel SDK is a heavy,
 fast-moving dep whose provider interface has broken across majors (`LanguageModelV1`→`V2`), drags
 `zod` in, ships a registry/UI-hooks surface Lesto would use ~5% of, and dissolves the
 injected-`Transport` test story — the exact churn class the zero-dep thesis exists to avoid.
@@ -268,6 +272,8 @@ normalized types deliberately differ, so vendoring adds drift bookkeeping for no
 sustained parity churn > ~2–3 agent-days/month for a quarter on wire-chasing, OR a product
 requirement for the broad multi-modal provider matrix as a headline feature.
 
-**Conditions carried:** F5 (`L-a65b7ede`), F23 (`L-74c3cf1e`), F24 (`ddb830a1`) close so the seam
-is honest and un-bypassed; the canary is the "owned-wire maintenance budget" trip-wire. Prompt
+**Conditions carried (all OPEN follow-ups, not done):** F5 (`L-a65b7ede`), F23 (`L-74c3cf1e`),
+F24 (`L-ddb830a1` — a *task*, NOT a commit; the `createLlmJudge` default-model coupling at
+`packages/ai/src/evals.ts:79` is still live) must close so the seam is honest and un-bypassed; the
+canary (`L-a005d83b`) is the "owned-wire maintenance budget" trip-wire. Prompt
 caching on the owned wire and the adapter escape hatch are filed as follow-ups.
