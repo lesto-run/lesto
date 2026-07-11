@@ -33,7 +33,12 @@ export interface EvalResult {
 export type Eval = (input: string, output: string) => Promise<EvalResult>;
 
 export interface JudgeOptions {
-  /** The model that renders the verdict — defaults to a current Claude (Sonnet 4.6). */
+  /**
+   * The model that renders the verdict (required). The judge runs on this model's
+   * own `defaultModelId` unless {@link JudgeOptions.modelId} overrides it — so on a
+   * default `createAnthropic()` the judge uses that model's frontier default (Opus),
+   * NOT a cheap id. For a cheaper judge, pass `modelId` (e.g. `DEFAULT_JUDGE_MODEL_ID`).
+   */
   readonly model: LanguageModel;
   /** The rubric the judge applies, stated as a system prompt. */
   readonly rubric: string;

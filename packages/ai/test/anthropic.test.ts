@@ -572,18 +572,14 @@ describe("parseStream", () => {
     // The completed tool call rides inline as its own delta (text ""), not lost between text frames.
     expect(deltas).toEqual([{ text: "", toolCall: expectedCall }]);
     // ...and on the final accounting, alongside usage + the tool_use stop reason.
+    // These two surfaces carry the SAME call (asserted above on both `deltas` and
+    // `final.toolCalls`) — the "read one channel, never sum" contract lives in the
+    // StreamDelta.toolCall / StreamFinal.toolCalls docstrings (L-8810f00d).
     expect(final).toEqual({
       usage: { inputTokens: 10, outputTokens: 15 },
       stopReason: "tool_use",
       toolCalls: [expectedCall],
     });
-
-    // L-8810f00d — the two surfaces are the SAME set, not additive: the calls
-    // collected from the inline deltas deep-equal `final.toolCalls`. A consumer reads
-    // ONE channel; summing both double-counts. This guards that contract (it breaks
-    // the moment the inline and final channels diverge).
-    const inlineCalls = deltas.map((d) => d.toolCall).filter((c) => c !== undefined);
-    expect(inlineCalls).toEqual(final?.toolCalls);
   });
 
   it("defaults a tool-call block index to 0 when a frame omits it (defensive: a relay that strips index still assembles)", async () => {
