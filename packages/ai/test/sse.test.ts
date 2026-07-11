@@ -71,21 +71,26 @@ describe("parseSseStream — frame/field scan (engine-level, provider-agnostic)"
 
   it("recovers correctly even when a CRLF pair is split exactly across two network reads", async () => {
     // The trailing `\r` of the FIRST frame's terminator lands in one chunk; the paired `\n` (plus a
-    // whole second CRLF-CRLF) lands in the next. Normalizing the accumulated buffer on every chunk
-    // (rather than only the newest bytes) means the boundary is still found correctly.
-    const frames = ['data: {"text":"joined"}\r', "\n\r\n"];
+    // whole second frame) lands in the next. Normalizing the ACCUMULATED buffer on every chunk
+    // (rather than only the newest bytes) means the boundary is still found correctly. Two distinct
+    // frames make this non-vacuous: the pre-fix splitter buffers the whole CRLF stream to EOF and
+    // its final flush reads only the first `data:` line, so it yields ["a"] and drops "b".
+    const frames = ['data: {"text":"a"}\r', '\n\r\ndata: {"text":"b"}\r\n\r\n'];
 
     const { texts } = await collect(parseSseStream(sseResponse(frames), echoInterpreter, "Test"));
 
-    expect(texts).toEqual(["joined"]);
+    expect(texts).toEqual(["a", "b"]);
   });
 
   it("reassembles a JSON payload split across two network reads inside a CRLF-terminated frame", async () => {
-    const frames = ['data: {"text":', '"joined"}\r\n\r\n'];
+    // The first frame's JSON is torn mid-value across the read boundary; a second complete frame
+    // follows. Non-vacuous: pre-fix, the unmatched CRLF boundaries buffer everything and the final
+    // flush yields only "a", dropping "b".
+    const frames = ['data: {"text":', '"a"}\r\n\r\ndata: {"text":"b"}\r\n\r\n'];
 
     const { texts } = await collect(parseSseStream(sseResponse(frames), echoInterpreter, "Test"));
 
-    expect(texts).toEqual(["joined"]);
+    expect(texts).toEqual(["a", "b"]);
   });
 
   it("flushes a final CRLF frame the stream closed without a trailing blank line", async () => {
@@ -97,11 +102,14 @@ describe("parseSseStream — frame/field scan (engine-level, provider-agnostic)"
   });
 
   it("tolerates a torn CRLF final frame from a dropped stream — yields what arrived, no throw", async () => {
-    const frames = ['data: {"text":"partial"}\r\n\r\n', 'data: {"text":"trunc'];
+    // Two complete CRLF frames, then a truncated tail the stream dropped mid-frame. The complete
+    // frames must both surface and the torn tail must be tolerated (no throw). Non-vacuous: pre-fix,
+    // the whole CRLF stream buffers to EOF and the final flush yields only "a", never "b".
+    const frames = ['data: {"text":"a"}\r\n\r\ndata: {"text":"b"}\r\n\r\n', 'data: {"text":"tr'];
 
     const { texts } = await collect(parseSseStream(sseResponse(frames), echoInterpreter, "Test"));
 
-    expect(texts).toEqual(["partial"]);
+    expect(texts).toEqual(["a", "b"]);
   });
 
   it("joins multiple `data:` lines in one frame with `\\n` per the SSE spec, instead of reading only the first", async () => {
@@ -141,14 +149,18 @@ describe("parseSseStream — frame/field scan (engine-level, provider-agnostic)"
     expect((error as AiError).code).toBe("AI_STREAM_MALFORMED");
   });
 
-  it("ignores a comment/event:-only frame (no `data:` line at all) regardless of line ending", async () => {
+  it("ignores comment/`event:`-only lines (no `data:` value) regardless of line ending", async () => {
+    // A comment-only frame, then a frame carrying a non-`data:` `event:` line ahead of its data, then
+    // a plain data frame. The comment frame and the `event:` line must both be skipped. Non-vacuous:
+    // pre-fix, the CRLF stream buffers to EOF and the final flush yields only "a", dropping "b".
     const frames = [
       ": a comment line with no data\r\n\r\n",
-      'event: ping\r\ndata: {"text":"x"}\r\n\r\n',
+      'event: ping\r\ndata: {"text":"a"}\r\n\r\n',
+      'data: {"text":"b"}\r\n\r\n',
     ];
 
     const { texts } = await collect(parseSseStream(sseResponse(frames), echoInterpreter, "Test"));
 
-    expect(texts).toEqual(["x"]);
+    expect(texts).toEqual(["a", "b"]);
   });
 });
