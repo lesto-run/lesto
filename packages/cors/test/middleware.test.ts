@@ -86,6 +86,39 @@ describe("cors middleware", () => {
     expect(response.headers["Access-Control-Allow-Origin"]).toBe("*");
   });
 
+  it("token-unions a controller Vary with the policy Vary: Origin instead of clobbering it", async () => {
+    // Non-wildcard policy → corsHeaders emits `Vary: Origin`. A controller that
+    // sets its own `Vary: Cookie` must NOT drop `Origin`: last-writer-wins here
+    // would reopen the shared-cache cross-origin leak.
+    const middleware = cors({ origin: "https://app.example.com" });
+
+    const response = await middleware(
+      requestWith({ method: "GET", headers: { origin: "https://app.example.com" } }),
+      async () => ({ ...okResponse, headers: { ...okResponse.headers, Vary: "Cookie" } }),
+    );
+
+    const tokens = String(response.headers["Vary"])
+      .split(",")
+      .map((token) => token.trim().toLowerCase());
+
+    expect(tokens).toContain("origin");
+    expect(tokens).toContain("cookie");
+    // A single canonical Vary key — the union is not split across two casings.
+    const varyKeys = Object.keys(response.headers).filter((key) => key.toLowerCase() === "vary");
+    expect(varyKeys).toHaveLength(1);
+  });
+
+  it("keeps the policy Vary: Origin when the controller sets no Vary", async () => {
+    const middleware = cors({ origin: "https://app.example.com" });
+
+    const response = await middleware(
+      requestWith({ method: "GET", headers: { origin: "https://app.example.com" } }),
+      async () => okResponse,
+    );
+
+    expect(response.headers["Vary"]).toBe("Origin");
+  });
+
   it("lets a controller header override a CORS header of the same name", async () => {
     const middleware = cors({ origin: "*" });
 

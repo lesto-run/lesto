@@ -8,7 +8,7 @@
  * a preflight outright or fold the headers onto the real response on the way out.
  */
 
-import type { Middleware } from "@lesto/web";
+import { mergeHeaders, type Middleware } from "@lesto/web";
 
 import { corsHeaders } from "./cors";
 import type { CorsOptions } from "./cors";
@@ -80,6 +80,10 @@ export function cors(options: CorsOptions = {}): Middleware {
 
     // Merge the CORS headers *under* the response so a controller that set its
     // own header for the same name still wins; the browser sees the policy.
-    return { ...response, headers: { ...headers, ...response.headers } };
+    // `mergeHeaders` keeps that controller-wins rule for every header EXCEPT
+    // `Vary`, which it token-unions: a controller's `Vary: Cookie` must not
+    // clobber the policy's `Vary: Origin` (dropping `Origin` reopens the
+    // shared-cache cross-origin leak the non-wildcard policy set it to prevent).
+    return { ...response, headers: mergeHeaders(headers, response.headers) };
   };
 }
