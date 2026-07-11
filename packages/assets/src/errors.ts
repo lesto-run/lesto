@@ -12,6 +12,20 @@ export type AssetsErrorCode =
   /** The bundler reported a failed build. */
   | "ASSETS_BUNDLE_FAILED"
   /**
+   * A first-party island module reads a name its target does not export
+   * (`ns.typo`, or an unreferenced `import { typo }`). Rollup classifies this as a
+   * NON-FATAL `MISSING_EXPORT` and compiles the access to `undefined`; the build
+   * escalates it to this FATAL code so a genuine typo fails loudly instead of
+   * shipping as `undefined` (ADR 0011 loud-when-wrong). Distinct from
+   * `ASSETS_BUNDLE_FAILED` so a consumer can tell a missing-export from any other
+   * compile failure, and so the `binding` + `exporter` it names survive
+   * propagation (`vite-build.ts` re-throws it unflattened). Scoped to the
+   * importer: the same miss written INSIDE a `node_modules` dependency is a
+   * third-party guarded-optional access, not the user's typo, and is left a
+   * non-fatal warning — see `failOnMissingExport`.
+   */
+  | "ASSETS_MISSING_EXPORT"
+  /**
    * A module under `app/islands/` is not a well-formed island: it has no default
    * export, or its default carries no `.island` declaration (i.e. it was not
    * produced by `defineIsland`). The synthesizer cannot classify it eager/lazy or

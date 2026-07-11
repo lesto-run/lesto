@@ -92,15 +92,19 @@ async function bundle(request: BundleRequest, appRoot: string): Promise<readonly
           // genuine user typo (`ns.typo`) would otherwise ship to prod silently as `undefined`.
           //
           // `failOnMissingExport` (extracted, unit-tested to 100%: `missing-export.ts`) THROWS
-          // a coded `AssetsError` naming the missing binding + exporter for EVERY
-          // `MISSING_EXPORT`; the throw rides out of Rollup's build and is caught below (which
-          // `console.error`s the cause, so the user sees which binding/module missed) and
-          // re-wrapped as `ASSETS_BUNDLE_FAILED`. There is no longer any contained case to
-          // swallow: the one historical live producer — `@lesto/ui`'s `React.use` off the
-          // `react → preact/compat` namespace under the preact dialect — is gone (the resolver
-          // now carries React's `use` through a server-only seam, so no `react` specifier rides
-          // the client island graph). Every other warning code is forwarded to `defaultHandler`
-          // unchanged.
+          // a coded `ASSETS_MISSING_EXPORT` `AssetsError` naming the missing binding + exporter
+          // + importer when the miss was written in FIRST-PARTY source; the throw rides out of
+          // Rollup's build and is caught below (which `console.error`s the cause) and re-thrown
+          // UNFLATTENED, so the user — and a programmatic caller — sees which binding/module
+          // missed. A miss whose importer lives under `node_modules` is a dependency's own
+          // guarded-optional access (e.g. `React.use ?? shim` under the preact dialect, whose
+          // `preact/compat` is a strict subset of React) and is left a plain warning — failing
+          // the app build over a dependency's deliberate feature-probe would be a false
+          // positive. The one historical FIRST-PARTY producer — `@lesto/ui`'s `React.use` off
+          // the `react → preact/compat` namespace under the preact dialect — is gone (the
+          // resolver now carries React's `use` through a server-only seam, so no `react`
+          // specifier rides the client island graph). Every other warning code is forwarded to
+          // `defaultHandler` unchanged.
           //
           // This DELIBERATELY diverges from `Bun.build`, which silently ships the same access
           // as `undefined` — that silence is the bug, not a parity target. (A missing NAMED
@@ -134,6 +138,12 @@ async function bundle(request: BundleRequest, appRoot: string): Promise<readonly
     })) as Rollup.RollupOutput | Rollup.RollupOutput[];
   } catch (cause) {
     console.error(cause);
+
+    // A first-party MISSING_EXPORT already names the exact binding + exporter +
+    // importer — re-throw it unflattened so that actionable detail survives to a
+    // programmatic `buildClient` caller, not just the console. Any other failure
+    // is opaque here, so it wears the generic bundle-failed code.
+    if (cause instanceof AssetsError && cause.code === "ASSETS_MISSING_EXPORT") throw cause;
 
     throw new AssetsError("ASSETS_BUNDLE_FAILED", "the client bundle failed to compile", {
       dialect: request.dialect,
