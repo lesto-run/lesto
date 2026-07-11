@@ -3,8 +3,9 @@
  *
  * An `Eval` is a pure function `(input, output) => Promise<EvalResult>`. That is
  * the whole abstraction — an LLM-judge eval is just an `Eval` that itself calls
- * `generateText` (the judge model defaults to a current Claude), so the pattern
- * composes with the model layer with zero new machinery. A guardrail is an eval
+ * `generateText` (the judge runs on the injected model's own default id, so it
+ * composes with any provider), so the pattern composes with the model layer with
+ * zero new machinery. A guardrail is an eval
  * run before return that can REFUSE: a failed guard throws a coded error the
  * boundary maps to an HTTP response.
  *
@@ -40,11 +41,21 @@ export interface JudgeOptions {
   readonly threshold?: number;
   /** The code reported when the judge fails the output. Defaults to `AI_EVAL_FAILED`. */
   readonly failCode?: string;
-  /** Override the judge model id. Defaults to `claude-sonnet-4-6`. */
+  /**
+   * Override the model id for the judge call. Defaults to the injected model's own
+   * `defaultModelId` — so a judge composes with ANY provider (Anthropic, or a
+   * `createOpenAICompatible` endpoint like Ollama/LM Studio). It is NOT defaulted to
+   * a Claude id: stamping one onto a non-Anthropic endpoint requested a Claude model
+   * from an OpenAI-compatible server (`AI_HTTP_ERROR`).
+   */
   readonly modelId?: string;
 }
 
-/** The judge model id used when a judge does not override it (a current Claude). */
+/**
+ * A cheap current-Claude model id you MAY pass as `JudgeOptions.modelId` for an
+ * Anthropic judge. It is NOT applied automatically — an unset `modelId` inherits the
+ * injected model's `defaultModelId` so the judge works on any provider (F24).
+ */
 export const DEFAULT_JUDGE_MODEL_ID = "claude-sonnet-4-6";
 
 const DEFAULT_THRESHOLD = 0.5;
@@ -76,7 +87,10 @@ export function createLlmJudge(options: JudgeOptions): Eval {
     const { text } = await generateText({
       model: options.model,
       system: options.rubric,
-      modelId: options.modelId ?? DEFAULT_JUDGE_MODEL_ID,
+      // Inherit the injected model's own default when unset — never stamp a
+      // Claude id onto an arbitrary provider (F24). `generateText` falls back to
+      // `model.defaultModelId` when `modelId` is undefined.
+      ...(options.modelId === undefined ? {} : { modelId: options.modelId }),
       messages,
     });
 

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { createAnthropic } from "../src/anthropic";
+import { createAnthropic, DEFAULT_MODEL_ID } from "../src/anthropic";
 import { AiError } from "../src/errors";
 import { createLlmJudge, DEFAULT_JUDGE_MODEL_ID, guard } from "../src/evals";
+import { createOpenAICompatible } from "../src/openai-compatible";
 
-import { constantTransport, jsonResponse, textMessage } from "./fake-transport";
+import { constantTransport, jsonResponse, openaiTextMessage, textMessage } from "./fake-transport";
 
 import type { Eval } from "../src/evals";
 
@@ -26,10 +27,31 @@ describe("createLlmJudge", () => {
     expect(result.score).toBeCloseTo(0.9);
     expect(result.code).toBeUndefined();
 
-    // Defaults to the current-Claude judge model and applies the rubric as system.
+    // Inherits the INJECTED model's own default id (Anthropic's here), not a
+    // hardcoded judge id, and applies the rubric as system.
     const sent = (await requests[0]?.json()) as Record<string, unknown>;
-    expect(sent["model"]).toBe(DEFAULT_JUDGE_MODEL_ID);
+    expect(sent["model"]).toBe(DEFAULT_MODEL_ID);
     expect(sent["system"]).toBe("Score helpfulness 0..1.");
+  });
+
+  it("runs on an OpenAI-compatible model's OWN id, never a Claude id (F24)", async () => {
+    // A judge over Ollama/LM Studio must request THAT server's model, not a Claude
+    // id — stamping `DEFAULT_JUDGE_MODEL_ID` here asked an OpenAI endpoint for a
+    // Claude model (AI_HTTP_ERROR). The judge inherits the model's `defaultModelId`.
+    const { transport, requests } = constantTransport(jsonResponse(openaiTextMessage("0.8")));
+    const model = createOpenAICompatible({
+      baseURL: "http://localhost:11434/v1",
+      apiKey: "sk-test",
+      defaultModelId: "llama3.2",
+      transport,
+    });
+
+    const result = await createLlmJudge({ model, rubric: "r", threshold: 0.5 })("Q", "A");
+
+    expect(result.passed).toBe(true);
+    const sent = (await requests[0]?.json()) as Record<string, unknown>;
+    expect(sent["model"]).toBe("llama3.2");
+    expect(sent["model"]).not.toBe(DEFAULT_JUDGE_MODEL_ID);
   });
 
   it("fails with a code when the score is below the threshold", async () => {
