@@ -121,6 +121,76 @@ describe("mergeHeaders", () => {
       "set-cookie": "only=1",
     });
   });
+
+  it("unions Vary from both layers instead of letting the over side clobber it", () => {
+    // The CORS hazard: a policy's `Vary: Origin` (under) merged with a
+    // controller's `Vary: Cookie` (over). Last-writer-wins would drop `Origin`
+    // and reopen the shared-cache cross-origin leak; the union keeps both.
+    const merged = mergeHeaders({ Vary: "Origin" }, { Vary: "Cookie" });
+
+    expect(merged).toEqual({ Vary: "Origin, Cookie" });
+
+    // Guard against a silent regression to clobber: `Origin` must survive.
+    expect(merged["Vary"]).toContain("Origin");
+    expect(merged["Vary"]).toContain("Cookie");
+  });
+
+  it("dedupes Vary tokens case-insensitively under a single key", () => {
+    // Different casing on the header name AND on the token: one entry, no
+    // duplicate `Origin`, key kept at the under side's canonical casing.
+    const merged = mergeHeaders({ Vary: "Origin" }, { vary: "origin, Cookie" });
+
+    expect(merged).toEqual({ Vary: "Origin, Cookie" });
+    expect(merged["vary"]).toBeUndefined();
+  });
+
+  it("unions a multi-token policy Vary with a controller Vary, none duplicated", () => {
+    // A reflected-headers preflight emits `Vary: Origin, Access-Control-Request-Headers`;
+    // a controller adds `Vary: Cookie`. All three tokens ride, split on commas.
+    const merged = mergeHeaders(
+      { Vary: "Origin, Access-Control-Request-Headers" },
+      { Vary: "Cookie" },
+    );
+
+    expect(merged).toEqual({ Vary: "Origin, Access-Control-Request-Headers, Cookie" });
+  });
+
+  it("unions Vary when a layer carries it as a string list", () => {
+    // The `string[]` value arm: a header already carried as an array merges as
+    // cleanly as a comma-list string.
+    const merged = mergeHeaders({ Vary: ["Origin", "Accept"] }, { Vary: "accept, Cookie" });
+
+    expect(merged).toEqual({ Vary: "Origin, Accept, Cookie" });
+  });
+
+  it("drops empty Vary tokens from stray commas", () => {
+    // A trailing/duplicate comma must not leave a phantom empty token in the union.
+    const merged = mergeHeaders({ Vary: "Origin, " }, { Vary: "Cookie,," });
+
+    expect(merged).toEqual({ Vary: "Origin, Cookie" });
+  });
+
+  it("carries a Vary present in only one layer through untouched", () => {
+    // Over-only Vary: no under Vary to union with, so it passes straight through.
+    expect(mergeHeaders({ "content-type": "text/html" }, { Vary: "Origin" })).toEqual({
+      "content-type": "text/html",
+      Vary: "Origin",
+    });
+
+    // Under-only Vary: same, from the other side.
+    expect(mergeHeaders({ Vary: "Origin" }, { "content-type": "text/html" })).toEqual({
+      Vary: "Origin",
+      "content-type": "text/html",
+    });
+  });
+
+  it("keeps controller-wins for a non-Vary header collision", () => {
+    // The union is Vary-specific: an ordinary header still lets the over layer win,
+    // so a controller's own Content-Type is not turned into a union.
+    expect(
+      mergeHeaders({ "content-type": "application/json" }, { "content-type": "text/html" }),
+    ).toEqual({ "content-type": "text/html" });
+  });
 });
 
 describe("statusForError", () => {

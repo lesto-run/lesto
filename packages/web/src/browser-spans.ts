@@ -27,6 +27,39 @@
  *     fewer spans, never a 400. A body that is not a JSON object is the one hard
  *     refusal (a 400). A span missing the ids that make it joinable is dropped, not
  *     half-recorded.
+ *
+ * TRUST BOUNDARY — these spans are CLIENT-SUPPLIED and UNAUTHENTICATED. The
+ * `traceId`/`parentSpanId` are chosen by the browser, because RUM stitching is
+ * defined that way: to join the UI hop to the server trace, the client MUST echo
+ * the server trace id the SSR page handed it (`<meta name="lesto-traceparent">`),
+ * so the join key is inherently caller-controlled. Two consequences, and why each
+ * is an ACCEPTED tradeoff rather than a defended one here:
+ *
+ *   - Trace grafting. A caller can POST spans under any 32-hex `traceId` and graft
+ *     them onto a server trace. Targeted grafting onto a KNOWN server trace is not
+ *     a realistic threat — trace ids are 128-bit and unguessable, so an attacker
+ *     cannot name a victim's live trace; the residue is self-grafting (forging
+ *     spans onto one's own trace), which corrupts nothing an operator relies on.
+ *     Binding acceptance to a signed/nonce trace token (so only the page the
+ *     server actually served may contribute) is the only real fix, but it is ruled
+ *     out here: soft navigation (ADR 0024) emits spans long after the document's
+ *     token would have gone stale, and enforcing it is a render-pipeline change —
+ *     out of scope for this receiver. The `browser.*` span names already mark
+ *     every span here as client-origin, so a collector can treat them as untrusted.
+ *   - Ingestion-cost DoS. Unauthenticated + no built-in per-caller rate cap means a
+ *     flood inflates OTLP/log ingestion. The per-request blast radius is already
+ *     bounded (the byte cap above); the request RATE is bounded when the app wires
+ *     `secureStack({ rateLimit })`, which covers this route (it rides `useChain`).
+ *     A BUILT-IN cap independent of app middleware was considered and deferred: the
+ *     repo's bounded limiter (`@lesto/ratelimit`) depends ON `@lesto/web`, so a
+ *     `web → ratelimit` edge would be circular; and a hand-rolled global counter
+ *     would silently drop legitimate RUM on a high-traffic app (every user's spans
+ *     share one bucket), while a per-caller counter reintroduces the unbounded
+ *     evicting-store DoS the repo already tracks (L-976b4302). Rate limiting stays
+ *     an app-level `secureStack` concern until a bounded primitive can be reused
+ *     without the cycle. The client-error beacon ({@link ./client-errors}) shares
+ *     this unauthenticated-ingestion posture (it carries no trace id, so only this
+ *     second point applies to it).
  */
 
 import type { BrowserSpan } from "@lesto/observability";

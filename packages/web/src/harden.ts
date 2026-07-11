@@ -79,8 +79,18 @@ const COEP_HEADER = "Cross-Origin-Embedder-Policy";
  * each setting a cookie (a session middleware under a CSRF middleware) both
  * belong on the wire — losing either drops a cookie. So when both layers carry
  * `set-cookie`, their values concatenate into one list (under first, over
- * second), which each transport then emits as one line per element. Every other
- * header keeps last-writer-wins: an over `Content-Type` replaces the under one.
+ * second), which each transport then emits as one line per element.
+ *
+ * `Vary` is the one header we UNION instead of replace. It names the request
+ * headers a response was computed from, and both layers may legitimately
+ * contribute a reason: a CORS policy adds `Vary: Origin` (so a shared cache keys
+ * a non-wildcard `Access-Control-Allow-Origin` per origin), while a controller
+ * may add its own `Vary: Cookie`. Last-writer-wins would let one clobber the
+ * other — dropping `Vary: Origin` reopens exactly the shared-cache cross-origin
+ * leak the CORS policy set it to prevent. So the two are token-unioned
+ * (comma lists on both sides, deduped case-insensitively, first-seen casing and
+ * order preserved) into one canonical `Vary`. Every OTHER header keeps
+ * last-writer-wins: an over `Content-Type` replaces the under one.
  *
  * Pure and total over a {@link HeaderMap}: a single string and a string list are
  * both handled, so a response whose header is already an array merges as cleanly
@@ -107,6 +117,19 @@ export function mergeHeaders(under: HeaderMap, over: HeaderMap): HeaderMap {
       return;
     }
 
+    // Vary is token-unioned, not overwritten: both layers may name a request
+    // header the response varies on (a CORS policy's `Origin`, a controller's
+    // `Cookie`), and last-writer-wins would drop one — a shared-cache leak when
+    // the dropped token is the policy's `Vary: Origin`.
+    if (lower === "vary" && existing !== undefined) {
+      byLower.set(lower, {
+        key: existing.key,
+        value: unionVary(existing.value, value),
+      });
+
+      return;
+    }
+
     // Any other header: the new value wins, written under the key already chosen
     // for this name (so casing does not split it into two entries).
     byLower.set(lower, { key: existing?.key ?? name, value });
@@ -127,6 +150,43 @@ export function mergeHeaders(under: HeaderMap, over: HeaderMap): HeaderMap {
 /** Normalize a header value to a list, so a single value and an array merge alike. */
 function asList(value: string | string[]): string[] {
   return Array.isArray(value) ? value : [value];
+}
+
+/**
+ * Split a `Vary` header value into its individual tokens.
+ *
+ * A value is either a single comma-list string (`"Origin, Cookie"`) or an array
+ * of them (a header already carried as a list). Each element is split on commas,
+ * trimmed, and empties from stray/trailing commas dropped — so `"Origin, "`
+ * yields just `["Origin"]`, never a phantom `""` that would pollute the union.
+ */
+function varyTokens(value: string | string[]): string[] {
+  return asList(value)
+    .flatMap((part) => part.split(","))
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+}
+
+/**
+ * Union two `Vary` values into one canonical comma-list.
+ *
+ * Case-insensitive dedup (HTTP field names are case-insensitive) that keeps the
+ * FIRST-seen token — under's tokens first, then over's — so both order and
+ * original casing are stable. The result is a single string, so it writes back
+ * into the {@link HeaderMap} under one `Vary` key.
+ */
+function unionVary(under: string | string[], over: string | string[]): string {
+  const seen = new Map<string, string>();
+
+  for (const token of [...varyTokens(under), ...varyTokens(over)]) {
+    const lower = token.toLowerCase();
+
+    if (!seen.has(lower)) {
+      seen.set(lower, token);
+    }
+  }
+
+  return [...seen.values()].join(", ");
 }
 
 /** Merge the default headers under a response; the response's own headers win. */

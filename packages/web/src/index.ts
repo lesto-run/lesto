@@ -78,6 +78,7 @@ export type { Middleware, Next } from "./middleware";
 export {
   bodyForStatus,
   DEFAULT_SECURITY_HEADERS,
+  mergeHeaders,
   RECOMMENDED_CSP,
   securityDefaults,
   statusForError,

@@ -25,6 +25,12 @@
  *     route never strict-validates it — it extracts the fields it understands and
  *     ignores the rest, so a client-version skew degrades to a partial event, not
  *     a 400. A body that is not even a JSON object is the one hard refusal (a 400).
+ *
+ * Like the browser-spans receiver, this beacon is UNAUTHENTICATED, so its request
+ * RATE (not just its per-request size) is an app-level `secureStack({ rateLimit })`
+ * concern — there is no built-in per-caller cap here. See the TRUST BOUNDARY note
+ * in {@link ./browser-spans} for why a built-in cap is deferred; this beacon
+ * carries no trace id, so only the ingestion-cost half of that note applies.
  */
 
 import type { Context } from "./handler-context";
