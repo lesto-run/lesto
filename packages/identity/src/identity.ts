@@ -51,9 +51,11 @@
  *     migration/legacy-rehash window has a mixed corpus, so a real row's verify cost
  *     can differ from the decoy's *verify* cost: a timing signal that self-drains for
  *     accounts that sign in (rehash-on-login) but persists for the dormant never-login
- *     tail until it is force-reset/expired at cutover, and is bounded by
- *     `loginRateLimiter` only when one is wired. Codes stay identical (default
- *     posture). See {@link pbkdf2MigrationHasher} and docs/guide/edge-password-migration.md.
+ *     tail until it is force-reset/expired at cutover, and is bounded by the default
+ *     (or a wired) `loginRateLimiter` unless it is explicitly disabled — durably so
+ *     only over a SQL-backed limiter (the in-memory default is a per-process floor).
+ *     Codes stay identical (default posture). See {@link pbkdf2MigrationHasher} and
+ *     docs/guide/edge-password-migration.md.
  */
 
 import {
@@ -75,7 +77,7 @@ import {
 import type { Clock, PasswordHashCost, Session, SessionStore } from "@lesto/auth";
 import type { Db } from "@lesto/db";
 import { hasCode } from "@lesto/errors";
-import type { RateLimiter } from "@lesto/ratelimit";
+import { MemoryRateLimitStore, RateLimiter } from "@lesto/ratelimit";
 
 import { assertStrongSecret, IdentityError } from "./errors";
 import {
@@ -129,6 +131,41 @@ const DEFAULT_RESET_TTL_MS = 60 * 60 * 1000;
  * still requires a live second-factor code to mint anything).
  */
 const DEFAULT_TOTP_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * The secure-by-default brute-force cap — 5 attempts, refilling over 15 minutes
+ * (F8). Applied out of the box to BOTH the login (`login:<email>`) and
+ * second-factor (`totp:<userId>`) paths whenever the caller wires no limiter of
+ * their own, so credential-stuffing and 2FA code-guessing are bounded by
+ * DEFAULT, not opt-in. Mirrors the config the option docs have always suggested
+ * (`capacity: 5, refillPerSecond: 5/900`). See {@link defaultRateLimiter}.
+ */
+const DEFAULT_THROTTLE_CAPACITY = 5;
+const DEFAULT_THROTTLE_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * Build the secure-by-default per-account throttle: an in-memory token bucket at
+ * the {@link DEFAULT_THROTTLE_CAPACITY} / {@link DEFAULT_THROTTLE_WINDOW_MS} cap,
+ * used whenever a caller wires neither {@link IdentityOptions.loginRateLimiter}
+ * nor {@link IdentityOptions.totpRateLimiter} explicitly (F8: brute-force
+ * protection is ON by default, not opt-in).
+ *
+ * In-memory ON PURPOSE — the secure default MUST NOT require an external store to
+ * exist, so it mirrors the default {@link MemorySessionStore}: a per-process
+ * floor with zero configuration. That floor is real on a long-lived Node server
+ * (the bucket persists across requests in one process), but WEAK on serverless /
+ * edge (a fresh isolate resets it) and per-node on a multi-node fleet. For a
+ * DURABLE, fleet-wide cap wire a limiter over `sqlRateLimitStore` (the option
+ * docs show the shape); pass `false` to opt out deliberately. login and TOTP each
+ * get their OWN instance, so the two buckets never interact.
+ */
+const defaultRateLimiter = (clock: Clock | undefined): RateLimiter =>
+  new RateLimiter({
+    store: new MemoryRateLimitStore(),
+    capacity: DEFAULT_THROTTLE_CAPACITY,
+    refillPerSecond: DEFAULT_THROTTLE_CAPACITY / (DEFAULT_THROTTLE_WINDOW_MS / 1000),
+    ...(clock ? { clock } : {}),
+  });
 
 /**
  * The password-hashing surface Identity leans on — an injectable seam over
@@ -210,9 +247,11 @@ const productionHasher: PasswordHasher = {
  * error codes — worst for legacy N=2^14 rows. This is inherent to a mixed-KDF corpus
  * (a single decoy cannot match every per-row cost). Rehash-on-login drains it for
  * accounts that sign in, but the dormant never-login tail keeps its scrypt row until
- * force-reset/expired — so it does NOT fully self-drain. MUST-DOs: wire a per-account
- * `loginRateLimiter` (the residual is unbounded without it), keep the window short,
- * drain the corpus before cutover (see the runbook), and monitor.
+ * force-reset/expired — so it does NOT fully self-drain. MUST-DOs: the default
+ * in-memory `loginRateLimiter` already bounds this per process, but for a durable,
+ * fleet-wide bound during migration wire a SQL-backed `loginRateLimiter` (do NOT
+ * disable it with `false`); keep the window short, drain the corpus before cutover
+ * (see the runbook), and monitor.
  */
 export const pbkdf2MigrationHasher: PasswordHasher = {
   hashPassword: hashPasswordWeb,
@@ -385,14 +424,23 @@ export interface IdentityOptions {
   /**
    * Per-account login throttle — the **inner, account-keyed** defense.
    *
-   * When present, `login` checks this limiter under the key
-   * `login:<normalizedEmail>` before it answers, and burns one token on each
-   * *failed* attempt; once the bucket is empty it refuses with a coded
-   * `IDENTITY_LOGIN_THROTTLED` (a successful login spends nothing, so a real
-   * user is never locked out by their own sign-in). Wire it over
-   * `sqlRateLimitStore` so the cap is **fleet-correct** — N failures throttle
-   * the account across every node, not per process — typically a small bucket
-   * (e.g. `capacity: 5, refillPerSecond: 5/900` ≈ 5 attempts per 15 minutes).
+   * **ON by default (F8).** Left unset, `login` uses the in-memory
+   * {@link defaultRateLimiter} — 5 attempts / 15 minutes — so brute-force
+   * protection ships out of the box rather than as an opt-in an app author can
+   * forget. Pass a limiter to override it (typically one over `sqlRateLimitStore`
+   * so the cap is **fleet-correct** — N failures throttle the account across
+   * every node, not per process — e.g. `capacity: 5, refillPerSecond: 5/900`),
+   * or pass `false` to disable the throttle entirely (a deliberate opt-out, e.g.
+   * when an outer tier already bounds attempts). ⚠️ The default is IN-MEMORY: a
+   * per-process floor that resets on a serverless/edge isolate recycle and does
+   * not span a multi-node fleet — wire a SQL-backed limiter for a durable,
+   * fleet-wide cap in production (see {@link defaultRateLimiter}).
+   *
+   * `login` checks the resolved limiter under the key `login:<normalizedEmail>`
+   * before it answers, and burns one token on each *failed* attempt; once the
+   * bucket is empty it refuses with a coded `IDENTITY_LOGIN_THROTTLED` (a
+   * successful login spends nothing, so a real user is never locked out by their
+   * own sign-in).
    *
    * This is the credential-stuffing defense: it bounds guesses against *one
    * account* no matter how many IPs an attacker spreads them over. The IP-keyed
@@ -406,7 +454,7 @@ export interface IdentityOptions {
    * same posture `login` keeps elsewhere (one KDF derive on every failure path,
    * `IDENTITY_INVALID_CREDENTIALS` for both unknown-email and wrong-password).
    */
-  readonly loginRateLimiter?: RateLimiter;
+  readonly loginRateLimiter?: RateLimiter | false;
 
   /**
    * Per-account second-factor throttle — the brute-force defense on the TOTP and
@@ -415,16 +463,22 @@ export interface IdentityOptions {
    * A confirmed factor turns a 6-digit code into the *only* remaining barrier
    * after a stolen password, and a recovery code is a fixed break-glass string;
    * without a cap, an attacker who already holds the password can simply iterate
-   * codes. When present, `verifyTotpChallenge` and `verifyRecoveryCode` check this
-   * limiter under the key `totp:<userId>` and burn one token on each *failed*
-   * attempt; once the bucket empties they refuse with a coded
-   * `IDENTITY_TOTP_THROTTLED` before touching the secret (a *successful* verify
-   * spends nothing, so a legitimate user is never locked out of their own
-   * second step). Wire it over `sqlRateLimitStore` so the cap is fleet-correct —
-   * N failures throttle the account across every node — typically a small bucket
-   * (e.g. `capacity: 5, refillPerSecond: 5/900` ≈ 5 attempts per 15 minutes).
+   * codes — so, like {@link loginRateLimiter}, this is **ON by default (F8)**.
+   * Left unset, the second-factor paths use the in-memory {@link defaultRateLimiter}
+   * (5 attempts / 15 minutes); pass a limiter to override it (typically over
+   * `sqlRateLimitStore` for a fleet-correct cap), or `false` to disable it
+   * deliberately. ⚠️ The default is IN-MEMORY — a per-process floor, not durable
+   * or fleet-wide; wire a SQL-backed limiter in production (see
+   * {@link defaultRateLimiter}).
+   *
+   * `verifyTotpChallenge`, `verifyRecoveryCode`, and the `completeTotpChallenge`
+   * login step all check the resolved limiter under the key `totp:<userId>` and
+   * burn one token on each *failed* attempt; once the bucket empties they refuse
+   * with a coded `IDENTITY_TOTP_THROTTLED` before touching the secret (a
+   * *successful* verify spends nothing, so a legitimate user is never locked out
+   * of their own second step).
    */
-  readonly totpRateLimiter?: RateLimiter;
+  readonly totpRateLimiter?: RateLimiter | false;
 
   /**
    * Optional hook called on a successful password reset, *in addition to* the
@@ -612,9 +666,10 @@ export interface Identity {
    * Verify a TOTP challenge for a user (the second step after `login`). Resolves
    * `void` on success; throws `IDENTITY_INVALID_TOTP` for an unknown user, an
    * unconfirmed/absent factor, a wrong code, or a *replay* of an already-accepted
-   * code inside its live ±window (RFC 6238 §5.2) — all enumeration-quiet. With a
-   * {@link IdentityOptions.totpRateLimiter} wired, a drained `totp:<userId>` bucket
-   * refuses with `IDENTITY_TOTP_THROTTLED` before the secret is touched.
+   * code inside its live ±window (RFC 6238 §5.2) — all enumeration-quiet. The
+   * per-account {@link IdentityOptions.totpRateLimiter} is ON by default, so a
+   * drained `totp:<userId>` bucket refuses with `IDENTITY_TOTP_THROTTLED` before
+   * the secret is touched (unless the limiter is disabled with `false`).
    */
   verifyTotpChallenge(userId: number, code: string): Promise<void>;
 
@@ -623,8 +678,9 @@ export interface Identity {
    * Atomically claims the matched code (a conditional `used_at IS NULL` UPDATE), so
    * a replay — or a concurrent second consumer racing the same code — is refused.
    * Throws `IDENTITY_INVALID_TOTP` for an unknown user / no factor / no matching
-   * unused code. With a {@link IdentityOptions.totpRateLimiter} wired, a drained
-   * `totp:<userId>` bucket refuses with `IDENTITY_TOTP_THROTTLED` first.
+   * unused code. The per-account {@link IdentityOptions.totpRateLimiter} is ON by
+   * default, so a drained `totp:<userId>` bucket refuses with
+   * `IDENTITY_TOTP_THROTTLED` first (unless the limiter is disabled with `false`).
    */
   verifyRecoveryCode(userId: number, code: string): Promise<void>;
 }
@@ -651,6 +707,23 @@ export function createIdentity(options: IdentityOptions): Identity {
   const challengeTokens = totpChallengeSigner(options.secret, options.clock);
 
   const sessionStore = options.sessionStore ?? new MemorySessionStore();
+
+  // Brute-force protection is ON BY DEFAULT (F8). An unset limiter resolves to
+  // the in-memory `defaultRateLimiter` (a per-process floor — no external store
+  // required); an explicit `false` opts out deliberately; a wired limiter is used
+  // as-is (e.g. a fleet-correct SQL-backed one). login and TOTP each get their own
+  // default instance so the two account-keyed buckets never interact. Every
+  // throttle site below reads these resolved handles, never `options.*` — so a
+  // `false` opt-out cleanly disables the guard (the `!== undefined` checks skip).
+  const resolveLimiter = (limiter: RateLimiter | false | undefined): RateLimiter | undefined =>
+    limiter === undefined
+      ? defaultRateLimiter(options.clock)
+      : limiter === false
+        ? undefined
+        : limiter;
+
+  const loginRateLimiter = resolveLimiter(options.loginRateLimiter);
+  const totpRateLimiter = resolveLimiter(options.totpRateLimiter);
 
   const sessions = new Sessions({
     store: sessionStore,
@@ -699,16 +772,16 @@ export function createIdentity(options: IdentityOptions): Identity {
   // Refuse a second-factor attempt once the per-account `totp:<userId>` bucket is
   // drained — the brute-force guard on the TOTP/recovery challenge, mirroring the
   // login throttle's peek-then-deny. Cost-0 peek never spends; the cost-1 retry
-  // hint denies on an empty bucket and so also spends nothing. With no limiter
-  // wired this is a single comparison and a return.
+  // hint denies on an empty bucket and so also spends nothing. Throttling is ON
+  // by default; only an explicit `false` opt-out makes this a no-op return.
   const assertTotpNotThrottled = async (userId: number): Promise<void> => {
-    if (options.totpRateLimiter === undefined) return;
+    if (totpRateLimiter === undefined) return;
 
     const key = `totp:${userId}`;
-    const peek = await options.totpRateLimiter.check(key, 0);
+    const peek = await totpRateLimiter.check(key, 0);
 
     if (peek.remaining < 1) {
-      const denied = await options.totpRateLimiter.check(key, 1);
+      const denied = await totpRateLimiter.check(key, 1);
 
       throw new IdentityError(
         "IDENTITY_TOTP_THROTTLED",
@@ -722,8 +795,8 @@ export function createIdentity(options: IdentityOptions): Identity {
   // the penalty that drains it toward the throttle. A successful verify never
   // calls this, so a real user is never locked out of their own second step.
   const penalizeTotp = async (userId: number): Promise<void> => {
-    if (options.totpRateLimiter !== undefined) {
-      await options.totpRateLimiter.check(`totp:${userId}`, 1);
+    if (totpRateLimiter !== undefined) {
+      await totpRateLimiter.check(`totp:${userId}`, 1);
     }
   };
 
@@ -955,13 +1028,15 @@ export function createIdentity(options: IdentityOptions): Identity {
      * email — that is the intentional UX-over-leak tradeoff and is
      * documented at the module level.
      *
-     * **Per-account throttle.** With a {@link IdentityOptions.loginRateLimiter}
-     * wired, each *failed* attempt burns a token from a `login:<email>` bucket;
-     * once it empties, `login` refuses with `IDENTITY_LOGIN_THROTTLED` before it
-     * touches the DB or the KDF. The bucket is keyed by email regardless of
-     * whether the account exists, so it never leaks existence, and a successful
-     * login spends nothing — a real user is never throttled by their own
-     * sign-in. Over `sqlRateLimitStore` the cap is fleet-correct. See the option.
+     * **Per-account throttle (ON by default).** {@link IdentityOptions.loginRateLimiter}
+     * defaults to an in-memory limiter, so each *failed* attempt burns a token from
+     * a `login:<email>` bucket out of the box; once it empties, `login` refuses with
+     * `IDENTITY_LOGIN_THROTTLED` before it touches the DB or the KDF. The bucket is
+     * keyed by email regardless of whether the account exists, so it never leaks
+     * existence, and a successful login spends nothing — a real user is never
+     * throttled by their own sign-in. Override it with a `sqlRateLimitStore`-backed
+     * limiter for a durable, fleet-correct cap, or pass `false` to disable it. See
+     * the option.
      *
      * **Rehash-on-login.** After a password verifies, if the stored hash was
      * minted under weaker KDF parameters than today's default (a legacy or
@@ -980,15 +1055,15 @@ export function createIdentity(options: IdentityOptions): Identity {
       // refuse before touching the DB or the KDF once the bucket is empty.
       const throttleKey = `login:${normalized}`;
 
-      if (options.loginRateLimiter !== undefined) {
+      if (loginRateLimiter !== undefined) {
         // Cost 0 never spends — it just reports how many tokens remain. An empty
         // bucket means the account is throttled; we then ask the limiter for the
         // real retry hint with a cost-1 check, which *denies* on an empty bucket
         // and so still spends nothing.
-        const peek = await options.loginRateLimiter.check(throttleKey, 0);
+        const peek = await loginRateLimiter.check(throttleKey, 0);
 
         if (peek.remaining < 1) {
-          const denied = await options.loginRateLimiter.check(throttleKey, 1);
+          const denied = await loginRateLimiter.check(throttleKey, 1);
 
           // A throttled attempt is a failed login. No `userId` — the throttle
           // refuses before resolving a user, and is enumeration-safe by design
@@ -1009,8 +1084,8 @@ export function createIdentity(options: IdentityOptions): Identity {
       // successful login spends nothing, so a real user is never locked out by
       // their own sign-in.
       const penalize = async (): Promise<void> => {
-        if (options.loginRateLimiter !== undefined) {
-          await options.loginRateLimiter.check(throttleKey, 1);
+        if (loginRateLimiter !== undefined) {
+          await loginRateLimiter.check(throttleKey, 1);
         }
       };
 
@@ -1035,8 +1110,9 @@ export function createIdentity(options: IdentityOptions): Identity {
       // single-cost corpus (the steady state). During a migration/legacy-rehash window a
       // real row's verify cost can differ from the decoy's verify cost — a signal that
       // self-drains (rehash-on-login) for accounts that sign in but persists for the
-      // dormant never-login tail, and is bounded only when `loginRateLimiter` is wired.
-      // See {@link pbkdf2MigrationHasher} and docs/guide/edge-password-migration.md.
+      // dormant never-login tail, and is bounded by the default (or a wired)
+      // `loginRateLimiter` unless it is disabled — durably so only over a SQL-backed
+      // one. See {@link pbkdf2MigrationHasher} and docs/guide/edge-password-migration.md.
       const failLogin = async (spendDecoy: boolean, error: IdentityError): Promise<never> => {
         const decoy = await dummyHash();
 

@@ -641,6 +641,89 @@ describe("second-factor throttle", () => {
 });
 
 // ---------------------------------------------------------------------------
+// second-factor brute-force protection is ON BY DEFAULT (F8 / L-92479cc7)
+//
+// A 6-digit code is the only barrier left after a stolen password, so the TOTP /
+// recovery challenge must be attempt-capped OUT OF THE BOX — an app author must
+// not ship an uncapped second factor by omitting `totpRateLimiter`. These wire NO
+// limiter and assert the built-in in-memory throttle fires; pre-F8 the capped
+// attempt was still IDENTITY_INVALID_TOTP, so each is a real RED→GREEN regression.
+// ---------------------------------------------------------------------------
+
+describe("default second-factor throttle (secure by default, opt-out not opt-in)", () => {
+  it("caps failed TOTP challenges with NO limiter wired (the 6th is THROTTLED)", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+    await identity.confirmTotp(token, codeFor(secret));
+    now += 30 * 1000;
+
+    // Five wrong codes spend the default 5-token bucket — each a plain INVALID_TOTP.
+    for (let i = 0; i < 5; i++) {
+      await expect(identity.verifyTotpChallenge(userId, "000000")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_TOTP",
+      });
+    }
+
+    // The sixth is throttled before the secret is touched — with NO limiter wired.
+    const throttled = await identity.verifyTotpChallenge(userId, "000000").catch((e: unknown) => e);
+    expect((throttled as IdentityError).code).toBe("IDENTITY_TOTP_THROTTLED");
+    expect((throttled as IdentityError).details?.["retryAfterMs"]).toBeGreaterThan(0);
+
+    // Even a VALID code is refused once drained (the gate precedes verification).
+    await expect(identity.verifyTotpChallenge(userId, codeFor(secret))).rejects.toMatchObject({
+      code: "IDENTITY_TOTP_THROTTLED",
+    });
+  });
+
+  it("bounds the completeTotpChallenge login step through the same default bucket", async () => {
+    // The F2 second step goes through the same `totp:<userId>` bucket, so the
+    // default cap bounds a password-holding attacker iterating codes at login.
+    const identity = buildIdentity();
+    const { token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+    await identity.confirmTotp(token, codeFor(secret));
+    now += 30 * 1000;
+
+    // Five failed completions drain the default bucket. Each login re-verifies the
+    // password (the authenticated arm is withheld — a confirmed factor gates it) and
+    // hands back a fresh challenge; the wrong code fails the second step.
+    for (let i = 0; i < 5; i++) {
+      const pending = await identity.login("ada@example.com", "correct horse staple");
+      if (pending.status !== "totp_required") throw new Error("expected a TOTP challenge");
+      await expect(
+        identity.completeTotpChallenge(pending.challenge, "000000"),
+      ).rejects.toMatchObject({ code: "IDENTITY_INVALID_TOTP" });
+    }
+
+    // The sixth completion is throttled even with a fresh, valid challenge in hand.
+    const pending = await identity.login("ada@example.com", "correct horse staple");
+    if (pending.status !== "totp_required") throw new Error("expected a TOTP challenge");
+    await expect(identity.completeTotpChallenge(pending.challenge, "000000")).rejects.toMatchObject(
+      { code: "IDENTITY_TOTP_THROTTLED" },
+    );
+  });
+
+  it("`totpRateLimiter: false` opts out of the default second-factor cap", async () => {
+    const identity = buildIdentity({ totpRateLimiter: false });
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token);
+    await identity.confirmTotp(token, codeFor(secret));
+    now += 30 * 1000;
+
+    // Far past the default cap: disabled, so every wrong code stays INVALID_TOTP.
+    for (let i = 0; i < 8; i++) {
+      await expect(identity.verifyTotpChallenge(userId, "000000")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_TOTP",
+      });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // confirmTotp orders recovery-code minting BEFORE the confirmed stamp — auth-security
 // ---------------------------------------------------------------------------
 

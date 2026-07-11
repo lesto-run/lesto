@@ -1070,6 +1070,88 @@ describe("login throttling", () => {
 });
 
 // ---------------------------------------------------------------------------
+// brute-force protection is ON BY DEFAULT (F8 / L-92479cc7)
+//
+// The login path must be attempt-capped OUT OF THE BOX — with no `loginRateLimiter`
+// wired — so an app author cannot ship a brute-forceable sign-in by omission.
+// These tests configure NO limiter and assert the built-in in-memory throttle
+// fires. Against the pre-F8 code (unlimited by default) the capped attempt was
+// still IDENTITY_INVALID_CREDENTIALS, so each is a real RED→GREEN regression, not
+// a vacuous restatement of the opt-in tests above.
+// ---------------------------------------------------------------------------
+
+describe("default login throttle (secure by default, opt-out not opt-in)", () => {
+  it("caps failed logins with NO limiter wired (the 6th is IDENTITY_LOGIN_THROTTLED)", async () => {
+    const { identity, sent } = buildIdentity();
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+
+    // Five wrong guesses spend the default 5-token bucket — each a plain credential
+    // failure (the frozen clock refills nothing mid-test).
+    for (let i = 0; i < 5; i++) {
+      await expect(identity.login("ada@example.com", "wrong password")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_CREDENTIALS",
+      });
+    }
+
+    // The sixth is throttled BEFORE the credential check — with NO limiter wired.
+    // Pre-F8 this stayed IDENTITY_INVALID_CREDENTIALS forever.
+    const throttled = await identity
+      .login("ada@example.com", "wrong password")
+      .catch((e: unknown) => e);
+    expect((throttled as IdentityError).code).toBe("IDENTITY_LOGIN_THROTTLED");
+    expect((throttled as IdentityError).details?.["retryAfterMs"]).toBeGreaterThan(0);
+
+    // Even the CORRECT password is refused once the bucket drains — the gate sits
+    // before verification, so a lucky guess cannot slip past the cap.
+    await expect(identity.login("ada@example.com", "correct horse staple")).rejects.toMatchObject({
+      code: "IDENTITY_LOGIN_THROTTLED",
+    });
+  });
+
+  it("caps an UNKNOWN email by default too (no enumeration leak)", async () => {
+    const { identity } = buildIdentity();
+
+    // Keyed login:<email> for every email, so a never-registered account drains
+    // and throttles on the same schedule — the default cap reveals no existence.
+    for (let i = 0; i < 5; i++) {
+      await expect(identity.login("ghost@example.com", "whatever")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_CREDENTIALS",
+      });
+    }
+    await expect(identity.login("ghost@example.com", "whatever")).rejects.toMatchObject({
+      code: "IDENTITY_LOGIN_THROTTLED",
+    });
+  });
+
+  it("never drains the default bucket on a successful login (no self-lockout)", async () => {
+    const { identity, sent } = buildIdentity();
+
+    await identity.register("ada@example.com", "correct horse staple");
+    await identity.verifyEmail(sent[0]!.token);
+
+    // Well past the default cap of GOOD sign-ins — each spends nothing, so a real
+    // user is never locked out by their own repeated logins.
+    for (let i = 0; i < 8; i++) {
+      expectAuthenticated(await identity.login("ada@example.com", "correct horse staple"));
+    }
+  });
+
+  it("`loginRateLimiter: false` opts out of the default cap deliberately", async () => {
+    const { identity } = buildIdentity({ loginRateLimiter: false });
+
+    // Far past the default cap: with the throttle explicitly disabled every
+    // attempt is a plain credential failure, never IDENTITY_LOGIN_THROTTLED.
+    for (let i = 0; i < 8; i++) {
+      await expect(identity.login("ghost@example.com", "whatever")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_CREDENTIALS",
+      });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // identity event seam (onEvent) — auth-security item 6
 // ---------------------------------------------------------------------------
 
