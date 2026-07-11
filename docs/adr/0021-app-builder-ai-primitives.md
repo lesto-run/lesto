@@ -187,3 +187,51 @@ The chain is **1 → 2 → 4** (the loop and the LLM-judge eval both stand on th
 - **Streaming-to-browser:** the SSE-to-client + `useChat`-style hook layer — own it in `@lesto/ai`, or in Loom/`@lesto/web`? Decide when the first example streams to a page.
 - **Memory shape:** reuse `SessionStore` (ADR 0013) verbatim for conversation history, or a purpose-built `ConversationStore` with summarization/windowing? Decide against a real multi-turn consumer, not a toy.
 - **Prompt-injection guardrails:** the Increment-4 hook is the mechanism; the *default* guard policy (if any) is deployment-specific, like ADR 0016's CSRF call — ship the seam, don't force a policy.
+
+## Build-vs-buy re-litigation — ratify-as-own vs amend-to-buy the model layer (2026-07-10 portfolio review)
+
+The build-vs-buy portfolio review (`docs/reviews/2026-07-10-build-vs-buy-portfolio-review.md`,
+decision `L-0993ff3e`) recommended reconsidering the model layer: *adopt the Vercel AI SDK
+**behind** the `LanguageModel` seam*, to buy "wire-format parity with a fast-moving vendor API
+(prompt caching, new content blocks, tool-call streaming) you'll otherwise hand-track forever
+for zero differentiation." Because this ADR is **Proposed**, the call is **ratify 0021 as-own**
+vs **amend it to buy** — not reversing a ratified decision. This section frames both honestly
+for the chief-architect ruling + owner call; it does not itself decide.
+
+**What is NOT at stake either way.** The `LanguageModel` seam — the moat-relevant abstraction —
+is preserved in both worlds; adopting an SDK would sit *behind* it. So no differentiation is
+gained or lost by the choice; it is purely a maintenance-cost vs dependency-cost trade.
+
+**The case for RATIFY-AS-OWN (the ADR's standing position, and my lean):**
+- The **owned wire just got materially cheaper.** `packages/ai/src/sse.ts` is now a shared SSE
+  engine both providers delegate to via a pure `interpretFrame`; a 3rd provider ≈ 1 file + a
+  `parseStream` one-liner (`L-5a5bdda0`/`L-40af74bb` done). The review argued the maintenance
+  cost is unbounded exactly as it dropped.
+- The review's cited pains are **mostly implementation bugs already being fixed / seam
+  *violations* to enforce**, not structural arguments to buy: F25 (`max_tokens`) is **fixed**
+  (`00d3309`, `L-dd366250`); F5 (streamText drops tool calls) is a bounded `StreamDelta`-field
+  fix (`L-a65b7ede`); F23 (`ui-generate` imports `@anthropic-ai/sdk`, `L-74c3cf1e`) and F24
+  (llm-judge stamps a Claude id at an OpenAI endpoint) are the seam being *bypassed* — arguments
+  to tighten the seam, not to replace what's behind it.
+- The Vercel SDK is the **exact dependency class this ADR's edge-portability + zero-vendor-dep
+  thesis avoids** (line 157): heavy, fast-moving, and — per the review's own bull-case #4 — its
+  "provider interface has broken across majors." Buying it re-imports a governance fork to
+  Vercel's release cadence on the framework's most-marketed surface.
+
+**The honest residual (what would flip to AMEND-TO-BUY):** prompt-caching + new content-block
+types + tool-call-streaming parity IS a real, perpetual wire tax, and F5 proves it's already
+biting the streaming agent loop. Ratify-as-own is only defensible if that tax is **budgeted and
+owned**, not discovered. Flip to buy iff: the owned wire's parity-tracking cost measurably
+exceeds a bounded budget over ~2 vendor API cycles, OR a second/third provider's wire proves not
+to fit the shared `interpretFrame` engine (the "additive file" claim fails in practice).
+
+**A middle path worth pricing:** vendor only the **content-block / streaming *type definitions***
+the SDK maintains (the fast-drifting wire schema), NOT the SDK's provider-registry + tool-loop +
+framework-bound UI-streaming hooks. Keeps zero *runtime* vendor dep + edge portability while
+renting the schema-tracking that is the actual tax.
+
+**To ratify 0021 as-own, these must be TRUE (else the ratification is hollow):** F5/F23/F24
+closed so the seam is honest and un-bypassed; a written "owned-wire maintenance budget" naming
+who tracks Anthropic/OpenAI wire drift and the trip-wire that would re-open this; and the
+`createLlmJudge`/model-id coupling (F24) fixed so the seam is provider-agnostic in fact, not
+just in type.
