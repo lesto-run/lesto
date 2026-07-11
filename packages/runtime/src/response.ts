@@ -365,6 +365,24 @@ export function isCompressibleType(headers: Record<string, string | string[]>): 
   return COMPRESSIBLE_TYPES.some((prefix) => type.startsWith(prefix));
 }
 
+/**
+ * The content-coding a BUFFERED body will be sent with — the single source of
+ * truth both {@link compressResponse}'s buffered arm and the ETag validator read.
+ *
+ * A compressible type negotiates `br`/`gzip`/`identity` from `Accept-Encoding`;
+ * any other (or already-encoded) type is `identity`. Folding this same value into
+ * the ETag (`server.ts`'s `withEtag`) is what makes br/gzip/identity get DISTINCT
+ * validators (RFC 9110 §8.8.3.3) while the bytes actually written match the tag —
+ * one function, so the tag and the coding can never drift. The caller guards the
+ * compression-DISABLED case (then the coding is always `identity`).
+ */
+export function bufferedEncoding(
+  headers: Record<string, string | string[]>,
+  acceptEncoding: string | undefined,
+): ContentEncoding {
+  return isCompressibleType(headers) ? negotiateEncoding(acceptEncoding) : "identity";
+}
+
 /** Drop any entry matching `name` case-insensitively, returning a fresh map. */
 function withoutHeader(
   headers: Record<string, string | string[]>,

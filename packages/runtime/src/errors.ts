@@ -12,6 +12,13 @@ export { LestoError };
 
 export type RuntimeErrorCode =
   | "RUNTIME_STATIC_PATH_TRAVERSAL"
+  /**
+   * The request target was not an origin-form path — an authority-form (`//host/…`)
+   * or absolute-form (`http://host/…`) target whose authority would be discarded
+   * while its path routed, a proxy-ACL-bypass smuggling shape. Refused before
+   * routing; maps to a 400.
+   */
+  | "RUNTIME_INVALID_REQUEST_TARGET"
   /** The request body was not valid JSON for its declared content-type — a 400. */
   | "RUNTIME_INVALID_JSON"
   /** The request body exceeded the configured size limit — a 413. */

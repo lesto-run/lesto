@@ -1,8 +1,61 @@
 import { describe, expect, it } from "vitest";
 
 import { toLestoRequest } from "../src/index";
+import { parseRequestTarget } from "../src/request";
+
+describe("parseRequestTarget (authority confusion — F19)", () => {
+  it("accepts an origin-form path and keeps its query", () => {
+    const url = parseRequestTarget("/admin?tab=users");
+
+    expect(url.pathname).toBe("/admin");
+    expect(url.search).toBe("?tab=users");
+  });
+
+  it("refuses an authority-form target that would smuggle a path past a proxy ACL", () => {
+    // `//evil/admin` parses as host `evil` + path `/admin`: a proxy ACL matching the
+    // raw target (not `/admin`) would forward it and the app would route `/admin`.
+    expect(() => parseRequestTarget("//evil/admin")).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_INVALID_REQUEST_TARGET" }),
+    );
+  });
+
+  it("refuses the `/\\` backslash authority variant", () => {
+    expect(() => parseRequestTarget("/\\evil/admin")).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_INVALID_REQUEST_TARGET" }),
+    );
+  });
+
+  it("refuses an absolute-form target (only a forward proxy receives one)", () => {
+    expect(() => parseRequestTarget("http://evil/admin")).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_INVALID_REQUEST_TARGET" }),
+    );
+  });
+
+  it("refuses a userinfo trick whose real host is not localhost", () => {
+    // `http://localhost@evil/admin` → host is `evil`, username `localhost`.
+    expect(() => parseRequestTarget("http://localhost@evil/admin")).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_INVALID_REQUEST_TARGET" }),
+    );
+  });
+
+  it("carries the offending target in the error details", () => {
+    try {
+      parseRequestTarget("//evil/admin");
+
+      expect.unreachable("an authority-form target should throw");
+    } catch (error) {
+      expect((error as { details?: unknown }).details).toMatchObject({ target: "//evil/admin" });
+    }
+  });
+});
 
 describe("toLestoRequest", () => {
+  it("refuses an authority-form url before routing (F19)", () => {
+    expect(() =>
+      toLestoRequest({ method: "GET", url: "//evil/admin", headers: {}, body: "" }),
+    ).toThrowError(expect.objectContaining({ code: "RUNTIME_INVALID_REQUEST_TARGET" }));
+  });
+
   it("derives method, splits path from query, and parses the query string", () => {
     const request = toLestoRequest({
       method: "GET",

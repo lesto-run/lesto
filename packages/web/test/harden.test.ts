@@ -126,6 +126,7 @@ describe("mergeHeaders", () => {
 describe("statusForError", () => {
   it("maps the coded transport refusals to their statuses", () => {
     expect(statusForError(new LestoError("RUNTIME_INVALID_JSON", "x"))).toBe(400);
+    expect(statusForError(new LestoError("RUNTIME_INVALID_REQUEST_TARGET", "x"))).toBe(400);
     expect(statusForError(new LestoError("ROUTER_MALFORMED_PARAM", "x"))).toBe(400);
     expect(statusForError(new LestoError("WEB_VALIDATION_FAILED", "x"))).toBe(422);
     expect(statusForError(new LestoError("RUNTIME_BODY_TOO_LARGE", "x"))).toBe(413);

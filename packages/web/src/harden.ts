@@ -198,6 +198,7 @@ export function securityDefaults(
 export function statusForError(error: unknown): number {
   if (isLestoError(error)) {
     if (error.code === "RUNTIME_INVALID_JSON") return 400;
+    if (error.code === "RUNTIME_INVALID_REQUEST_TARGET") return 400;
     if (error.code === "ROUTER_MALFORMED_PARAM") return 400;
     if (error.code === "WEB_VALIDATION_FAILED") return 422;
     if (error.code === "RUNTIME_BODY_TOO_LARGE") return 413;

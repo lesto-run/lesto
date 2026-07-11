@@ -1448,6 +1448,57 @@ describe("serve", () => {
     expect(entries.map((entry) => entry.status)).toEqual([200, 304]);
   });
 
+  it("gives distinct ETags per content-coding and does not 304 across codings (F10)", async () => {
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+        body: "<h1>Home</h1>",
+      }),
+    };
+
+    server = await serve(app, { port: 0 });
+
+    // The gzip representation and the identity representation carry DIFFERENT
+    // validators — the RFC 9110 §8.8.3.3 requirement the shared strong tag broke.
+    const gzipResp = await makeRequest(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "accept-encoding": "gzip" },
+    });
+    const identityResp = await makeRequest(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "accept-encoding": "identity" },
+    });
+
+    const gzipEtag = gzipResp.headers["etag"] as string;
+    const identityEtag = identityResp.headers["etag"] as string;
+
+    expect(gzipResp.headers["content-encoding"]).toBe("gzip");
+    expect(gzipEtag).toMatch(/-gzip"$/);
+    expect(identityEtag).not.toMatch(/-gzip"$/);
+    expect(gzipEtag).not.toBe(identityEtag);
+
+    // Same coding → the conditional GET still 304s (caching is not lost).
+    const revalidate = await makeRequest(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "accept-encoding": "gzip", "if-none-match": gzipEtag },
+    });
+    expect(revalidate.status).toBe(304);
+
+    // A DIFFERENT coding presenting the gzip tag must NOT 304 — a shared cache can
+    // no longer cross-serve the gzip bytes as identity.
+    const crossCoding = await makeRequest(server.port, {
+      method: "GET",
+      path: "/",
+      headers: { "accept-encoding": "identity", "if-none-match": gzipEtag },
+    });
+    expect(crossCoding.status).toBe(200);
+  });
+
   it("sends a full body when the conditional GET's ETag does not match", async () => {
     const app: App = {
       migrationsApplied: [],
@@ -2048,6 +2099,32 @@ describe("withEtag", () => {
     const result = withEtag(htmlResponse("<h1>Home</h1>"), { weak: true });
 
     expect(result.etag).toBe(etagFor("<h1>Home</h1>", { weak: true }));
+  });
+
+  it("folds the content-coding into the validator so codings get DISTINCT tags (F10)", () => {
+    const body = "<h1>Home</h1>";
+
+    const identity = withEtag(htmlResponse(body), {}, "identity").etag;
+    const br = withEtag(htmlResponse(body), {}, "br").etag;
+    const gzip = withEtag(htmlResponse(body), {}, "gzip").etag;
+
+    // identity keeps the bare tag (back-compat + the no-compression deploy)…
+    expect(identity).toBe(etagFor(body));
+    // …and every coding is a DISTINCT strong tag for the same body (RFC 9110 §8.8.3.3).
+    expect(br).toBe(etagFor(body).replace(/"$/, '-br"'));
+    expect(gzip).toBe(etagFor(body).replace(/"$/, '-gzip"'));
+    expect(new Set([identity, br, gzip]).size).toBe(3);
+
+    // Still a STRONG validator (no `W/`), so If-Range stays usable within a coding.
+    expect(br?.startsWith("W/")).toBe(false);
+    expect(br).toMatch(/^"[^"]*-br"$/);
+  });
+
+  it("keeps the weak prefix outside the quotes when folding a coding", () => {
+    const result = withEtag(htmlResponse("<h1>Home</h1>"), { weak: true }, "gzip");
+
+    expect(result.etag).toBe(etagFor("<h1>Home</h1>", { weak: true }).replace(/"$/, '-gzip"'));
+    expect(result.etag?.startsWith('W/"')).toBe(true);
   });
 
   it("never overwrites an ETag the app already set, in any header casing", () => {

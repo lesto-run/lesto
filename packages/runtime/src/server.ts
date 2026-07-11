@@ -28,13 +28,14 @@ export type { SecurityHeaderOptions };
 
 import {
   applyResponse,
+  bufferedEncoding,
   encodeBuffered,
   encodeStreamHeaders,
   isCompressibleType,
   negotiateEncoding,
 } from "./response";
 import type { ContentEncoding } from "./response";
-import { toLestoRequest } from "./request";
+import { parseRequestTarget, toLestoRequest } from "./request";
 import { RuntimeError } from "./errors";
 import { etagFor, etagMatches, respondNotModified } from "./http-cache";
 import { peerIsTrusted, resolveClient } from "./trust-proxy";
@@ -519,12 +520,14 @@ export function requestLineOf(req: Pick<IncomingMessage, "method" | "url">): {
  *
  * Computed from the request line BEFORE the body is read, so a 413 (body over the
  * limit, which rejects mid-`readBody`) is still attributed to the real path in
- * the access log rather than a default. Mirrors `toLestoRequest`'s pathname
- * extraction (same throwaway base, same `URL.pathname`) so the early-attributed
- * path is byte-identical to the one a successfully-parsed request would carry.
+ * the access log rather than a default. Shares `toLestoRequest`'s parse
+ * ({@link parseRequestTarget}) so the early-attributed path is byte-identical to
+ * the one a successfully-parsed request would carry — AND so an authority-form /
+ * absolute request target is refused here at the top of `handle`, before it can
+ * route, with a coded `RUNTIME_INVALID_REQUEST_TARGET` (mapped to a 400).
  */
 export function pathOf(url: string): string {
-  return new URL(url, "http://localhost").pathname;
+  return parseRequestTarget(url).pathname;
 }
 
 /**
@@ -786,12 +789,23 @@ export type EtagConfig = false | { readonly weak?: boolean };
  * the headers to write; `etag` is the value to compare `If-None-Match` against,
  * or `undefined` when no tag was added (so the caller skips the 304 check).
  *
+ * `coding` is the content-coding this body will be SENT with (from
+ * {@link bufferedEncoding}). It is folded into the validator so br/gzip/identity
+ * get DISTINCT tags: RFC 9110 §8.8.3.3 forbids one strong validator across
+ * representations that are not byte-identical, and a shared cache (or an
+ * `If-Range`) must never cross-serve or splice one coding's bytes as another's.
+ * `identity` keeps the bare tag (the no-compression deploy is unchanged and its
+ * tag stays distinct from the compressed ones); a real coding appends `-<coding>`
+ * inside the quotes, so the tag stays a valid — and still STRONG — validator.
+ *
  * Pure and exported so every branch — disabled, already-tagged, non-200,
- * non-HTML, the happy strong/weak tag — is unit-testable without a socket.
+ * non-HTML, the happy strong/weak/per-coding tag — is unit-testable without a
+ * socket.
  */
 export function withEtag(
   response: AnyLestoResponse,
   config: EtagConfig,
+  coding: ContentEncoding = "identity",
 ): { response: AnyLestoResponse; etag: string | undefined } {
   if (config === false) {
     return { response, etag: undefined };
@@ -826,9 +840,26 @@ export function withEtag(
     return { response, etag: undefined };
   }
 
-  const etag = etagFor(response.body, { weak: config.weak });
+  const etag = foldCoding(etagFor(response.body, { weak: config.weak }), coding);
 
   return { response: { ...response, headers: { ...response.headers, ETag: etag } }, etag };
+}
+
+/**
+ * Fold a content-coding into an ETag so distinct codings get distinct validators
+ * (RFC 9110 §8.8.3.3).
+ *
+ * `identity` returns the tag unchanged — the no-compression deploy is byte-for-byte
+ * as before, and its bare tag is already distinct from the compressed ones. A real
+ * coding inserts `-<coding>` before the closing quote (`"abc"` → `"abc-br"`,
+ * `W/"abc"` → `W/"abc-br"`), which keeps a valid opaque-tag and — critically —
+ * keeps it STRONG, so `If-Range` still works WITHIN a coding while never matching
+ * across one.
+ */
+function foldCoding(etag: string, coding: ContentEncoding): string {
+  if (coding === "identity") return etag;
+
+  return etag.replace(/"$/, `-${coding}"`);
 }
 
 /** True iff a header map declares an HTML content-type (any header casing). */
@@ -889,10 +920,10 @@ export function compressResponse(
 
   // A buffered body (string or bytes): always re-emitted with an accurate
   // `Content-Length`. Compressible-and-accepted → the negotiated coding; anything
-  // else → `identity` (just the length), so even an image gains its length.
-  const encoding = isCompressibleType(response.headers)
-    ? negotiateEncoding(acceptEncoding)
-    : "identity";
+  // else → `identity` (just the length), so even an image gains its length. The
+  // coding comes from `bufferedEncoding` — the SAME function `withEtag` folds into
+  // the validator, so the tag and the written bytes can never disagree (F10).
+  const encoding = bufferedEncoding(response.headers, acceptEncoding);
 
   return { response: encodeBuffered(response, body, encoding) };
 }
@@ -1532,8 +1563,12 @@ async function handle(
 ): Promise<void> {
   const line = requestLineOf(req);
 
-  // A malformed request target (`GET //`, `GET /\`) cannot be parsed into a path —
-  // `new URL(...)` throws. Answer 400 here, at the very top: this runs in handle's
+  // A bad request target is refused here, at the very top: either it cannot be
+  // parsed into a path (`new URL(...)` throws on `GET //`, `GET /\`), OR it is an
+  // authority-form / absolute target (`//evil/admin`, `http://evil/admin`) whose
+  // authority would be discarded while its path routed — a proxy-ACL-bypass
+  // smuggling shape `parseRequestTarget` rejects with a coded
+  // `RUNTIME_INVALID_REQUEST_TARGET`. Either way it is a 400. This runs in handle's
   // pre-gate preamble, OUTSIDE the request boundary's try/catch, so an unhandled
   // throw would escape into `void handle(...)` and leave the socket unanswered
   // until the request timeout (a cheap unauthenticated socket-hold). A clean 400 is
@@ -1764,7 +1799,20 @@ async function handleAdmitted(
       // paths; the `X-Request-Id` echo rides every response so a client and the
       // server logs share one correlation id (an adopted upstream id is echoed
       // back verbatim, closing the trace loop).
-      const tagged = withEtag(response, deps.etag);
+      //
+      // The ETag is folded per content-coding (F10): the coding this buffered body
+      // will actually be SENT with (identity when compression is off) rides into
+      // the validator, so br/gzip/identity get DISTINCT strong tags and the 304
+      // below compares against the coding the client really holds. It is the SAME
+      // `bufferedEncoding` `writeNegotiated` → `compressResponse` will apply, so the
+      // tag and the written bytes can never disagree.
+      const acceptEncoding = firstHeader(req.headers["accept-encoding"]);
+
+      const coding = deps.compress
+        ? bufferedEncoding(response.headers, acceptEncoding)
+        : "identity";
+
+      const tagged = withEtag(response, deps.etag, coding);
 
       const hardened = hardenResponse(tagged.response, deps.securityHeaders, requestId);
 
@@ -1784,13 +1832,7 @@ async function handleAdmitted(
         // over the uncompressed body, and `Vary: Accept-Encoding` keeps a shared
         // cache from cross-serving codings. Awaiting delivery makes the access
         // entry and span below describe the real outcome (truncation included).
-        await writeNegotiated(
-          res,
-          hardened,
-          firstHeader(req.headers["accept-encoding"]),
-          deps.compress,
-          onTruncated,
-        );
+        await writeNegotiated(res, hardened, acceptEncoding, deps.compress, onTruncated);
       }
     } catch (error) {
       status = statusForError(error);

@@ -102,15 +102,70 @@ function parseBody(contentType: string | undefined, body: string): unknown {
 }
 
 /**
+ * The throwaway base a relative (origin-form) request target is resolved against —
+ * only its path and query matter, but its authority is the yardstick
+ * {@link parseRequestTarget} checks a smuggled authority against.
+ */
+const THROWAWAY_BASE = "http://localhost";
+
+/**
+ * Parse a raw request target into a URL, refusing anything but an origin-form path.
+ *
+ * A well-formed HTTP request to an APP server carries an origin-form target — an
+ * absolute path beginning with a single `/` (RFC 9112 §3.2.1). Two other shapes
+ * are an authority-confusion / proxy-ACL-bypass hazard here and are refused with a
+ * coded {@link RuntimeError} (`RUNTIME_INVALID_REQUEST_TARGET`), before the target
+ * can route:
+ *
+ *   - **Authority-form confusion** — a target beginning `//` (or the `/\`
+ *     backslash variant WHATWG treats the same) is parsed as `//authority/path`,
+ *     so `//evil/admin` silently becomes host `evil` + path `/admin`. A front
+ *     proxy that ACL-matches the RAW target (which does not begin `/admin`) would
+ *     forward it, and the app would then route `/admin` — the authority discarded,
+ *     the ACL bypassed.
+ *   - **Absolute-form** (`http://host/…`) — only a forward proxy legitimately
+ *     receives it; honoring it on an app server likewise lets a target's authority
+ *     diverge from its routed path.
+ *
+ * The gate is belt-and-braces: the raw target must start with a single `/` (which
+ * rejects absolute-form and the `//`/`/\` authority shapes syntactically), AND the
+ * parsed authority must still be the throwaway base's — so any parser trick that
+ * smuggled a different host through is caught semantically too. Callers that need
+ * only the pathname (`pathOf`) share this so the reject is identical on every path.
+ */
+export function parseRequestTarget(target: string): URL {
+  const url = new URL(target, THROWAWAY_BASE);
+
+  const originForm =
+    target.startsWith("/") &&
+    !target.startsWith("//") &&
+    !target.startsWith("/\\") &&
+    url.host === "localhost";
+
+  if (!originForm) {
+    throw new RuntimeError(
+      "RUNTIME_INVALID_REQUEST_TARGET",
+      `Request target is not an origin-form path: "${target}".`,
+      { target },
+    );
+  }
+
+  return url;
+}
+
+/**
  * Normalize a raw socket request into the transport-free {@link LestoRequest}
  * the dispatch core operates over.
  *
  * Pure: no I/O, no clock, no router. `params` is left empty — the router fills
- * it during dispatch when it matches the path against a route pattern.
+ * it during dispatch when it matches the path against a route pattern. An
+ * authority-form/absolute request target is refused here (see
+ * {@link parseRequestTarget}) rather than allowed to smuggle a path past a proxy.
  */
 export function toLestoRequest(input: RawRequest): LestoRequest {
-  // The base is a throwaway: only the path and query of a relative URL matter.
-  const url = new URL(input.url, "http://localhost");
+  // The base is a throwaway: only the path and query of an origin-form target
+  // matter — and a smuggled authority is refused, not silently discarded.
+  const url = parseRequestTarget(input.url);
 
   const body = parseBody(headerValue(input.headers, "content-type"), input.body);
 
