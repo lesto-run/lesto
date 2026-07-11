@@ -14,6 +14,15 @@
 export interface HandleOptions {
   query?: Record<string, string>;
 
+  /**
+   * The full multi-value fidelity of the query string: every value a repeated key
+   * carried, in arrival order (`?tag=a&tag=b` → `{ tag: ["a", "b"] }`). Optional —
+   * a transport that populates it lets {@link Context.queries} return all values;
+   * a transport (or a hand-built test option) that omits it degrades to the boxed
+   * single {@link query} value. See {@link LestoRequest.queryAll}.
+   */
+  queryAll?: Record<string, readonly string[]>;
+
   headers?: Record<string, string>;
 
   body?: unknown;
@@ -66,10 +75,35 @@ export interface LestoRequest {
    */
   params: Record<string, string | string[]>;
 
-  /** Parsed query-string pairs. */
+  /**
+   * Parsed query-string pairs — the last-value projection: a repeated key keeps
+   * only its final value (`?tag=a&tag=b` → `{ tag: "b" }`). This is unchanged and
+   * back-compatible; reach for {@link queryAll} when a key can legitimately repeat.
+   */
   query: Record<string, string>;
 
-  /** Request headers, keyed by lowercased name — where a controller reads cookies. */
+  /**
+   * Full multi-value fidelity per query key, in arrival order: every value a
+   * repeated key carried (`?tag=a&tag=b` → `{ tag: ["a", "b"] }`). Optional — the
+   * {@link query} last-value projection above remains the back-compatible default,
+   * and this is the escape hatch for reading ALL of a repeated key's values (via
+   * {@link Context.queries}). A transport that has not populated it degrades to the
+   * boxed single value, never breaks.
+   */
+  queryAll?: Record<string, readonly string[]>;
+
+  /**
+   * Request headers, keyed by lowercased name — where a controller reads cookies.
+   *
+   * A single value per name: a request header that arrives REPEATED is folded by
+   * the platform before Lesto ever sees it (RFC 9110 §5.2 — the recipient MAY
+   * combine a repeated field into one comma-joined value). Both transports fold it:
+   * the Workers `Headers` object comma-joins repeats, and node's
+   * `IncomingMessage.headers` discards all but one before dispatch. A faithful
+   * "every value this header carried" accessor is therefore impossible on either
+   * runtime, so there is deliberately NO `headerAll` — unlike {@link queryAll},
+   * where the raw query string preserves every repeat and a multimap can be honest.
+   */
   headers: Record<string, string>;
 
   /** The decoded request body, shape unknown until a controller narrows it. */

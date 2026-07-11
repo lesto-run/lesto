@@ -113,6 +113,14 @@ export class Context<Path extends string = string> {
     return this.currentRequest.query[name];
   }
 
+  /** Every value a repeated query key carried, in order; [] when absent. */
+  queries(name: string): readonly string[] {
+    const all = this.currentRequest.queryAll?.[name];
+    if (all !== undefined) return all;
+    const single = this.currentRequest.query[name];
+    return single === undefined ? [] : [single];
+  }
+
   /** A request header by name (case-insensitive), or `undefined` when absent. */
   header(name: string): string | undefined {
     return this.currentRequest.headers[name.toLowerCase()];

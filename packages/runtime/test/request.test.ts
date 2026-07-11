@@ -217,3 +217,70 @@ describe("toLestoRequest", () => {
     expect("rawBody" in request).toBe(false);
   });
 });
+
+describe("toLestoRequest — multi-value query (queryAll)", () => {
+  it("keeps last-wins in query AND every value, in order, in queryAll", () => {
+    const request = toLestoRequest({
+      method: "GET",
+      url: "/posts?tag=a&tag=b&tag=c&author=ada",
+      headers: {},
+      body: "",
+    });
+
+    // `query` is the unchanged last-value projection…
+    expect(request.query).toEqual({ tag: "c", author: "ada" });
+
+    // …and `queryAll` carries every value a repeated key sent, in arrival order.
+    expect(request.queryAll?.["tag"]).toEqual(["a", "b", "c"]);
+    expect(request.queryAll?.["author"]).toEqual(["ada"]);
+  });
+
+  it("builds queryAll on a null prototype so a `?constructor=` key cannot poison it", () => {
+    // On a plain `{}`, `(queryAll["constructor"] ??= [])` reads the inherited
+    // `Function` (not undefined), so `??=` skips and `.push` throws — a
+    // prototype-pollution DoS. `Object.create(null)` has no such inherited key.
+    let request!: ReturnType<typeof toLestoRequest>;
+
+    expect(() => {
+      request = toLestoRequest({
+        method: "GET",
+        url: "/posts?constructor=a&constructor=b",
+        headers: {},
+        body: "",
+      });
+    }).not.toThrow();
+
+    // The key was captured as an ordinary own data property — the array, not `Function`.
+    expect(request.queryAll?.["constructor"]).toEqual(["a", "b"]);
+    expect(Object.getPrototypeOf(request.queryAll)).toBeNull();
+  });
+
+  it("captures a `?__proto__=` key as own data without touching any prototype", () => {
+    // On a plain `{}`, `queryAll["__proto__"]` hits the inherited accessor, so
+    // `.push` would mutate `Object.prototype` itself. The null prototype makes it
+    // an ordinary own key instead.
+    const request = toLestoRequest({
+      method: "GET",
+      url: "/posts?__proto__=x&__proto__=y",
+      headers: {},
+      body: "",
+    });
+
+    expect(request.queryAll?.["__proto__"]).toEqual(["x", "y"]);
+    expect(Object.getPrototypeOf(request.queryAll)).toBeNull();
+    // Nothing leaked onto the global prototype.
+    expect(({} as Record<string, unknown>)["x"]).toBeUndefined();
+  });
+
+  it("yields an empty (null-prototype) queryAll when the url has no query string", () => {
+    const request = toLestoRequest({
+      method: "GET",
+      url: "/posts",
+      headers: {},
+      body: "",
+    });
+
+    expect(request.queryAll).toEqual({});
+    expect(Object.getPrototypeOf(request.queryAll)).toBeNull();
+  });
+});

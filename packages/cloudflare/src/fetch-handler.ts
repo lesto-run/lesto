@@ -39,6 +39,14 @@ import { CloudflareError } from "./errors";
 export interface EdgeRequestOptions {
   readonly query: Record<string, string>;
 
+  /**
+   * The full multi-value fidelity of the query string: every value a repeated key
+   * carried, in arrival order (`?tag=a&tag=b` → `{ tag: ["a", "b"] }`). Lets edge
+   * `c.queries(name)` return all values; {@link query} above stays the last-value
+   * projection. See `@lesto/web`'s `HandleOptions.queryAll`.
+   */
+  readonly queryAll: Record<string, readonly string[]>;
+
   readonly headers: Record<string, string>;
 
   readonly body: unknown;
@@ -280,15 +288,34 @@ export interface EdgeOptions {
   readonly logError?: (message: string, error: unknown) => void;
 }
 
-/** Flatten a URL's search params to a record; the last value wins on repeats. */
-function queryFrom(params: URLSearchParams): Record<string, string> {
+/**
+ * Flatten a URL's search params into BOTH projections in one pass — the edge twin
+ * of `@lesto/runtime`'s `parseQuery`.
+ *
+ *   - `query` — the last-value record: a repeated key keeps its final value
+ *     (`?tag=a&tag=b` → `{ tag: "b" }`), the back-compatible shape.
+ *   - `queryAll` — the full multimap: every value a repeated key carried, in
+ *     arrival order (`?tag=a&tag=b` → `{ tag: ["a", "b"] }`), what edge
+ *     `c.queries(name)` reads.
+ *
+ * `queryAll` is a NULL-PROTOTYPE object: on a plain `{}`, `?constructor=x` would
+ * make `(queryAll[key] ??= [])` read the inherited `Function` and the `.push`
+ * throw — a prototype-pollution DoS. `Object.create(null)` has no inherited keys,
+ * so any attacker-chosen key is an own data property.
+ */
+function queryFrom(params: URLSearchParams): {
+  query: Record<string, string>;
+  queryAll: Record<string, string[]>;
+} {
   const query: Record<string, string> = {};
+  const queryAll: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
 
   for (const [key, value] of params) {
     query[key] = value;
+    (queryAll[key] ??= []).push(value);
   }
 
-  return query;
+  return { query, queryAll };
 }
 
 /** Flatten Web `Headers` to a record. Keys arrive already lowercased. */
@@ -709,8 +736,11 @@ async function dispatchHardened(
       };
     }
 
+    const { query, queryAll } = queryFrom(url.searchParams);
+
     const work = dispatch(request.method, url.pathname, {
-      query: queryFrom(url.searchParams),
+      query,
+      queryAll,
       headers,
       body: decoded.body,
       ...(decoded.rawBody === undefined ? {} : { rawBody: decoded.rawBody }),

@@ -57,6 +57,29 @@ describe("Context readers", () => {
     expect(c.query("nope")).toBeUndefined();
   });
 
+  it("reads every value of a repeated query key from queryAll", () => {
+    const c = new Context(requestOf({ query: { tag: "c" }, queryAll: { tag: ["a", "b", "c"] } }));
+
+    expect(c.queries("tag")).toEqual(["a", "b", "c"]);
+  });
+
+  it("falls back to the boxed single query value when queryAll is absent", () => {
+    // A transport that never populated `queryAll` (a hand-built option, an older
+    // adapter) degrades to the last-value projection boxed as a one-element array.
+    const c = new Context(requestOf({ query: { sort: "price" } }));
+
+    expect(c.req.queryAll).toBeUndefined();
+    expect(c.queries("sort")).toEqual(["price"]);
+  });
+
+  it("returns [] from queries when the key is absent (either map)", () => {
+    const withAll = new Context(requestOf({ query: {}, queryAll: {} }));
+    const withoutAll = new Context(requestOf({ query: {} }));
+
+    expect(withAll.queries("nope")).toEqual([]);
+    expect(withoutAll.queries("nope")).toEqual([]);
+  });
+
   it("reads a header case-insensitively", () => {
     const c = new Context(requestOf({ headers: { "content-type": "application/json" } }));
 

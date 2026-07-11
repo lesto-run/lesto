@@ -711,6 +711,7 @@ export class Lesto {
       params:
         (match ?? headMatch)?.params ?? (Object.create(null) as Record<string, string | string[]>),
       query: options?.query ?? {},
+      ...(options?.queryAll === undefined ? {} : { queryAll: options.queryAll }),
       headers: options?.headers ?? {},
       body: options?.body,
       ...(options?.rawBody === undefined ? {} : { rawBody: options.rawBody }),

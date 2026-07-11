@@ -61,15 +61,34 @@ function parseHeaders(
   return flat;
 }
 
-/** Flatten URLSearchParams into a plain record; the last value wins on repeats. */
-function parseQuery(search: string): Record<string, string> {
+/**
+ * Parse URLSearchParams into BOTH projections in one pass.
+ *
+ *   - `query` — the last-value record: a repeated key keeps its final value
+ *     (`?tag=a&tag=b` → `{ tag: "b" }`), the back-compatible shape.
+ *   - `queryAll` — the full multimap: every value a repeated key carried, in
+ *     arrival order (`?tag=a&tag=b` → `{ tag: ["a", "b"] }`), the escape hatch
+ *     `c.queries(name)` reads.
+ *
+ * `queryAll` is a NULL-PROTOTYPE object (mirroring `params` in
+ * {@link toLestoRequest}): on a plain `{}`, `?constructor=x` would make
+ * `(queryAll[key] ??= [])` read the inherited `Function` and the subsequent
+ * `.push` throw — a prototype-pollution DoS. `Object.create(null)` has no such
+ * inherited keys, so any attacker-chosen key is an own data property.
+ */
+function parseQuery(search: string): {
+  query: Record<string, string>;
+  queryAll: Record<string, string[]>;
+} {
   const query: Record<string, string> = {};
+  const queryAll: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
 
   for (const [key, value] of new URLSearchParams(search)) {
     query[key] = value;
+    (queryAll[key] ??= []).push(value);
   }
 
-  return query;
+  return { query, queryAll };
 }
 
 /**
@@ -169,11 +188,14 @@ export function toLestoRequest(input: RawRequest): LestoRequest {
 
   const body = parseBody(headerValue(input.headers, "content-type"), input.body);
 
+  const { query, queryAll } = parseQuery(url.search);
+
   return {
     method: input.method,
     path: url.pathname,
     params: {},
-    query: parseQuery(url.search),
+    query,
+    queryAll,
     headers: parseHeaders(input.headers),
     body,
     ...(input.body.length === 0 ? {} : { rawBody: input.body }),

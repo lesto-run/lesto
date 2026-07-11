@@ -110,6 +110,27 @@ describe("lesto verbs + dispatch", () => {
     expect(JSON.parse(response.body)).toEqual({ q: "1", h: "yes", body: { n: 2 } });
   });
 
+  it("threads queryAll from the handle options onto c.req so c.queries reads all values", async () => {
+    const app = lesto().get("/echo", (c) => c.json({ tags: c.queries("tag") }));
+
+    const response = await app.handle("GET", "/echo", {
+      query: { tag: "b" },
+      queryAll: { tag: ["a", "b"] },
+    });
+
+    expect(JSON.parse(response.body)).toEqual({ tags: ["a", "b"] });
+  });
+
+  it("leaves c.req.queryAll undefined when the handle options omit it (queries falls back)", async () => {
+    const app = lesto().get("/echo", (c) =>
+      c.json({ hasQueryAll: "queryAll" in c.req, tags: c.queries("tag") }),
+    );
+
+    const response = await app.handle("GET", "/echo", { query: { tag: "b" } });
+
+    expect(JSON.parse(response.body)).toEqual({ hasQueryAll: false, tags: ["b"] });
+  });
+
   it("threads rawBody from the handle options onto c.req.rawBody", async () => {
     const app = lesto().post("/echo", (c) => c.json({ rawBody: c.req.rawBody }));
 

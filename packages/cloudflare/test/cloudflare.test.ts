@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { LestoError } from "@lesto/errors";
-import { currentContext, currentRequestSpan } from "@lesto/web";
+import { Context, currentContext, currentRequestSpan } from "@lesto/web";
 
 import type { DeployPlan } from "@lesto/deploy";
 
@@ -166,6 +166,22 @@ describe("toFetchHandler", () => {
     // An empty body carries no rawBody either — nothing was decoded.
     expect(calls[0]?.options.rawBody).toBeUndefined();
     expect(calls[0] !== undefined && "rawBody" in calls[0].options).toBe(false);
+  });
+
+  it("surfaces every value of a repeated query key via c.queries()", async () => {
+    const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
+
+    await toFetchHandler(dispatch)(new Request("https://example.com/mls/listings?tag=a&tag=b"));
+
+    // `query` stays last-wins; `queryAll` carries every value, in arrival order.
+    expect(calls[0]?.options.query).toEqual({ tag: "b" });
+    expect(calls[0]?.options.queryAll["tag"]).toEqual(["a", "b"]);
+
+    // And the accessor a handler actually calls returns all values on the edge.
+    const options = calls[0]!.options;
+    const c = new Context({ method: "GET", path: "/mls/listings", params: {}, ...options });
+
+    expect(c.queries("tag")).toEqual(["a", "b"]);
   });
 
   it("passes response headers through — a Set-Cookie survives to the browser", async () => {
@@ -1287,9 +1303,10 @@ describe("withAssets", () => {
       },
     };
 
-    const response = await withAssets(assets, fixedApp("app"))(
-      new Request("https://example.com/client.js"),
-    );
+    const response = await withAssets(
+      assets,
+      fixedApp("app"),
+    )(new Request("https://example.com/client.js"));
 
     expect(seenPath).toBe("/client.js"); // reached the asset fetcher, undiverted
     expect(await response.text()).toBe("/* bundle */");
