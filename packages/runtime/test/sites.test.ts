@@ -189,6 +189,37 @@ describe("dispatchSites — dynamic sites", () => {
 
     expect(calls[0]?.options).toEqual(options);
   });
+
+  it("forwards rawBytes (byte-exact body) to the dynamic app, undecoded", async () => {
+    // A webhook mounted behind a zone must verify its HMAC over the exact
+    // wire bytes — dispatchSites must not lose (or lossily re-encode) them.
+    const { handle, calls } = recordingHandler({ status: 200, body: "ok" });
+
+    const dispatch = dispatchSites({ sites: [mls], handle, readStatic: fakeReader({}) });
+
+    // Deliberately NOT valid UTF-8 (a bare continuation byte, a lead byte with
+    // no/garbage continuation): decoding this through a string and re-encoding
+    // replaces the invalid bytes with U+FFFD, so a lossy round trip is
+    // trivially observable. This is the guard against a "fix" that quietly
+    // re-threads rawBytes through a string somewhere in the dispatch path —
+    // if that happened, the byte-identity assertion below would go RED.
+    const rawBytes = Uint8Array.from([0xff, 0x80, 0x00, 0xc3, 0x28]);
+    const reencoded = new TextEncoder().encode(new TextDecoder().decode(rawBytes));
+
+    expect(reencoded).not.toEqual(rawBytes);
+
+    // `RequestOptions` must actually declare `rawBytes` for this literal to
+    // typecheck — reverting the widening makes this a compile error, not just
+    // a runtime failure.
+    const options: RequestOptions = {
+      headers: { cookie: "lesto_session=abc" },
+      rawBytes,
+    };
+
+    await dispatch("POST", "/mls/webhook", options);
+
+    expect(calls[0]?.options?.rawBytes).toEqual(rawBytes);
+  });
 });
 
 describe("dispatchSites — framework-reserved /__lesto/ namespace", () => {

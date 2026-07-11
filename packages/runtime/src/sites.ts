@@ -41,6 +41,18 @@ export interface RequestOptions {
   readonly body?: unknown;
 
   readonly rawBody?: string;
+
+  /**
+   * The exact undecoded request bytes — the byte-exact companion to
+   * {@link RequestOptions.rawBody}. See `@lesto/web`'s `HandleOptions.rawBytes`.
+   *
+   * The multi-site dispatcher forwards `options` verbatim to a dynamic site's
+   * `AppHandler` (never decoding or re-encoding it), so this rides through
+   * unchanged — a binary webhook mounted behind a zone (e.g. `/mls/webhook`)
+   * can verify its HMAC over the SAME bytes the transport captured, never a
+   * lossy UTF-8 round trip through {@link RequestOptions.rawBody}.
+   */
+  readonly rawBytes?: Uint8Array;
 }
 
 /**
@@ -381,8 +393,10 @@ export function dispatchSites(
     if (site === undefined) return emptyResponse(404);
 
     // A dynamic zone delegates to the live app, verbatim — the request options
-    // (query, headers, body) flow in and the full response, `Set-Cookie` and
-    // all, flows back. That round trip is what carries the same-origin session.
+    // (query, headers, body, rawBody/rawBytes) flow in unmodified and the full
+    // response, `Set-Cookie` and all, flows back. That round trip is what
+    // carries the same-origin session AND lets a mounted webhook verify its
+    // HMAC over the byte-exact `rawBytes`, never a re-serialized body.
     if (site.render === "dynamic") return handle(method, path, options);
 
     // A static file may be bytes (an image); the handler contract is string-

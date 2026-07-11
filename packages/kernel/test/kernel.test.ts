@@ -114,6 +114,40 @@ describe("createApp", () => {
     expect((await app.handle("GET", "/ping")).body).toBe("pong");
   });
 
+  it("threads rawBytes (byte-exact body) through App.handle's options to a controller's c.req", async () => {
+    // Binary-webhook verification (@lesto/webhooks's verifyRequest) needs the
+    // EXACT wire bytes, never a UTF-8 decode/re-encode. This proves the
+    // kernel's own `App.handle` options type actually carries `rawBytes` (not
+    // just `rawBody`) end-to-end to a route's `c.req`.
+    let seenRawBytes: Uint8Array | undefined;
+
+    const app = await createApp({
+      db,
+      app: lesto().post("/webhook", (c) => {
+        seenRawBytes = c.req.rawBytes;
+
+        return c.text("ok");
+      }),
+    });
+
+    // Deliberately invalid UTF-8 (a bare continuation byte, a lead byte with a
+    // garbage continuation): decoding this through a string and re-encoding
+    // replaces it with U+FFFD, so it is NOT round-trippable — the sharpest
+    // witness that the bytes arrived unchanged.
+    const rawBytes = Uint8Array.from([0xff, 0x80, 0x00, 0xc3, 0x28]);
+    const reencoded = new TextEncoder().encode(new TextDecoder().decode(rawBytes));
+
+    expect(reencoded).not.toEqual(rawBytes);
+
+    // This literal must typecheck against `App.handle`'s options type —
+    // reverting the widening (dropping `rawBytes`) makes this a compile
+    // error, not just a runtime failure.
+    const response = await app.handle("POST", "/webhook", { rawBytes });
+
+    expect(response.body).toBe("ok");
+    expect(seenRawBytes).toEqual(rawBytes);
+  });
+
   it('runs nothing when migrations is "skip" (a fleet member that defers to another)', async () => {
     // The schema is already migrated by another instance; this member must boot
     // against it WITHOUT running migrations itself.

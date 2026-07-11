@@ -24,7 +24,14 @@ import { Migrator } from "@lesto/migrate";
 import type { MigrationEntry } from "@lesto/migrate";
 
 import { runPipeline } from "@lesto/web";
-import type { Lesto, LestoRequest, LestoResponse, Middleware, UiDialect } from "@lesto/web";
+import type {
+  HandleOptions,
+  Lesto,
+  LestoRequest,
+  LestoResponse,
+  Middleware,
+  UiDialect,
+} from "@lesto/web";
 
 import { installDurableSchema, secureStack } from "./secure-stack";
 import type { SecureStackOptions } from "./secure-stack";
@@ -227,17 +234,18 @@ export interface LestoAppConfig {
 
 /** A booted application: a request handler plus the record of what migrations ran. */
 export interface App {
-  /** Dispatch a request through the web core, returning the controller's response. */
-  handle(
-    method: string,
-    path: string,
-    options?: {
-      query?: Record<string, string>;
-      headers?: Record<string, string>;
-      body?: unknown;
-      rawBody?: string;
-    },
-  ): Promise<LestoResponse>;
+  /**
+   * Dispatch a request through the web core, returning the controller's
+   * response.
+   *
+   * `options` is `@lesto/web`'s {@link HandleOptions} — the same shape
+   * `Lesto.handle` takes — so it carries `rawBytes` (the byte-exact companion
+   * to `rawBody`) end-to-end: a caller with the raw wire bytes (e.g. the
+   * site dispatcher forwarding an inbound webhook) can pass them through the
+   * kernel's `App.handle` and have them reach a controller's
+   * `c.req.rawBytes`, never widened away at this seam.
+   */
+  handle(method: string, path: string, options?: HandleOptions): Promise<LestoResponse>;
 
   /** The migration versions applied during boot, in the order they ran. */
   readonly migrationsApplied: readonly string[];

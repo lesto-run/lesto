@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+
 import Database from "better-sqlite3";
 import { installSchema, Queue } from "@lesto/queue";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -461,6 +463,102 @@ describe("verifyRequest — multi-tenant secret resolver", () => {
 
     expect(result).toEqual({ verified: false, reason: "missing_signature" });
     expect(called).toBe(false); // an obviously-bad request never triggers a lookup
+  });
+});
+
+describe("byte-exact Uint8Array bodies (binary-webhook HMAC)", () => {
+  const secret = "shh";
+
+  // Deliberately NOT valid UTF-8: a bare continuation byte (0x80) and a lead
+  // byte (0xc3) followed by a non-continuation byte. Decoding this through a
+  // string and re-encoding replaces the invalid bytes with U+FFFD, so it is
+  // NOT round-trippable — the sharpest possible witness that a body was
+  // hashed byte-for-byte and not silently coerced through a string somewhere
+  // in the path. Asserted once here, then relied on below.
+  const body = Uint8Array.from([0xff, 0x80, 0x00, 0xc3, 0x28]);
+
+  it("is confirmed non-UTF-8-safe: a decode+re-encode round trip corrupts it", () => {
+    const reencoded = new TextEncoder().encode(new TextDecoder().decode(body));
+
+    expect(reencoded).not.toEqual(body);
+  });
+
+  it("sign/verify hash a Uint8Array body directly, matching an independent node HMAC", () => {
+    const signature = sign(body, secret);
+    const expected = createHmac("sha256", secret).update(body).digest("hex");
+
+    expect(signature).toBe(expected);
+    expect(verify(body, signature, secret)).toBe(true);
+
+    // Tamper one byte: the same signature must now fail.
+    const tampered = Uint8Array.from(body);
+    tampered[0] = 0x01;
+    expect(verify(tampered, signature, secret)).toBe(false);
+  });
+
+  it("verify binds a timestamp over the raw bytes (prefix + body, never a decoded string)", () => {
+    const ts = 1_700_000_000_000;
+
+    // What a byte-exact deliverer signs: the ASCII `${timestamp}.` prefix
+    // concatenated with the RAW body bytes — computed independently here via
+    // node's own createHmac, never through @lesto/webhooks's internals.
+    const prefix = Buffer.from(`${ts}.`, "utf8");
+    const signedBytes = new Uint8Array(prefix.length + body.length);
+    signedBytes.set(prefix, 0);
+    signedBytes.set(body, prefix.length);
+    const signature = createHmac("sha256", secret).update(signedBytes).digest("hex");
+
+    expect(verify(body, signature, secret, { timestamp: ts, now: ts })).toBe(true);
+
+    // A signature computed over a DECODED-then-re-encoded body must NOT verify
+    // against the original bytes — proof the timestamp-bound path is also
+    // byte-exact, not just the untimestamped one.
+    const lossyBytes = new TextEncoder().encode(new TextDecoder().decode(body));
+    const lossySignedBytes = new Uint8Array(prefix.length + lossyBytes.length);
+    lossySignedBytes.set(prefix, 0);
+    lossySignedBytes.set(lossyBytes, prefix.length);
+    const lossySignature = createHmac("sha256", secret).update(lossySignedBytes).digest("hex");
+
+    expect(verify(body, lossySignature, secret, { timestamp: ts, now: ts })).toBe(false);
+  });
+
+  it("verifyRequest verifies a binary VerifyRequestInput.body over its raw bytes", () => {
+    const ts = 1_700_000_000_000;
+    const prefix = Buffer.from(`${ts}.`, "utf8");
+    const signedBytes = new Uint8Array(prefix.length + body.length);
+    signedBytes.set(prefix, 0);
+    signedBytes.set(body, prefix.length);
+    const signature = createHmac("sha256", secret).update(signedBytes).digest("hex");
+
+    const headers = { [SIGNATURE_HEADER]: signature, [TIMESTAMP_HEADER]: String(ts) };
+
+    // `VerifyRequestInput.body` must accept a `Uint8Array` for this literal to
+    // typecheck — reverting the widening turns this into a compile error, not
+    // just a runtime failure. That is the whole point of this task.
+    const input: VerifyRequestInput = { body, headers };
+
+    const result = verifyRequest(input, { secret, now: ts });
+
+    // The bytes aren't valid JSON, so no `event` — but verified all the same.
+    expect(result).toEqual({ verified: true });
+  });
+
+  it("verifyRequest rejects a binary body when the signature was computed over DIFFERENT bytes", () => {
+    const ts = 1_700_000_000_000;
+    const tampered = Uint8Array.from(body);
+    tampered[0] = 0x01;
+
+    const prefix = Buffer.from(`${ts}.`, "utf8");
+    const signedBytes = new Uint8Array(prefix.length + tampered.length);
+    signedBytes.set(prefix, 0);
+    signedBytes.set(tampered, prefix.length);
+    const signature = createHmac("sha256", secret).update(signedBytes).digest("hex");
+
+    const headers = { [SIGNATURE_HEADER]: signature, [TIMESTAMP_HEADER]: String(ts) };
+
+    const result = verifyRequest({ body, headers }, { secret, now: ts });
+
+    expect(result).toEqual({ verified: false, reason: "signature_mismatch" });
   });
 });
 

@@ -89,14 +89,46 @@ export class WebhookError extends LestoError<WebhookErrorCode> {
   }
 }
 
-/** HMAC-SHA256 of `body` under `secret`, hex-encoded. */
-export function sign(body: string, secret: string): string {
+/**
+ * HMAC-SHA256 of `body` under `secret`, hex-encoded.
+ *
+ * `body` accepts a `string` (the original, still-dominant case: JSON, form
+ * data, any UTF-8 payload) OR the raw `Uint8Array` a transport captured before
+ * any decode — node's `Hmac.update` hashes either as-is, so a `Uint8Array` is
+ * hashed byte-for-byte with NO UTF-8 round trip. That round trip is what makes
+ * a `string`-typed path lossy for a binary body (an image, a protobuf, a
+ * multipart upload): decoding non-UTF-8 bytes to a JS string and re-encoding
+ * them is not guaranteed to reproduce the original bytes, so a binary
+ * webhook's HMAC MUST be computed over the raw bytes (e.g. `c.req.rawBytes`),
+ * never a decoded string.
+ */
+export function sign(body: string | Uint8Array, secret: string): string {
   return createHmac("sha256", secret).update(body).digest("hex");
 }
 
-/** The signed payload when a timestamp binds the body against replay. */
-function signedPayload(timestamp: number, body: string): string {
-  return `${timestamp}.${body}`;
+/**
+ * The signed payload when a timestamp binds the body against replay:
+ * `${timestamp}.` followed by the body, byte-for-byte.
+ *
+ * A `string` body is concatenated as before — unchanged output for every
+ * existing (string-bodied) caller. A `Uint8Array` body is NOT decoded to a
+ * string and re-concatenated (that would corrupt a non-UTF-8 body); instead
+ * the ASCII `${timestamp}.` prefix bytes are prepended directly to the raw
+ * body bytes, so the result hashes to the same signature a receiver computes
+ * over `${timestamp}.` + the exact wire bytes.
+ */
+function signedPayload(timestamp: number, body: string | Uint8Array): string | Uint8Array {
+  if (typeof body === "string") {
+    return `${timestamp}.${body}`;
+  }
+
+  const prefix = Buffer.from(`${timestamp}.`, "utf8");
+  const combined = new Uint8Array(prefix.length + body.length);
+
+  combined.set(prefix, 0);
+  combined.set(body, prefix.length);
+
+  return combined;
 }
 
 /** Options for a timestamp-bound {@link verify} that also defends against replay. */
@@ -124,9 +156,12 @@ export interface VerifyOptions {
  * timestamp is additionally required to be within `toleranceMs` of `now`, so a
  * replayed capture outside the window is rejected even with a valid signature.
  * Omit `options` for the legacy body-only signature.
+ *
+ * `body` accepts a `string` or the raw `Uint8Array` a transport captured — see
+ * {@link sign} for why the byte-exact arm matters for a binary body.
  */
 export function verify(
-  body: string,
+  body: string | Uint8Array,
   signature: string,
   secret: string,
   options: VerifyOptions = {},
@@ -157,8 +192,17 @@ export type VerifyFailureReason =
 
 /** The inbound request material {@link verifyRequest} needs: raw body + headers. */
 export interface VerifyRequestInput {
-  /** The exact undecoded request bytes — verification hashes THIS, never a re-serialized body. */
-  readonly body: string;
+  /**
+   * The exact undecoded request bytes — verification hashes THIS, never a
+   * re-serialized body.
+   *
+   * A `string` (e.g. `c.req.rawBody`) works for any UTF-8 body, the original
+   * and still-dominant case. Pass the raw `Uint8Array` (e.g. `c.req.rawBytes`)
+   * for a byte-exact check of a body that may not be valid UTF-8 (an image, a
+   * protobuf, a multipart upload) — a `string` re-encode of such a body is not
+   * guaranteed byte-identical to what was sent, so the HMAC would not match.
+   */
+  readonly body: string | Uint8Array;
   /** Lowercase header map (as `@lesto/web`'s `c.req.headers` provides). */
   readonly headers: Record<string, string | undefined>;
 }
@@ -304,7 +348,13 @@ function completeVerifyRequest(
   let event: string | undefined;
 
   try {
-    const parsed: unknown = JSON.parse(input.body);
+    // `JSON.parse` takes a string; a `Uint8Array` body is decoded here ONLY for
+    // this best-effort `event` extraction — the HMAC above already ran over the
+    // raw bytes, so this decode cannot affect verification, only whether we can
+    // additionally report which event was signed.
+    const bodyText =
+      typeof input.body === "string" ? input.body : Buffer.from(input.body).toString("utf8");
+    const parsed: unknown = JSON.parse(bodyText);
 
     if (
       typeof parsed === "object" &&
