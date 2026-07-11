@@ -113,25 +113,74 @@ export function cacheControl(options: CacheControlOptions): string {
 /**
  * Detect a content hash (fingerprint) in a built asset's filename.
  *
- * The build writes content-addressed assets as `name.<hash>.ext` — the hash is
- * a run of lowercase hex/base-ish characters between dots, long enough to be a
- * digest and not a version like `app.v2.js`. When a filename carries one, the
- * URL is frozen and the asset is safe to cache `immutable`; when it does not (a
- * plain `index.html`, a hand-named `app.js`), it must revalidate.
+ * Builds fingerprint assets two ways, and we recognize both:
  *
- * Conservative on purpose: a false negative just means an asset revalidates
- * when it could have been frozen (correct, only slower); a false positive would
- * freeze a mutable URL for a year (a correctness bug), so we require a hash
- * segment of at least eight characters to claim a fingerprint.
+ *   - **Dot form** — `name.<hash>.ext` (e.g. `app.4f3a9c2b.js`): the classic
+ *     `[name].[hash].[ext]` template. The hash is lowercase hex, >= 8 chars,
+ *     anchored between dots.
+ *   - **Dash form** — `name-<hash>.ext` (e.g. `sqlite3-BqX9F35q.wasm`,
+ *     `opfs-worker-BvJIRuxz.js`): Vite/Rollup's DEFAULT `[name]-[hash].[ext]`
+ *     template. The hash is a base64url-ish run over `[A-Za-z0-9_]`, >= 8 chars,
+ *     as the FINAL dash-delimited segment before the extension. (Missing this
+ *     form is why a live 939 KiB `sqlite3-*.wasm` chunk revalidated on every
+ *     load instead of being frozen — L-e217eb20.)
+ *
+ * When a filename carries a hash the URL is content-addressed and can never
+ * change under that URL, so it is safe to cache `immutable`; otherwise (a plain
+ * `index.html`, a hand-named `app.js`, or a human dash-word like `opfs-worker.js`)
+ * it must revalidate.
+ *
+ * Conservative on purpose, because the two error directions are NOT symmetric: a
+ * false negative just revalidates an asset that could have been frozen (correct,
+ * only slower), but a false positive freezes a MUTABLE URL for a year (a real
+ * correctness bug). So a fingerprint must clear two bars:
+ *
+ *   - **Length** — >= 8 chars, so a version like `app.v2.js` or a suffix like
+ *     `bar-min.js` is too short to pass.
+ *   - **Entropy (dash form only)** — the final segment must ALSO carry a digit OR
+ *     mixed case, so a plain-word segment is never mistaken for a digest. This is
+ *     the load-bearing distinction between `opfs-worker.js` (unhashed word
+ *     `worker`, stays no-cache) and `opfs-worker-BvJIRuxz.js` (hashed `BvJIRuxz`,
+ *     immutable); it also rejects a long lowercase word such as
+ *     `opfs-controller.js` (`controller` — 10 lowercase letters, zero entropy).
+ *
+ * The residual risk is a hand-named CamelCase tail (`chunk-DataTable.js`) reading
+ * as a hash — but that shape does not occur among served static files here (built
+ * output is hashed; hand-named output is lowercase-kebab), so the safe-negative
+ * default holds in practice while genuine hashed chunks finally get frozen. The
+ * dot form keeps its original hex-only rule untouched.
  */
 export function hasContentHash(filePath: string): boolean {
   // The last path segment is the filename; directories never carry the hash.
   const fileName = filePath.slice(filePath.lastIndexOf("/") + 1);
 
-  // `name.<hash>.ext`: a dotted segment of >= 8 hex chars sitting before the
+  // Dot form: `name.<hex>.ext` — a dotted segment of >= 8 hex chars before the
   // final extension. Anchored between dots so a long word in the name can't pose
   // as a digest, and the trailing `.ext` is required so a bare hash isn't matched.
-  return /\.[a-f0-9]{8,}\.[a-z0-9]+$/i.test(fileName);
+  if (/\.[a-f0-9]{8,}\.[a-z0-9]+$/i.test(fileName)) {
+    return true;
+  }
+
+  // Dash form: `name-<hash>.ext` — Vite/Rollup's default. Isolate the final
+  // dash-delimited token in front of the extension without a capture group (so
+  // `noUncheckedIndexedAccess` can't push an `undefined` down this path).
+  const extAt = fileName.lastIndexOf(".");
+  if (extAt <= 0) return false; // no extension → not an asset filename we freeze
+  const dashAt = fileName.lastIndexOf("-", extAt);
+  if (dashAt < 0) return false; // no dash before the extension → not the dash form
+
+  const segment = fileName.slice(dashAt + 1, extAt);
+
+  // Length gate: a real fingerprint is >= 8 base64url-ish chars.
+  if (!/^[A-Za-z0-9_]{8,}$/.test(segment)) return false;
+
+  // Entropy gate: a digit OR mixed case marks a digest and lets a plain lowercase
+  // (or plain uppercase) dash-word slip through as mutable. `BvJIRuxz` passes on
+  // mixed case with no digit; `controller` fails on both.
+  const hasDigit = /[0-9]/.test(segment);
+  const isMixedCase = /[a-z]/.test(segment) && /[A-Z]/.test(segment);
+
+  return hasDigit || isMixedCase;
 }
 
 /**

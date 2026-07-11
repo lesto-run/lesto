@@ -55,26 +55,90 @@ describe("cacheControl", () => {
 });
 
 describe("hasContentHash", () => {
-  it("detects a fingerprint segment of hex before the extension", () => {
-    expect(hasContentHash("assets/app.4f3a9c2b.js")).toBe(true);
-    expect(hasContentHash("site/main.0a1b2c3d4e5f.css")).toBe(true);
+  describe("dot form — name.<hash>.ext", () => {
+    it("detects a fingerprint segment of hex before the extension", () => {
+      expect(hasContentHash("assets/app.4f3a9c2b.js")).toBe(true);
+      expect(hasContentHash("site/main.0a1b2c3d4e5f.css")).toBe(true);
+      // The dot form's hash may be UPPERCASE hex (the regex is case-insensitive).
+      expect(hasContentHash("app.4F3A9C2B.js")).toBe(true);
+    });
+
+    it("treats plain and human-versioned filenames as mutable", () => {
+      expect(hasContentHash("index.html")).toBe(false);
+      expect(hasContentHash("app.js")).toBe(false);
+      // A short or non-hash dotted segment is not a digest.
+      expect(hasContentHash("app.v2.js")).toBe(false);
+    });
+
+    it("requires a trailing extension after the hash", () => {
+      // A bare hash with no extension is not an asset filename.
+      expect(hasContentHash("app.4f3a9c2b1d2e")).toBe(false);
+    });
   });
 
-  it("treats plain and human-versioned filenames as mutable", () => {
-    expect(hasContentHash("index.html")).toBe(false);
-    expect(hasContentHash("app.js")).toBe(false);
-    // A short or non-hash dotted segment is not a digest.
-    expect(hasContentHash("app.v2.js")).toBe(false);
+  describe("dash form — Vite/Rollup default name-<hash>.ext", () => {
+    // Real Vite/Rollup default emitted filenames — these are the chunks that were
+    // wrongly revalidating on every load before L-e217eb20.
+    it("freezes a real Vite dash-hash chunk (digit + mixed case)", () => {
+      expect(hasContentHash("sqlite3-BqX9F35q.wasm")).toBe(true);
+      expect(hasContentHash("assets/chunk-DdF2xY8z.css")).toBe(true);
+      expect(hasContentHash("index-4f3a9c2b.js")).toBe(true);
+    });
+
+    it("freezes a dash-hash carried on a name that itself contains dashes", () => {
+      // We inspect only the FINAL dash segment, so a multi-word prefix is fine.
+      expect(hasContentHash("opfs-worker-BvJIRuxz.js")).toBe(true);
+    });
+
+    it("freezes a mixed-case dash-hash even when it carries no digit", () => {
+      // `BvJIRuxz` has no digit; mixed case alone is enough entropy for a digest.
+      expect(hasContentHash("opfs-worker-BvJIRuxz.js")).toBe(true);
+      expect(hasContentHash("chunk-AbCdEfGh.js")).toBe(true);
+    });
+
+    // The tension case, spelled out: an unhashed human dash-word must stay
+    // no-cache, while its hashed sibling must freeze.
+    it("keeps an unhashed human dash-word mutable but freezes its hashed sibling", () => {
+      expect(hasContentHash("opfs-worker.js")).toBe(false); // `worker` is a word
+      expect(hasContentHash("opfs-worker-BvJIRuxz.js")).toBe(true); // `BvJIRuxz` is a hash
+    });
+
+    it("keeps a long lowercase dash-word mutable (length alone is not entropy)", () => {
+      // `controller` is 10 chars — long enough on length, but pure lowercase, so
+      // it must NOT be mistaken for a digest.
+      expect(hasContentHash("opfs-controller.js")).toBe(false);
+      expect(hasContentHash("service-worker.js")).toBe(false);
+      expect(hasContentHash("vendor-chunk.js")).toBe(false);
+    });
+
+    it("keeps short dash suffixes mutable (a version/qualifier is not a hash)", () => {
+      expect(hasContentHash("foo-v2.js")).toBe(false);
+      expect(hasContentHash("bar-min.js")).toBe(false);
+    });
+
+    it("does not treat an internal-dot segment as a dash-hash", () => {
+      // The final dash token spans a dot (`file.min`), which is not the base64url
+      // alphabet, so it is rejected — `vendor-app.min.js` stays mutable.
+      expect(hasContentHash("my-file.min.js")).toBe(false);
+    });
+
+    it("requires a trailing extension after a dash-hash", () => {
+      // A hashed-looking token with no extension is not an asset filename we freeze.
+      expect(hasContentHash("chunk-BqX9F35q")).toBe(false);
+    });
+  });
+
+  it("treats bare plain filenames (no dash, no dot-hash) as mutable", () => {
+    for (const name of ["main.js", "styles.css", "worker.js", "index.js"]) {
+      expect(hasContentHash(name)).toBe(false);
+    }
   });
 
   it("looks only at the filename, never a hash-looking directory", () => {
     // A hash in a directory must not freeze a plainly-named file under it.
     expect(hasContentHash("4f3a9c2b1d2e/index.html")).toBe(false);
-  });
-
-  it("requires a trailing extension after the hash", () => {
-    // A bare hash with no extension is not an asset filename.
-    expect(hasContentHash("app.4f3a9c2b1d2e")).toBe(false);
+    // Same for a dash-hash directory over an unhashed file.
+    expect(hasContentHash("assets/chunk-DdF2xY8z/index.html")).toBe(false);
   });
 });
 
