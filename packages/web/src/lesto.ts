@@ -643,6 +643,7 @@ export class Lesto {
       headers: options?.headers ?? {},
       body: options?.body,
       ...(options?.rawBody === undefined ? {} : { rawBody: options.rawBody }),
+      ...(options?.rawBytes === undefined ? {} : { rawBytes: options.rawBytes }),
     };
 
     // A match runs its baked chain (middleware + handler/page); a miss still runs

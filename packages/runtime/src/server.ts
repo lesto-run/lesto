@@ -564,7 +564,13 @@ export interface BodyStream {
 }
 
 /**
- * Read the full request body off the socket as a UTF-8 string, bounded.
+ * Read the full request body off the socket as raw bytes, bounded.
+ *
+ * Resolves with the exact octets as they arrived — NO UTF-8 decode — so a
+ * binary body (an image, a protobuf, a multipart upload) survives byte-for-byte
+ * and a webhook's HMAC can be verified over the bytes actually sent. The caller
+ * decodes to a UTF-8 string where it needs one (JSON parse, the `rawBody`
+ * back-compat string); the raw `Buffer` is what feeds `rawBytes`.
  *
  * We tally bytes as chunks arrive and reject the moment the running total would
  * exceed `maxBytes` — dropping what we have buffered so memory stays bounded,
@@ -577,7 +583,7 @@ export interface BodyStream {
  * The invariant: this promise always settles, and never holds more than
  * `maxBytes` of body in memory.
  */
-export function readBody(req: BodyStream, maxBytes: number): Promise<string> {
+export function readBody(req: BodyStream, maxBytes: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     let chunks: Buffer[] = [];
 
@@ -616,7 +622,7 @@ export function readBody(req: BodyStream, maxBytes: number): Promise<string> {
         return;
       }
 
-      resolve(Buffer.concat(chunks).toString("utf8"));
+      resolve(Buffer.concat(chunks));
     });
 
     req.on("error", (error) => reject(error));
@@ -1711,13 +1717,19 @@ async function handleAdmitted(
           ? Math.min(deps.maxBodyBytes, deps.maxJsonBodyBytes)
           : deps.maxBodyBytes;
 
-      const body = await readBody(req, bodyCap);
+      const bytes = await readBody(req, bodyCap);
+
+      // Decode to UTF-8 for the parsed `body` and the `rawBody` back-compat
+      // string, but keep the raw bytes for `rawBytes` — a binary body (image,
+      // protobuf, multipart) is lossy through a string, and a webhook's HMAC
+      // must hash the bytes actually sent. Empty body: no bytes to expose.
+      const rawBytes = bytes.byteLength === 0 ? undefined : bytes;
 
       const request = toLestoRequest({
         method: line.method,
         url: line.url,
         headers: req.headers,
-        body,
+        body: bytes.toString("utf8"),
       });
 
       // `path` was already set from the same URL before the body read (so a 413
@@ -1741,6 +1753,7 @@ async function handleAdmitted(
             headers: request.headers,
             body: request.body,
             ...(request.rawBody === undefined ? {} : { rawBody: request.rawBody }),
+            ...(rawBytes === undefined ? {} : { rawBytes }),
           }),
           deps.handlerTimeoutMs,
           cancellation.abortTimeout,

@@ -234,6 +234,36 @@ describe("toFetchHandler", () => {
     expect(calls[0]?.options.rawBody).toBe("hello");
   });
 
+  it("exposes the exact request bytes as byte-exact rawBytes for a binary body", async () => {
+    const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
+
+    // Bytes that do NOT survive a UTF-8 round-trip (invalid lead/continuation
+    // bytes → U+FFFD), so the string `rawBody` channel is irreversibly corrupted
+    // and HMAC-over-bytes off it is impossible — the exact failure F4 is about.
+    const raw = Uint8Array.from([0xff, 0xfe, 0x00, 0x01, 0x80, 0xff]);
+
+    await toFetchHandler(dispatch)(
+      new Request("https://example.com/hooks", {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: raw,
+      }),
+    );
+
+    // The fix: the exact bytes reach the dispatcher, byte-for-byte.
+    const rawBytes = calls[0]?.options.rawBytes;
+    expect(rawBytes).toBeDefined();
+    expect(rawBytes === undefined ? [] : Array.from(rawBytes)).toEqual(Array.from(raw));
+
+    // Non-vacuous guard: the legacy UTF-8 `rawBody` channel IS lossy for these
+    // bytes, so re-encoding it is NOT byte-exact and is strictly longer.
+    const rawBody = calls[0]?.options.rawBody;
+    expect(rawBody).toBeDefined();
+    const stringRoundTrip = new TextEncoder().encode(rawBody ?? "");
+    expect(Array.from(stringRoundTrip)).not.toEqual(Array.from(raw));
+    expect(stringRoundTrip.byteLength).toBeGreaterThan(raw.byteLength);
+  });
+
   it("refuses a body over the cap with 413, before dispatch", async () => {
     const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
 

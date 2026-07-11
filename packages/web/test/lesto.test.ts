@@ -129,6 +129,27 @@ describe("lesto verbs + dispatch", () => {
     expect(JSON.parse(response.body)).toEqual({ hasRawBody: false });
   });
 
+  it("threads byte-exact rawBytes from the handle options onto c.req.rawBytes", async () => {
+    // Bytes that would be corrupted by a UTF-8 round-trip — the byte-exact
+    // channel a binary webhook's HMAC must hash.
+    const raw = Uint8Array.from([0xff, 0xfe, 0x00, 0x80]);
+    const app = lesto().post("/echo", (c) =>
+      c.json({ bytes: c.req.rawBytes === undefined ? "MISSING" : Array.from(c.req.rawBytes) }),
+    );
+
+    const response = await app.handle("POST", "/echo", { rawBytes: raw });
+
+    expect(JSON.parse(response.body)).toEqual({ bytes: [0xff, 0xfe, 0x00, 0x80] });
+  });
+
+  it("leaves c.req.rawBytes undefined when the handle options omit it", async () => {
+    const app = lesto().post("/echo", (c) => c.json({ hasRawBytes: "rawBytes" in c.req }));
+
+    const response = await app.handle("POST", "/echo", { body: { n: 2 } });
+
+    expect(JSON.parse(response.body)).toEqual({ hasRawBytes: false });
+  });
+
   it("returns 404 when no route matches", async () => {
     const app = lesto().get("/a", (c) => c.text("a"));
 

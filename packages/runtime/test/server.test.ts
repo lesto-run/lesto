@@ -1,6 +1,7 @@
 import { request as httpRequest } from "node:http";
 import { connect } from "node:net";
 import { EventEmitter } from "node:events";
+import { createHmac } from "node:crypto";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -52,7 +53,7 @@ import type {
 import type { AccessEntry, Server } from "../src/index";
 import type { App } from "@lesto/kernel";
 import { currentContext } from "@lesto/web";
-import type { LestoResponse } from "@lesto/web";
+import type { HandleOptions, LestoResponse } from "@lesto/web";
 import { parseTraceparent } from "@lesto/observability";
 
 // Track the live server so each test tears its socket down, even on failure.
@@ -77,7 +78,7 @@ function makeRequest(
   options: {
     method: string;
     path: string;
-    body?: string;
+    body?: string | Uint8Array;
     contentType?: string;
     headers?: Record<string, string>;
   },
@@ -402,6 +403,74 @@ describe("serve", () => {
 
     expect(response.status).toBe(200);
     expect(JSON.parse(response.body)).toEqual({ hasRawBody: false });
+  });
+
+  it("exposes the exact request bytes as byte-exact rawBytes for a binary body (HMAC-verifiable)", async () => {
+    // Bytes that do NOT survive a UTF-8 round-trip: 0xFF/0xFE/0x80 are invalid
+    // UTF-8 lead/continuation bytes, so a string-decoded body (`rawBody`) is
+    // irreversibly corrupted — the exact failure F4 is about. HMAC-over-bytes
+    // verification of a binary webhook is therefore impossible off `rawBody`.
+    const raw = Uint8Array.from([0xff, 0xfe, 0x00, 0x01, 0x80, 0xff]);
+    const secret = "whsec_binary";
+    const expectedHmac = createHmac("sha256", secret).update(raw).digest("hex");
+
+    // `options` is annotated as the web `HandleOptions` (which carries
+    // `rawBytes`); the kernel `App.handle` type has not yet been widened to
+    // advertise it — a noted public-API gap — but the runtime forwards it, and a
+    // wider handler param is still assignable to `App`.
+    const app: App = {
+      migrationsApplied: [],
+
+      handle: async (_method: string, _path: string, options?: HandleOptions) => {
+        const rawBytes = options?.rawBytes;
+        const rawBody = options?.rawBody;
+
+        return {
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            // The byte-exact channel: hex of the bytes the handler received.
+            bytesHex: rawBytes === undefined ? "MISSING" : Buffer.from(rawBytes).toString("hex"),
+            // The legacy string channel re-encoded to bytes — lossy for binary.
+            stringHex:
+              rawBody === undefined ? "MISSING" : Buffer.from(rawBody, "utf8").toString("hex"),
+            // HMAC over the received bytes — proves signature verification works.
+            hmac:
+              rawBytes === undefined
+                ? "MISSING"
+                : createHmac("sha256", secret).update(rawBytes).digest("hex"),
+          }),
+        };
+      },
+    };
+
+    server = await serve(app, { port: 0 });
+
+    const response = await makeRequest(server.port, {
+      method: "POST",
+      path: "/hooks",
+      contentType: "application/octet-stream",
+      body: Buffer.from(raw),
+    });
+
+    const result = JSON.parse(response.body) as {
+      bytesHex: string;
+      stringHex: string;
+      hmac: string;
+    };
+    const rawHex = Buffer.from(raw).toString("hex");
+
+    // The fix: the bytes reach the handler byte-for-byte, and an HMAC computed
+    // over them matches an HMAC over what the client actually sent.
+    expect(result.bytesHex).toBe(rawHex);
+    expect(result.hmac).toBe(expectedHmac);
+
+    // Non-vacuous guard: the legacy UTF-8 `rawBody` channel IS lossy for these
+    // bytes — the two invalid lead bytes expand to U+FFFD — so its round-trip is
+    // provably NOT byte-exact and is strictly longer. That the byte-exact
+    // assertions above pass while this one holds shows they are not vacuous.
+    expect(result.stringHex).not.toBe(rawHex);
+    expect(result.stringHex.length).toBeGreaterThan(rawHex.length);
   });
 
   it("defaults to an ephemeral port and the loopback host when no options are given", async () => {
@@ -1490,7 +1559,7 @@ function fakeStream(): BodyStream & { emitter: EventEmitter } {
 }
 
 describe("readBody", () => {
-  it("concatenates chunks within the limit into a UTF-8 string", async () => {
+  it("concatenates chunks within the limit into the raw bytes", async () => {
     const stream = fakeStream();
 
     const read = readBody(stream, 1024);
@@ -1499,7 +1568,25 @@ describe("readBody", () => {
     stream.emitter.emit("data", Buffer.from("cd"));
     stream.emitter.emit("end");
 
-    expect(await read).toBe("abcd");
+    const bytes = await read;
+
+    // Resolves with raw bytes (no UTF-8 decode), so a binary body survives
+    // byte-for-byte; the caller decodes to a string where it needs one.
+    expect(bytes).toBeInstanceOf(Buffer);
+    expect(bytes.toString("utf8")).toBe("abcd");
+  });
+
+  it("preserves non-UTF-8 bytes verbatim (no lossy decode)", async () => {
+    const stream = fakeStream();
+
+    const read = readBody(stream, 1024);
+
+    // 0xFF/0xFE/0x80 are invalid UTF-8 bytes — a string decode would corrupt
+    // them. `readBody` returns them untouched.
+    stream.emitter.emit("data", Buffer.from([0xff, 0xfe, 0x00, 0x80]));
+    stream.emitter.emit("end");
+
+    expect(Array.from(await read)).toEqual([0xff, 0xfe, 0x00, 0x80]);
   });
 
   it("rejects with RUNTIME_BODY_TOO_LARGE and buffers no more once past the limit", async () => {

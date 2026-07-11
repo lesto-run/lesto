@@ -47,6 +47,13 @@ export interface EdgeRequestOptions {
    * `@lesto/web`'s `HandleOptions.rawBody`.
    */
   readonly rawBody?: string;
+
+  /**
+   * The exact undecoded request bytes — the byte-exact companion to
+   * {@link EdgeRequestOptions.rawBody}, for verifying a binary webhook's HMAC
+   * over the bytes actually sent. See `@lesto/web`'s `HandleOptions.rawBytes`.
+   */
+  readonly rawBytes?: Uint8Array;
 }
 
 /**
@@ -299,7 +306,12 @@ function headersFrom(headers: Headers): Record<string, string> {
  * the body exceeds the cap, 400 when a declared-JSON body did not parse.
  */
 type Decoded =
-  | { readonly ok: true; readonly body: unknown; readonly rawBody?: string }
+  | {
+      readonly ok: true;
+      readonly body: unknown;
+      readonly rawBody?: string;
+      readonly rawBytes?: Uint8Array;
+    }
   | { readonly ok: false; readonly status: 400 | 413 };
 
 /**
@@ -351,6 +363,11 @@ async function readBounded(request: Request, maxBytes: number): Promise<Uint8Arr
  * {@link readBounded}). Empty is `undefined` (no body, not an empty string); a
  * JSON content-type is parsed, and a parse failure is a *client* error the
  * caller turns into a 400 — never an exception. Anything else stays the raw text.
+ *
+ * The raw octets ride alongside as `rawBytes`, undecoded: `rawBody` is a lossy
+ * UTF-8 string for a non-UTF-8 body (image, protobuf, multipart), so a binary
+ * webhook's HMAC must be verified over the byte-exact `rawBytes`, never the
+ * string.
  */
 async function decodeBody(
   request: Request,
@@ -371,13 +388,13 @@ async function decodeBody(
 
   if (contentType !== undefined && contentType.startsWith("application/json")) {
     try {
-      return { ok: true, body: JSON.parse(text) as unknown, rawBody: text };
+      return { ok: true, body: JSON.parse(text) as unknown, rawBody: text, rawBytes: bytes };
     } catch {
       return { ok: false, status: 400 };
     }
   }
 
-  return { ok: true, body: text, rawBody: text };
+  return { ok: true, body: text, rawBody: text, rawBytes: bytes };
 }
 
 /**
@@ -667,6 +684,7 @@ async function dispatchHardened(
       headers,
       body: decoded.body,
       ...(decoded.rawBody === undefined ? {} : { rawBody: decoded.rawBody }),
+      ...(decoded.rawBytes === undefined ? {} : { rawBytes: decoded.rawBytes }),
     });
 
     // A configured `timeoutMs` races the dispatch: on overrun the race rejects

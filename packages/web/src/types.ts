@@ -32,8 +32,26 @@ export interface HandleOptions {
    * `body` for the request's lifetime (~2× that body's memory); it is bounded
    * by the transport's body-size cap, and for a non-JSON body `rawBody` and
    * `body` are the same string (no extra cost).
+   *
+   * NOTE: `rawBody` is a UTF-8 *string*, so it is LOSSY for a body that is not
+   * valid UTF-8 (an image, a protobuf, a multipart upload). Verify a binary
+   * webhook's HMAC over {@link rawBytes}, never this string — a re-encode of a
+   * UTF-8-decoded string is not byte-exact.
    */
   rawBody?: string;
+
+  /**
+   * The exact undecoded request bytes, when the transport captured them.
+   *
+   * The byte-exact companion to {@link rawBody}: the raw octets of the body as
+   * they arrived on the wire, with no UTF-8 decode. This is what a signature
+   * check MUST hash — an inbound webhook's HMAC is computed over the exact bytes
+   * sent, and any non-UTF-8 body (an image PUT, a protobuf, a multipart file)
+   * cannot be reconstructed from the {@link rawBody} string. Absent when the
+   * transport carried no body (an empty request) or never captured raw bytes
+   * (e.g. a hand-built `HandleOptions` in a test).
+   */
+  rawBytes?: Uint8Array;
 }
 
 /** A normalized inbound request: what the router matched, plus query and body. */
@@ -62,6 +80,13 @@ export interface LestoRequest {
    * {@link HandleOptions.rawBody}.
    */
   rawBody?: string;
+
+  /**
+   * The exact undecoded request bytes — the byte-exact companion to
+   * {@link rawBody}. Verify a binary webhook's HMAC over THIS, never the
+   * lossy UTF-8 string. See {@link HandleOptions.rawBytes}.
+   */
+  rawBytes?: Uint8Array;
 }
 
 /**
