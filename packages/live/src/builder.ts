@@ -1,5 +1,5 @@
 /**
- * `live()` — the moat method (ADR 0042 Tier 4, v0). A typed, fluent builder over the SAME
+ * `live()` — the moat builder (ADR 0042 Tier 4, v0). A typed, fluent builder over the SAME
  * `@lesto/db` schema the app writes with, that mints a {@link ShapeDefinition} and returns a
  * live, offline-capable, locally-queryable {@link LiveQuery}:
  *
@@ -14,7 +14,7 @@
  * language, one AST of typed `Table`/`Column` values, one row type across both runtimes**.
  * The builder reads only the table's metadata (`byColumn`, `byKey`, `spec`) — plain data on
  * the table value — so it pulls in no server/database runtime, and no app framework that
- * merely *consumes* an external sync service can offer `live()` as a method on its own ORM.
+ * merely *consumes* an external sync service can offer `live()` as a first-class builder over its own ORM's schema.
  *
  * v0 scope: single-table, AND-combined simple `eq/ne/gt/gte/lt/lte` filters, the whole row
  * projected. The one dev/prod-parity caveat (like the ADR's others): a `timestamp` column

@@ -29,12 +29,15 @@
   payload is rows, not topics.
 - **Touches (seams, audited 2026-06-30):** the ORM query builder `db.select().from(t).where(...)`
   (`packages/db/src/queries.ts:150` `SelectBuilder`, `:5` the usage spine) — `live()` becomes a
-  method here, the load-bearing moat claim; the Postgres adapter and its pooled
+  method here, the load-bearing moat claim (**as-built: a free function `live(table)`, not a chained
+  `.live()` method — see the 2026-07-10 erratum**); the Postgres adapter and its pooled
   `BEGIN`/`COMMIT` transaction bracket (`packages/pg/src/adapter.ts:102,114`) — the logical-
   replication slot is a *new, dedicated* connection beside the pool, like ADR 0040's dedicated
   `LISTEN` client; the principal + authorization seam (`packages/authz/src/principal.ts:91`
   `getPrincipal`, `guard.ts:94` `can`) — a **shape** is authorized at subscribe time and the
-  authz is re-checked, the same hole ADR 0040 closed for topics (`L-85655d2c`); the client query
+  authz is re-checked, the same hole ADR 0040 closed for topics (`L-85655d2c`) (**as-built: an
+  app-supplied `authorizeShape`/`resolvePrincipal` seam in `@lesto/live-server`, which carries no
+  `@lesto/authz` dependency — see the 2026-07-10 erratum**); the client query
   cache `QueryClient` (`packages/ui/src/data-client.ts:86`, `registerTopics`/`invalidateTopic` at
   `:210`/`:244`) —
   the local store is the durable tier beneath it; the long-lived-stream runtime kind
