@@ -1,6 +1,34 @@
 # Phase-0 spike plan — "buy ElectricSQL under the `live()` façade" (build-vs-buy seam #1)
 
-**Status:** proposed spike plan (decision `L-0993ff3e`, epic `L-c5fd5621`; live-GA epic `L-3c9f8069`).
+> **RULING UPDATE (2026-07-10, fable chief-architect on `L-0993ff3e`): OWN — finish + harden
+> the existing engine. This spike is now DORMANT, not a gate.** It is **not run now**; it is
+> filed **blocked, activated only by a budget tripwire**: the F33 fence + F35 pushdown fixes are
+> budgeted at ~2–3 weeks combined agent-time — a **2× overrun**, or F34 durable-shape-logs
+> proving architecturally destabilizing, activates this spike **before** further engine spend.
+> The chief-architect strengthened the own-case with three **mapping-independent** reasons my
+> original framing under-weighted (they hold even if Q1's mapping is clean):
+> 1. **"Buy Electric" is not a library — it's an Elixir sync *service* in a separate runtime**,
+>    deployed beside Postgres (or a hosted Electric Cloud dependency *for the moat feature*).
+>    Lesto's engine runs **in-process** over the app's own `db` handle
+>    (`createShapeEngine({db, tables})`) — one artifact, one deploy. Buying means
+>    `lesto dev`/`lesto deploy` orchestrating an Elixir container. Strategically incoherent
+>    with "batteries-included, one-command deploy," and independent of any AST mapping.
+> 2. **The SQLite dev-parity poll engine has NO Electric equivalent** (Electric needs Postgres
+>    logical replication; ADR 0042's v0 poll engine gives zero-Postgres `lesto dev`). Buy =
+>    own the poll engine *and* the protocol *and* an Electric adapter — three systems, not one.
+> 3. **Electric's HA is *also* single-writer-per-slot** — its scale-out is HTTP/CDN read
+>    fan-out. What durable shape logs actually buy is a *cheap restart* (F34), not multi-machine
+>    slot HA — so the headline "rent the HA" gain is smaller than the buy-case assumed.
+>
+> Also corrected: F35 pushdown is **mechanical, not distributed-systems R&D** — the shape
+> predicate is already serializable `{column, op, value}` *by construction* (ADR 0042), so
+> compiling it to a parameterized `WHERE`+`ORDER BY` is bounded work; F33's fix is already named
+> in the `engine.ts:696-706` comment. The audit's "multi-quarter" costing conflated these two
+> bounded fixes with the two schedulable ones (F34, HA). The Q-matrix below is retained as the
+> spike's **content if the tripwire fires**; the chief-architect's ADR-0042-grounded pass/fail
+> (criteria a–g) is folded into the dormant spike task `L-4ad76f9f`.
+
+**Status:** DORMANT spike, tripwire-activated (ruling: OWN). Decision `L-0993ff3e`, epic `L-c5fd5621`; live-GA epic `L-3c9f8069`.
 **Precedent:** ADR 0029/0046 Phase-0 hard-gate discipline — *prove a platform-integration
 claim on a real substrate BEFORE writing flow code*. This repo has two scars from deciding
 integration questions in prose: `b932aa1` (CI-green / deployed-Worker-broken edge KDF) and the
