@@ -242,6 +242,43 @@ describe("toFetchHandler", () => {
     expect(calls).toEqual([]); // never routed
   });
 
+  it("refuses the authority-form target with a CODED 400, mapped through statusForError — not a bare 400", async () => {
+    // The guard THROWS the shared coded `RUNTIME_INVALID_REQUEST_TARGET` — the same
+    // code the node tier's `parseRequestTarget` raises — so the edge's `catch →
+    // statusForError` maps it to a 400 exactly as the node RuntimeError is mapped.
+    // That keeps the two front doors from diverging (one coded, one bare) and lets
+    // one telemetry pipeline read one error identity on either runtime.
+    //
+    // We spy on the SHARED mapper (call-through — behavior unchanged) and assert it
+    // was invoked with the coded refusal: a bare `return { status: 400 }` guard
+    // returns BEFORE the try/catch and never reaches `statusForError`, so this goes
+    // RED the moment the guard regresses to a bare 400. Restored in `finally` so a
+    // failing assertion can never leak the spy into a later test.
+    const web = await import("@lesto/web");
+    const statusForErrorSpy = vi.spyOn(web, "statusForError");
+
+    try {
+      const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
+
+      const response = await toFetchHandler(dispatch, { logRequest: () => undefined })(
+        new Request("https://example.com//evil/admin"),
+      );
+
+      // The shared mapper (call-through) still returns 400 for this code.
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe("Bad Request");
+      expect(calls).toEqual([]); // never routed
+
+      // The refusal flowed THROUGH the shared mapper, carrying the stable code the
+      // node tier raises — brand-recognized, not a bare inline 400.
+      expect(statusForErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "RUNTIME_INVALID_REQUEST_TARGET" }),
+      );
+    } finally {
+      statusForErrorSpy.mockRestore();
+    }
+  });
+
   it("keeps a non-JSON body as raw text", async () => {
     const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
 
@@ -1187,6 +1224,75 @@ describe("withAssets", () => {
     );
 
     expect(seenCtx).toBe(ctx);
+  });
+
+  it("diverts a // authority-confusion GET to the app guard, never the asset fetcher (defense-in-depth)", async () => {
+    // The asset fetcher is rigged to ANSWER (200) for any path — the dangerous case
+    // where it would normalize or serve `//evil/admin` rather than 404 and fall
+    // through. withAssets must divert the `//` shape to the app BEFORE `assets.fetch`,
+    // so the app's coded guard refuses it and the asset layer never answers it out
+    // from under that guard. Composed with the real `toFetchHandler` so the refusal
+    // is the genuine coded 400, not a stub.
+    let assetsCalled = false;
+    const assets: AssetFetcher = {
+      fetch: () => {
+        assetsCalled = true;
+
+        return Promise.resolve(new Response("asset", { status: 200 }));
+      },
+    };
+
+    const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
+    const handler = withAssets(assets, toFetchHandler(dispatch, { logRequest: () => undefined }));
+
+    const response = await handler(new Request("https://example.com//evil/admin"));
+
+    // The app guard's coded refusal, mapped to 400 — NOT the rigged 200 asset.
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("Bad Request");
+    expect(assetsCalled).toBe(false); // never handed to the asset fetcher
+    expect(calls).toEqual([]); // and the guard refused it before routing
+  });
+
+  it("diverts the `/\\` backslash authority variant too (folded to `//`)", async () => {
+    let assetsCalled = false;
+    const assets: AssetFetcher = {
+      fetch: () => {
+        assetsCalled = true;
+
+        return Promise.resolve(new Response("asset", { status: 200 }));
+      },
+    };
+
+    const { dispatch, calls } = recordingDispatch({ status: 200, body: "ok" });
+    const handler = withAssets(assets, toFetchHandler(dispatch, { logRequest: () => undefined }));
+
+    const response = await handler(new Request("https://example.com/\\evil/admin"));
+
+    expect(response.status).toBe(400);
+    expect(assetsCalled).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it("still hands a legitimate single-slash GET to the asset fetcher (the divert is `//`-only)", async () => {
+    // The divert is scoped to the authority-confusion `//` shape; a normal
+    // origin-form path reaches the asset binding exactly as before, so the static
+    // zone keeps serving files at the edge.
+    let seenPath: string | undefined;
+    const assets: AssetFetcher = {
+      fetch: (request) => {
+        seenPath = new URL(request.url).pathname;
+
+        return Promise.resolve(new Response("/* bundle */", { status: 200 }));
+      },
+    };
+
+    const response = await withAssets(assets, fixedApp("app"))(
+      new Request("https://example.com/client.js"),
+    );
+
+    expect(seenPath).toBe("/client.js"); // reached the asset fetcher, undiverted
+    expect(await response.text()).toBe("/* bundle */");
   });
 });
 

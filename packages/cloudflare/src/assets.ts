@@ -59,6 +59,21 @@ export function withAssets(
       return handler(request, ctx);
     }
 
+    // Authority-confusion defense-in-depth. A GET/HEAD whose path begins `//` (or
+    // the `/\` variant `new URL` folds to `//`) is never a legitimate static file —
+    // it is the `//evil/admin` proxy-ACL-bypass shape the app handler refuses with a
+    // coded 400 (see `dispatchHardened`). The dynamic zone is already covered — a
+    // missing asset 404s and falls through to that guard — but the asset fetcher
+    // sees the RAW url FIRST, so were it to normalize or serve such a path (rather
+    // than 404), the guard would be shadowed and the ACL bypass would stand. Route
+    // it STRAIGHT to the app instead of `assets.fetch`, so the one coded front door
+    // owns the refusal and the asset layer can never answer it out from under the
+    // guard. A single-slash origin-form path is untouched — only the `//` shape
+    // (never a real asset) diverts here.
+    if (new URL(request.url).pathname.startsWith("//")) {
+      return handler(request, ctx);
+    }
+
     const asset = await assets.fetch(request);
 
     return asset.status === 404 ? handler(request, ctx) : asset;

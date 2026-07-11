@@ -22,6 +22,7 @@
  * ETag, exactly as a streamed node response does.
  */
 
+import { LestoError } from "@lesto/errors";
 import {
   bodyForStatus,
   DEFAULT_SECURITY_HEADERS,
@@ -652,6 +653,9 @@ function edgeCancellation(request: Request): {
 /**
  * Decode the body and run the dispatcher under an error boundary.
  *
+ * The authority-confusion guard runs first, INSIDE the boundary: it throws the
+ * shared coded refusal, which the same `catch → statusForError` maps to a 400 —
+ * so the guard, a malformed body, and a dispatch throw all leave through one seam.
  * A malformed declared-JSON body is a 400 before dispatch. Any throw from the
  * dispatcher is caught and mapped to a coded status with a safe, generic body —
  * an attacker can degrade their own request, never crash the worker or read an
@@ -668,34 +672,43 @@ async function dispatchHardened(
   timeoutMs: number | undefined,
   abortTimeout: () => void,
 ): Promise<AnyLestoResponse> {
-  // Authority-confusion guard — the edge twin of `@lesto/runtime`'s
-  // `parseRequestTarget` (F19). A well-formed origin-form target is a single-slash
-  // absolute path; a target that began `//host/path` (or the `/\` variant WHATWG
-  // folds to the same) survives into `url.pathname` as a `//`-prefixed path. A front
-  // proxy that ACL-matched the raw `//evil/admin` as authority `evil` + path `/admin`
-  // would forward it, and we would then route `//evil/admin` — the authority
-  // discarded, the ACL bypassed. Refuse it with a 400 before it can route, exactly as
-  // the node tier does. (`new URL` folds `/\` to `//`, so the single `//` test covers
-  // both shapes — a separate `/\` branch here would be unreachable.)
-  if (url.pathname.startsWith("//")) {
-    return {
-      status: 400,
-      headers: { "content-type": "text/plain; charset=utf-8" },
-      body: bodyForStatus(400),
-    };
-  }
-
-  const decoded = await decodeBody(request, headers["content-type"], maxBodyBytes);
-
-  if (!decoded.ok) {
-    return {
-      status: decoded.status,
-      headers: { "content-type": "text/plain; charset=utf-8" },
-      body: bodyForStatus(decoded.status),
-    };
-  }
-
   try {
+    // Authority-confusion guard — the edge twin of `@lesto/runtime`'s
+    // `parseRequestTarget` (F19). A well-formed origin-form target is a single-slash
+    // absolute path; a target that began `//host/path` (or the `/\` variant WHATWG
+    // folds to the same) survives into `url.pathname` as a `//`-prefixed path. A front
+    // proxy that ACL-matched the raw `//evil/admin` as authority `evil` + path `/admin`
+    // would forward it, and we would then route `//evil/admin` — the authority
+    // discarded, the ACL bypassed. Refuse it before it can route, exactly as the node
+    // tier does. (`new URL` folds `/\` to `//`, so the single `//` test covers both
+    // shapes — a separate `/\` branch here would be unreachable.)
+    //
+    // The refusal is a THROWN, coded `RUNTIME_INVALID_REQUEST_TARGET` — the SAME code
+    // the node tier's `parseRequestTarget` raises — not a bare 400 returned inline.
+    // The shared `catch → statusForError` below maps it to a coded 400, so the two
+    // front doors never silently diverge (one coded, one bare) and one telemetry
+    // pipeline reads one error identity on either runtime. Built as a `@lesto/errors`
+    // `LestoError` (recognized by brand, mapped by `@lesto/web`'s `statusForError`)
+    // rather than a `@lesto/runtime` `RuntimeError`, so the edge takes no dependency
+    // on the node transport for a code both tiers share.
+    if (url.pathname.startsWith("//")) {
+      throw new LestoError(
+        "RUNTIME_INVALID_REQUEST_TARGET",
+        `Request target is not an origin-form path: "${url.pathname}".`,
+        { target: url.pathname },
+      );
+    }
+
+    const decoded = await decodeBody(request, headers["content-type"], maxBodyBytes);
+
+    if (!decoded.ok) {
+      return {
+        status: decoded.status,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+        body: bodyForStatus(decoded.status),
+      };
+    }
+
     const work = dispatch(request.method, url.pathname, {
       query: queryFrom(url.searchParams),
       headers,
