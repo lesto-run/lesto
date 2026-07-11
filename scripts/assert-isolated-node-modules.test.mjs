@@ -157,6 +157,34 @@ describe("assertReactLockstep", () => {
       }),
     ).toEqual([]);
   });
+  it("counts major Y for a `<Y.z` ceiling with a nonzero minor/patch (Y.0.0..Y.z−1 admits Y)", () => {
+    // `<20.5.0` still admits all of 20.0.0..20.4.x, so major 20 IS advertised — the
+    // ceiling is 20, not 19. Before the fix this returned [18, 19] and tripped a false
+    // mismatch against the equivalent caret union — the exact bug class L-f4ca9903 fixed.
+    expect(
+      assertReactLockstep({
+        name: "x",
+        peerDependencies: {
+          react: ">=18.0.0 <20.5.0",
+          "react-dom": "^18.0.0 || ^19.0.0 || ^20.0.0",
+        },
+      }),
+    ).toEqual([]);
+  });
+  it("does not crash on a pathologically wide (typo) `>=X <Y` span", () => {
+    // A fat-fingered `<100000000` would enumerate ~10^8 majors into a Set — a
+    // `RangeError: Set maximum size exceeded` (or hundreds of MB) that crashes the
+    // check with a stack pointing nowhere near the real problem. The width cap keeps
+    // it bounded; the range still mismatches its react-dom counterpart and is flagged.
+    let problems;
+    expect(() => {
+      problems = assertReactLockstep({
+        name: "x",
+        peerDependencies: { react: ">=1.0.0 <100000000.0.0", "react-dom": "^18.0.0" },
+      });
+    }).not.toThrow();
+    expect(problems).toHaveLength(1);
+  });
   it("SKIPS sections that declare only one of the pair, or a workspace protocol", () => {
     expect(assertReactLockstep({ name: "x", peerDependencies: { react: "^19" } })).toEqual([]);
     expect(

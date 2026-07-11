@@ -131,6 +131,8 @@ export function assertPeerHonesty(manifest) {
  * major, and is skipped: `>=18 <19` — a one-major span — still advertises [18], same as `^18`.
  * Caret/tilde/exact/x-range tokens each contribute their own (single) major.
  */
+const MAX_ENUMERATED_MAJORS = 1024;
+
 function advertisedMajors(range) {
   const set = new Set();
   for (const d of String(range).trim().split("||")) {
@@ -143,9 +145,28 @@ function advertisedMajors(range) {
     const upper = tokens.find((t) => /^<=?\d/.test(t));
     if (lower && upper) {
       const lowMajor = Number(/(\d+)/.exec(lower)[1]);
-      const upperMajor = Number(/(\d+)/.exec(upper)[1]);
-      const ceilMajor = upper.startsWith("<=") ? upperMajor : upperMajor - 1;
-      for (let major = lowMajor; major <= ceilMajor; major++) set.add(major);
+      const [uMajRaw, uMinRaw = "0", uPatRaw = "0"] = upper.replace(/^<=?/, "").split(".");
+      const upperMajor = Number(uMajRaw);
+      // `<=Y` includes major Y. A `<Y` excludes major Y ONLY at an exact major floor
+      // (`<Y`, `<Y.0`, `<Y.0.0`); a `<Y.z` with a nonzero minor/patch (e.g. `<20.5.0`)
+      // still admits Y.0.0..Y.(z−1), so major Y IS advertised — ceiling Y, not Y−1.
+      const excludesUpperMajor =
+        !upper.startsWith("<=") &&
+        Number.parseInt(uMinRaw, 10) === 0 &&
+        Number.parseInt(uPatRaw, 10) === 0;
+      const ceilMajor = excludesUpperMajor ? upperMajor - 1 : upperMajor;
+      // A real react/react-dom span is a handful of majors. A pathologically wide
+      // one — a fat-fingered `<100000000` in a hand-written `>=X <Y` — must NOT be
+      // enumerated into a giant Set (a `RangeError: Set maximum size exceeded`, or
+      // hundreds of MB of joined output). Beyond a sane width, record just the
+      // endpoints: an honest range never trips this, and a typo still mismatches
+      // its react-dom counterpart and is flagged downstream instead of crashing.
+      if (ceilMajor - lowMajor > MAX_ENUMERATED_MAJORS) {
+        set.add(lowMajor);
+        if (ceilMajor >= lowMajor) set.add(ceilMajor);
+      } else {
+        for (let major = lowMajor; major <= ceilMajor; major++) set.add(major);
+      }
       continue; // this disjunct is fully accounted for as a span; skip the per-token pass
     }
     for (const token of tokens) {
