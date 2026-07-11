@@ -349,3 +349,20 @@ list frozen. No P0 objection to the plan.
   your app stays edge-native"; messaging.md §5/§8) to pre-empt the "not actually
   edge-native?" gotcha. No ratified ADR decision was reversed; all outcomes are
   bounded amendments (ADR 0042, messaging.md §5/§8, this entry) + board edges.
+- **2026-07-10 — north star named (owner-ratified):** the three repos'
+  end-state, previously implicit, is now explicit: **the agent-operated app
+  platform on Cloudflare — conversation in, deployed production app out** (the
+  operator drives a Studio fleet building into Lesto, deployed to CF; a
+  Vercel-competitor play on CF infra, where CF has no first-party framework *or*
+  builder). Canonical doc `docs/NORTH-STAR.md`; board epic `L-b7ac4ea3`. This is
+  a **naming, not a re-plan**: it changes no ratified decision, adds **zero**
+  pre-launch scope, and this attack plan (L0→L1→L2…) is explicitly phase one of
+  it. The single near-term deliverable it introduces — the monthly "an agent
+  built this" ritual (§Phase L2, priority #1) *becoming* a Studio-fleet-builds-
+  Lesto-on-CF demo — is a re-content of an already-committed slot, not new
+  scope; its real integration cost is tracked on `L-85abeda8`. Acquisition by
+  Cloudflare is framed as a possible *outcome*, never the plan. Hosted
+  multi-tenant Studio (the 2027 commercial surface) reverses Studio's GATE-0 only
+  on tripwires owned by Studio-board task `L-3fb731fb`. The red-team pass on the
+  doc landed; the chief-architect ratification (`L-674a6391`) is owed (its
+  wrap-up run was cut off).
