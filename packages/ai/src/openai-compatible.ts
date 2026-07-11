@@ -298,21 +298,16 @@ async function parseResponse(response: Response): Promise<GenerateResult> {
 }
 
 /**
- * Parse a chat-completions SSE stream into normalized text deltas, returning the final
+ * Parse the chat-completions SSE stream into normalized text deltas, returning the final
  * {@link StreamFinal} (usage + stop reason) once the stream drains.
  *
- * The stream is a sequence of `data: <json>\n\n` frames terminated by `data: [DONE]`.
- * Text rides on `choices[0].delta.content` (yielded); the stop reason on
- * `choices[0].finish_reason`, and — because we asked with `stream_options.include_usage`
- * — the token accounting on a terminal chunk whose `choices` is empty and `usage` is set.
- * The meta is folded into the returned value rather than yielded, so a `for-await`
- * consumer sees only text — the exact contract `anthropic.ts` holds. The parser is a
- * pure async transform over the response's `ReadableStream<Uint8Array>` — fed a canned
- * stream in tests, asserting the exact deltas AND the final accounting, with no network.
- *
- * A non-2xx fails loud as `AI_HTTP_ERROR`; a frame whose `data:` is present but not JSON
- * fails as `AI_STREAM_MALFORMED` rather than silently dropping tokens. A torn final frame
- * (a dropped connection mid-frame) is tolerated quietly — the stream just ended early.
+ * The stream lifecycle — HTTP/body refusal, the `\n\n` frame loop, `data:` extraction, the `[DONE]`
+ * skip, `JSON.parse`→`AI_STREAM_MALFORMED`, torn-final tolerance, the both-counts return discipline,
+ * and reader cleanup — lives in the shared {@link parseSseStream} engine. This provider supplies only
+ * {@link interpretFrame}: text rides on `choices[0].delta.content`; the stop reason on
+ * `choices[0].finish_reason`; and the token accounting on the terminal `stream_options.include_usage`
+ * chunk (empty `choices`, `usage` set) — the meta folded into the returned value rather than yielded,
+ * so a `for-await` consumer sees only text.
  */
 function parseStream(response: Response): AsyncGenerator<StreamDelta, StreamFinal | undefined> {
   return parseSseStream(response, interpretFrame, "OpenAI-compatible endpoint");

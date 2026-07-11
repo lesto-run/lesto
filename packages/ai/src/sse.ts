@@ -129,8 +129,15 @@ export async function* parseSseStream(
     let last: ParsedFrame | undefined;
     try {
       last = parseFrame(buffer, interpret);
-    } catch {
-      last = undefined;
+    } catch (error) {
+      // Tolerate ONLY a torn final frame — incomplete JSON the connection dropped mid-write, which
+      // `parseFrame` reports as `AI_STREAM_MALFORMED`. Anything else (an interpreter fault, now that
+      // interpretation is a per-provider seam) is a real bug: surface it rather than bury it at EOF.
+      if (error instanceof AiError && error.code === "AI_STREAM_MALFORMED") {
+        last = undefined;
+      } else {
+        throw error;
+      }
     }
 
     if (last !== undefined) {
@@ -186,6 +193,16 @@ function parseFrame(frame: string, interpret: FrameInterpreter): ParsedFrame | u
     json = JSON.parse(raw);
   } catch {
     throw new AiError("AI_STREAM_MALFORMED", "Stream frame data was not valid JSON.", { frame });
+  }
+
+  // A `data:` payload that parses to a non-object (`null`, a number, a string, a boolean) carries no
+  // frame for any provider — skip it. This is what makes the {@link FrameInterpreter} "total, never
+  // throws" contract genuinely enforceable: an interpreter does `json as WireShape` then dereferences
+  // it, which would throw a `TypeError` on `null` (and `null` alone — property access on the other
+  // primitives yields `undefined`). Guarding here, at the one place that owns `JSON.parse`, makes
+  // every interpreter honest at once, rather than each re-checking for null.
+  if (typeof json !== "object" || json === null) {
+    return undefined;
   }
 
   return interpret(json);

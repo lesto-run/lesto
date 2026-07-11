@@ -595,6 +595,27 @@ describe("parseStream", () => {
     expect(deltas).toEqual([]);
   });
 
+  it("skips a data:null (or other non-object) frame without throwing or poisoning the rest of the stream", async () => {
+    // `JSON.parse("null")` is valid JSON but `null`; an interpreter's `json as WireShape` dereference
+    // would throw an uncoded TypeError mid-stream and drop every later frame. The engine's non-object
+    // guard makes it a skip — so the following real delta still yields. Exercises the shared sse.ts
+    // guard through this provider (would go RED without it).
+    const frames = [
+      "data: null\n\n",
+      "data: 42\n\n",
+      'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+      "data: [DONE]\n\n",
+    ];
+
+    const deltas: string[] = [];
+
+    for await (const delta of model().parseStream(sseResponse(frames))) {
+      deltas.push(delta.text);
+    }
+
+    expect(deltas).toEqual(["Hi"]);
+  });
+
   it("refuses a non-2xx stream with AI_HTTP_ERROR", async () => {
     const iterate = async (): Promise<void> => {
       for await (const _ of model().parseStream(sseResponse([], 500))) {
