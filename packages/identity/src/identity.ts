@@ -158,12 +158,15 @@ const DEFAULT_THROTTLE_WINDOW_MS = 15 * 60 * 1000;
  * edge (a fresh isolate resets it) and per-node on a multi-node fleet.
  *
  * A second, distinct residual is MEMORY, and it bites WORST exactly where the
- * throttle floor is strongest — the long-lived Node process. Self-eviction bounds
- * the Map only for buckets sitting FULL (a first-seen key, a cost-0 peek); a
+ * throttle floor is strongest — the long-lived Node process. Self-eviction is LAZY
+ * (on-access only: a bucket is dropped inside `update()` when a write lands it at
+ * FULL — a first-seen key or a cost-0 peek); there is no timer and no sweep. A
  * *failed* login burns a token, so its `login:<email>` bucket is stored BELOW the
- * ceiling and is retained for the whole ~15-minute refill window. Under an
- * adversarial flood of distinct emails the Map therefore still grows (bounded by
- * flood-rate × window, NOT by a hard cap) — the in-memory default is a per-process
+ * ceiling — and because that attacker-chosen key is never seen again, `update()`
+ * never fires for it, so it is never re-checked and never evicted. Under an
+ * adversarial flood of distinct emails the Map therefore grows MONOTONICALLY —
+ * one permanent entry per distinct email until the process restarts, NOT a
+ * steady-state set that entries age out of — the in-memory default is a per-process
  * FLOOR, not a memory-bounded ceiling (residual L-976b4302). The durable fix is
  * the SAME one below: a limiter over `sqlRateLimitStore`, whose rows a periodic
  * `sweep` reclaims, is what gives a long-lived Node deploy a bounded, fleet-wide
@@ -183,10 +186,11 @@ const defaultRateLimiter = (clock: Clock | undefined): RateLimiter =>
     // email even under benign traffic. A full bucket == a first-seen key, so evicting
     // it loses no throttle state; an actively-throttled (partially-drained) bucket is
     // never full and so never evicted. That eviction bounds the BENIGN/idle case —
-    // but NOT an adversarial one: a *failed* login drains the bucket below full, so
-    // under a flood of distinct emails each entry is retained for the whole refill
-    // window and the Map still grows. This limiter is a per-process FLOOR, not a hard
-    // memory cap (residual L-976b4302); the durable, memory-bounded fix is a
+    // but NOT an adversarial one: a *failed* login drains the bucket below full, and
+    // eviction is lazy (on-access only, no sweep), so a flooded distinct key — never
+    // seen again — is never re-checked and never evicted: the Map grows monotonically,
+    // one permanent entry per email until restart. This limiter is a per-process FLOOR,
+    // not a hard memory cap (residual L-976b4302); the durable, memory-bounded fix is a
     // `sqlRateLimitStore`-backed `loginRateLimiter` (see the docstring above and
     // {@link IdentityOptions.loginRateLimiter}). See `MemoryRateLimitStore`.
     store: new MemoryRateLimitStore({ capacity: DEFAULT_THROTTLE_CAPACITY }),
@@ -463,9 +467,10 @@ export interface IdentityOptions {
    * per-process floor that resets on a serverless/edge isolate recycle and does
    * not span a multi-node fleet. It is also a floor, NOT a hard memory cap even on
    * a long-lived Node deploy: a *failed* attempt keeps its `login:<email>` bucket
-   * below the eviction ceiling for the refill window, so an adversarial flood of
-   * distinct emails still grows the store's Map (bounded by flood-rate × window,
-   * not capped; residual L-976b4302). Wire a SQL-backed limiter for a durable,
+   * below the eviction ceiling, and since eviction is lazy on-access (no sweep) a
+   * flooded distinct key is never re-checked — an adversarial flood of distinct
+   * emails grows the store's Map monotonically, one permanent entry per email until
+   * restart (residual L-976b4302). Wire a SQL-backed limiter for a durable,
    * fleet-wide, memory-bounded cap in production (see {@link defaultRateLimiter}).
    *
    * `login` checks the resolved limiter under the key `login:<normalizedEmail>`
