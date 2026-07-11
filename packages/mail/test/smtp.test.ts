@@ -735,9 +735,11 @@ describe("SmtpConnection lost-wakeup and dialogue timeout (F15)", () => {
       const observed = sending.then(
         () => {
           outcome = { status: "resolved" };
+          return outcome;
         },
         (error: unknown) => {
           outcome = { status: "rejected", error };
+          return outcome;
         },
       );
 
