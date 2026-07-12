@@ -842,6 +842,10 @@ export class Webhooks {
     // OS TCP timeout (minutes) — long past the queue's visibility window — so one
     // slow or hostile tenant could starve the shared delivery pool. The deadline
     // aborts the request instead, turning a stall into a clean retryable failure.
+    // Bind the deadline to a named signal so the catch can tell a genuine timeout
+    // apart from an instantaneous transport error by STRUCTURE — only this
+    // request's own `AbortSignal.timeout` can flip `deadline.aborted`.
+    const deadline = AbortSignal.timeout(this.deliveryTimeoutMs);
     let response: WebhookResponse;
 
     try {
@@ -850,7 +854,7 @@ export class Webhooks {
         headers,
         body,
         redirect: "manual",
-        signal: AbortSignal.timeout(this.deliveryTimeoutMs),
+        signal: deadline,
       });
     } catch (cause) {
       // A coded WebhookError from the transport itself — e.g. the pinning fetch
@@ -858,19 +862,29 @@ export class Webhooks {
       // the right verdict; pass it through untouched.
       if (cause instanceof WebhookError) throw cause;
 
-      // Everything else is the deadline firing (or a transport-level error). Map
-      // it by STRUCTURE, never by exception NAME: `AbortSignal.timeout` rejects
-      // with a `DOMException` named "TimeoutError" on the global-fetch/undici/
-      // workerd path but with "AbortError" on the Node `http.request` (pinning)
-      // path, so keying the catch on `name === "AbortError"` would MISS the real
-      // production timeout. A distinct, retryable code keeps "slow" legible apart
-      // from "errored" (callers branch on `code`) and is retried like any other
-      // failed attempt — permanence is marker-based, and this failure carries no
-      // `permanentFailure` marker.
+      // Discriminate by STRUCTURE, never by exception NAME: `AbortSignal.timeout`
+      // rejects with a `DOMException` named "TimeoutError" on the global-fetch/
+      // undici/workerd path but "AbortError" on the Node `http.request` (pinning)
+      // path, so keying on `name` would MISS the real production timeout. Instead
+      // key on `deadline.aborted`, which only this request's own deadline can set.
+      // Both codes are retryable (callers branch on `code`; permanence is
+      // marker-based and neither failure carries a `permanentFailure` marker) —
+      // the split only keeps a genuine "slow" (`WEBHOOK_DELIVERY_TIMEOUT`) legible
+      // apart from an instantaneous transport failure like `ECONNREFUSED`, DNS
+      // `ENOTFOUND`, a TLS handshake error, or undici's `TypeError: fetch failed`
+      // (`WEBHOOK_DELIVERY_FAILED`), which the old catch mislabeled as a timeout.
+      if (deadline.aborted) {
+        throw new WebhookError(
+          "WEBHOOK_DELIVERY_TIMEOUT",
+          `Webhook delivery to ${payload.url} did not complete within ${this.deliveryTimeoutMs}ms.`,
+          { url: payload.url, timeoutMs: this.deliveryTimeoutMs, cause },
+        );
+      }
+
       throw new WebhookError(
-        "WEBHOOK_DELIVERY_TIMEOUT",
-        `Webhook delivery to ${payload.url} did not complete within ${this.deliveryTimeoutMs}ms.`,
-        { url: payload.url, timeoutMs: this.deliveryTimeoutMs, cause },
+        "WEBHOOK_DELIVERY_FAILED",
+        `Webhook delivery to ${payload.url} failed before its ${this.deliveryTimeoutMs}ms deadline.`,
+        { url: payload.url, cause },
       );
     }
 

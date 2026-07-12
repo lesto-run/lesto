@@ -839,6 +839,22 @@ describe("Webhooks delivery timeout (DoS bound)", () => {
     expect((error as WebhookError).code).toBe("WEBHOOK_DELIVERY_TIMEOUT");
   });
 
+  it("maps an instantaneous transport error to WEBHOOK_DELIVERY_FAILED, not a timeout (the deadline never fired)", async () => {
+    // A connect-time failure — ECONNREFUSED, DNS ENOTFOUND, a TLS handshake error,
+    // or undici's `TypeError: fetch failed` — rejects BEFORE the deadline aborts,
+    // so `deadline.aborted` is false. The old catch mislabeled every such error as
+    // WEBHOOK_DELIVERY_TIMEOUT ("did not complete within 5ms" — factually false);
+    // structural discrimination on `deadline.aborted` gives it the honest code.
+    const failing: FetchLike = () => Promise.reject(new TypeError("fetch failed"));
+    const deliver = deliverHandler(failing, 5);
+
+    const error = await rejection(Promise.resolve(deliver?.(job)));
+
+    expect(error).toBeInstanceOf(WebhookError);
+    expect((error as WebhookError).code).toBe("WEBHOOK_DELIVERY_FAILED");
+    expect((error as WebhookError).details["url"]).toBe(HOOK_URL);
+  });
+
   it("lets a coded WebhookError from the transport pass through unchanged (SSRF refusal not masked as a timeout)", async () => {
     // The pinning fetch can reject with WEBHOOK_URL_BLOCKED at connect time (a DNS
     // rebind refused). That verdict is already correct and must NOT be relabeled a
