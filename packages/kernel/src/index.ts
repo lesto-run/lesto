@@ -34,5 +34,6 @@ export {
   KERNEL_MEMORY_STORES_CODE,
   resetMemoryStoresWarning,
   secureStack,
+  stopManagedRateLimitSweeps,
 } from "./secure-stack";
 export type { DurableStores, SecureStackOptions } from "./secure-stack";

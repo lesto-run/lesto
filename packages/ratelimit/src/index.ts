@@ -11,7 +11,7 @@
  *   if (!allowed) sleep(retryAfterMs);
  */
 
-export { RateLimiter } from "./limiter";
+export { RateLimiter, RATELIMIT_DEAD_ONSATURATED_CODE } from "./limiter";
 export type { RateLimiterOptions } from "./limiter";
 
 export {

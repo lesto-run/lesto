@@ -6,8 +6,12 @@ import type { Lesto } from "@lesto/web";
 import { generateToken } from "@lesto/csrf";
 import { sqlRateLimitStore } from "@lesto/ratelimit";
 
-import { createApp, installDurableSchema, secureStack } from "../src/index";
-import { stopManagedRateLimitSweeps } from "../src/secure-stack";
+import {
+  createApp,
+  installDurableSchema,
+  secureStack,
+  stopManagedRateLimitSweeps,
+} from "../src/index";
 import type { SecureStackOptions } from "../src/index";
 
 import type { KernelDatabase } from "../src/index";
