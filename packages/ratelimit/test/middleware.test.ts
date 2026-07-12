@@ -10,6 +10,7 @@ import {
   RATELIMIT_UNKNOWN_CLIENT_CODE,
   UNKNOWN_CLIENT_KEY,
 } from "../src/index";
+import { RATELIMIT_DEAD_ONSATURATED_CODE } from "../src/limiter";
 
 import type { AnyLestoResponse, LestoRequest } from "@lesto/web";
 import type { BucketState } from "../src/index";
@@ -334,5 +335,44 @@ describe("rateLimit onDenied seam", () => {
 
     expect(denied.status).toBe(429);
     expect(seen).toEqual([RATELIMIT_DENIED_KIND]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rateLimit dead onSaturated (injected limiter) — L-ebb33e60
+//
+// rateLimit routes onSaturated into the store its OWN auto-built limiter creates;
+// inject a pre-built `limiter` and the `??` short-circuits that build, so onSaturated
+// is dead config — the injected limiter owns its own store and saturation signal.
+// Loud (coded console.warn) rather than silent, mirroring the RateLimiter guard.
+// ---------------------------------------------------------------------------
+
+describe("rateLimit dead onSaturated (injected limiter)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("warns with the coded signal when onSaturated is passed alongside an injected limiter", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const onSaturated = vi.fn();
+    // fixedLimiter injects a store but NO onSaturated, so it does not itself warn —
+    // the only warn under test is the middleware's dead-config one.
+    const limiter = fixedLimiter(5, 1);
+
+    rateLimit({ capacity: 5, refillPerSecond: 1, limiter, onSaturated });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(RATELIMIT_DEAD_ONSATURATED_CODE);
+    expect(onSaturated).not.toHaveBeenCalled();
+  });
+
+  it("does NOT warn when onSaturated is passed with NO limiter injected (the live auto-build path)", () => {
+    // rateLimit builds its own limiter and routes onSaturated into that limiter's
+    // store — nothing dead, so no dead-config warn at build time.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    rateLimit({ capacity: 5, refillPerSecond: 1, onSaturated: () => undefined });
+
+    expect(warn).not.toHaveBeenCalled();
   });
 });

@@ -32,6 +32,13 @@
  * in production and the stack warns ONCE (the {@link KERNEL_MEMORY_STORES_CODE}
  * latch) that the limiter is per-process memory — the silent degradation made
  * loud, mirroring `@lesto/ratelimit`'s `RATELIMIT_UNKNOWN_CLIENT` idiom.
+ *
+ * Durable does NOT mean auto-bounded: the SQL store grows one `lesto_rate_limits`
+ * row per distinct client key until a sweep reclaims the dead ones. Pass
+ * {@link SecureStackOptions.rateLimitSweep} to have secureStack drive that sweep
+ * (unref'd, tear down with {@link stopManagedRateLimitSweeps}); it is opt-in, not
+ * default-on, because the table is shared with `@lesto/identity`'s brute-force
+ * limiters and only the operator knows a safe retention (see that field's doc).
  */
 
 import type { Dialect } from "@lesto/db";
@@ -41,9 +48,11 @@ import type { CorsOptions } from "@lesto/cors";
 
 import type { SqlSessionStore } from "@lesto/auth";
 
-import { RateLimiter, rateLimit, sqlRateLimitStore } from "@lesto/ratelimit";
+import { RateLimiter, rateLimit, sqlRateLimitStore, startRateLimitSweep } from "@lesto/ratelimit";
 import type {
   RateLimitOptions,
+  RateLimitSweepHandle,
+  RateLimitSweepOptions,
   SqlDatabase as RateLimitSql,
   SqlRateLimitStore,
 } from "@lesto/ratelimit";
@@ -94,6 +103,30 @@ let memoryStoresWarned = false;
 /** Test-only: reset the warn-once latch so both latch branches are coverable. */
 export function resetMemoryStoresWarning(): void {
   memoryStoresWarned = false;
+}
+
+/**
+ * Handles for every periodic rate-limit sweep {@link secureStack} has started
+ * this process (see {@link SecureStackOptions.rateLimitSweep}). `secureStack`
+ * returns a plain `Middleware[]` with nowhere to hand a per-app disposer back, so —
+ * like the warn-once latch — the handles live module-scoped and
+ * {@link stopManagedRateLimitSweeps} drains them. Every sweep is `unref`'d, so a
+ * process can exit cleanly WITHOUT draining; this registry exists for deterministic
+ * test teardown and for an app that wants an explicit graceful stop.
+ */
+const managedSweeps = new Set<RateLimitSweepHandle>();
+
+/**
+ * Stop every periodic rate-limit sweep {@link secureStack} started this process,
+ * and forget them. Idempotent. A test seam (so a suite can tear down deterministically
+ * rather than leaning on the `unref`), and a graceful-shutdown hook for an app that
+ * wired {@link SecureStackOptions.rateLimitSweep} and wants the timers torn down on
+ * `SIGTERM` instead of at process exit.
+ */
+export function stopManagedRateLimitSweeps(): void {
+  for (const handle of managedSweeps) handle.stop();
+
+  managedSweeps.clear();
 }
 
 /**
@@ -166,6 +199,35 @@ export interface SecureStackOptions {
    * Ignored without a {@link db}. Defaults to `"sqlite"`.
    */
   readonly dialect?: Dialect;
+
+  /**
+   * Wire a periodic sweep of the durable rate-limit table when secureStack owns
+   * the SQL store (a {@link db} is present and you brought no
+   * {@link RateLimitOptions.limiter}). A `db` moves the limiter's growth from a
+   * self-bounding in-memory Map to `lesto_rate_limits` ROWS — one per distinct
+   * client key — so "durable" is NOT "bounded" until something reclaims the dead
+   * rows. Present → secureStack starts a `startRateLimitSweep` over the store
+   * (unref'd, no-overlap) and tracks it for {@link stopManagedRateLimitSweeps}.
+   *
+   * It is **opt-in, not default-on**, deliberately:
+   *   1. `lesto_rate_limits` is a SHARED table — `@lesto/identity`'s login/TOTP
+   *      brute-force limiters key into it too — and a sweep is table-wide, blind to
+   *      which limiter owns a row. secureStack knows only THIS per-IP policy's
+   *      full-refill horizon, not a co-tenant limiter's, so a framework-chosen
+   *      default retention could delete a still-locked-out login bucket (it then
+   *      re-materializes full — a brute-force reset). The operator, who knows every
+   *      limiter sharing the table, must pick `retentionMs` (see its doc); and
+   *   2. `secureStack` returns a plain middleware list with no seam to hand a
+   *      per-app disposer back, so the sweep it starts is process-scoped (drained
+   *      via {@link stopManagedRateLimitSweeps}), which is an explicit opt-in, not a
+   *      hidden always-on timer inside a pure composition.
+   *
+   * Absent (the default) → NO sweep is started: wire this, call
+   * `startRateLimitSweep` yourself, or drive `sweep` from `@lesto/queue`'s
+   * `RetentionScheduler`. Ignored without a {@link db} (a memory store self-bounds
+   * via its `maxBuckets` cap, so there is nothing to sweep).
+   */
+  readonly rateLimitSweep?: RateLimitSweepOptions;
 
   /**
    * Whether this stack runs in production. True + a rate limit + no {@link db} →
@@ -263,12 +325,25 @@ function resolveRateLimit(options: SecureStackOptions, policy: RateLimitOptions)
   // A db is wired: build the limiter over the shared SQL store so the fleet
   // throttles as one. Zero config — this is the pit of success.
   if (options.db !== undefined) {
+    const store = sqlRateLimitStore(options.db as RateLimitSql, {
+      dialect: pgOrSqlite(options.dialect),
+    });
+
+    // Durable is not bounded until something reclaims the rows. secureStack owns
+    // this store, so wire the sweep here when the caller opts in — see
+    // {@link SecureStackOptions.rateLimitSweep} for why it is opt-in, not default-on
+    // (a SHARED table whose co-tenant horizons this policy cannot know + no seam to
+    // hand a per-app disposer back). The handle is tracked for
+    // {@link stopManagedRateLimitSweeps}; the sweep is unref'd, so it never pins the
+    // process open.
+    if (options.rateLimitSweep !== undefined) {
+      managedSweeps.add(startRateLimitSweep(store, options.rateLimitSweep));
+    }
+
     return {
       ...policy,
       limiter: new RateLimiter({
-        store: sqlRateLimitStore(options.db as RateLimitSql, {
-          dialect: pgOrSqlite(options.dialect),
-        }),
+        store,
         capacity: policy.capacity,
         refillPerSecond: policy.refillPerSecond,
       }),

@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { currentContext, fromRequestMiddleware, lesto, runWithContext } from "@lesto/web";
 import type { Lesto } from "@lesto/web";
 import { generateToken } from "@lesto/csrf";
+import { sqlRateLimitStore } from "@lesto/ratelimit";
 
-import { createApp, secureStack } from "../src/index";
+import { createApp, installDurableSchema, secureStack } from "../src/index";
+import { stopManagedRateLimitSweeps } from "../src/secure-stack";
 import type { SecureStackOptions } from "../src/index";
 
 import type { KernelDatabase } from "../src/index";
@@ -250,5 +252,62 @@ describe("secureStack — origin check (zero-config CSRF default)", () => {
       body: "name=widget",
     });
     expect(sameOrigin.status).toBe(201);
+  });
+});
+
+describe("secureStack — rate-limit sweep (opt-in durable bound)", () => {
+  // Drain any managed sweep this block started — deterministic teardown rather than
+  // leaning on the unref. Runs before the file's raw.close(); an empty registry is
+  // a no-op, so it is safe even for the tests here that start no sweep.
+  afterEach(() => {
+    stopManagedRateLimitSweeps();
+  });
+
+  it("drives a managed sweep that reclaims aged rows, and stop() tears it down", async () => {
+    await installDurableSchema(db);
+
+    // A frozen "now" and two rows: one idle past the retention window, one just touched.
+    const NOW = 2_000_000_000_000;
+    const seed = sqlRateLimitStore(db);
+    await seed.update("aged", () => ({ tokens: 5, updatedAt: NOW - 10 * 60_000 }));
+    await seed.update("fresh", () => ({ tokens: 5, updatedAt: NOW }));
+
+    let tick: (() => void) | undefined;
+    let cleared = false;
+
+    // Opt in with an injected timer seam so we fire the cadence with no real waiting.
+    secureStack({
+      db,
+      rateLimit: { capacity: 1, refillPerSecond: 1 },
+      rateLimitSweep: {
+        retentionMs: 5 * 60_000, // reclaim rows idle > 5 minutes
+        clock: () => NOW,
+        setInterval: (callback) => {
+          tick = callback;
+
+          return { id: 1 };
+        },
+        clearInterval: () => {
+          cleared = true;
+        },
+      },
+    });
+
+    // One cadence: DELETE updated_at < NOW - 5min → the aged row goes, the fresh stays.
+    tick?.();
+    // Flush the sweep's `.then/.finally` microtasks (the DELETE itself runs
+    // synchronously through the better-sqlite3 adapter; this keeps it robust).
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    const keys = raw
+      .prepare("SELECT key FROM lesto_rate_limits ORDER BY key")
+      .all()
+      .map((row) => (row as { key: string }).key);
+    expect(keys).toEqual(["fresh"]);
+
+    // The registry disposer really tears the managed timer down.
+    expect(cleared).toBe(false);
+    stopManagedRateLimitSweeps();
+    expect(cleared).toBe(true);
   });
 });

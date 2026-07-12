@@ -1,6 +1,6 @@
 import { RateLimitError } from "./errors";
 
-import type { BucketState, RateLimitStore, SqlDatabase } from "./types";
+import type { BucketState, Clock, RateLimitStore, SqlDatabase } from "./types";
 
 /** The single table every SQL-backed rate-limit store reads and writes. */
 const TABLE = "lesto_rate_limits";
@@ -14,8 +14,11 @@ export type Dialect = "sqlite" | "postgres";
  * `sweep(before)` deletes rows older than `before`. A bucket whose `updated_at`
  * is at least `capacity / refillPerSecond * 1000` ms old has fully refilled, so
  * its row is semantically identical to no row — deleting it is invisible to the
- * limiter. The CALLER owns the cadence and computes the safe threshold from its
- * policy; the framework starts no timer.
+ * limiter. The store itself starts no timer (it stays a passive value); the
+ * CALLER owns the cadence and computes the safe threshold from its policy.
+ * {@link startRateLimitSweep} is the batteries-included, process-safe way to
+ * drive that cadence, and `@lesto/queue`'s `RetentionScheduler` is the recipe for
+ * sweeping several stores from one place.
  */
 export interface SqlRateLimitStore extends RateLimitStore {
   sweep(before: number): Promise<number>;
@@ -178,5 +181,151 @@ export function sqlRateLimitStore(
 
       return changes;
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Periodic sweep (L-f8e7d11f) — bound the durable store's ROW growth.
+//
+// Wiring a `db` swaps the in-memory limiter's self-bounding Map (a hard
+// `maxBuckets` cap) for a SQL store, moving growth from RAM to `lesto_rate_limits`
+// ROWS — one row per distinct client key (a per-IP flood, or every `login:<email>`)
+// that lingers until a sweep reclaims it. `sweep(before)` is cheap and lossless (a
+// row idle past its full-refill horizon is identical to no row), but the store
+// starts no timer, so a durable-by-default app with no operator-run sweep grows the
+// table unbounded. This is the process-safe driver that closes that gap.
+// ---------------------------------------------------------------------------
+
+/** The default sweep cadence: reclaim on a one-minute tick — the common ops grain. */
+export const DEFAULT_RATELIMIT_SWEEP_INTERVAL_MS = 60_000;
+
+/**
+ * The default *retention* window: a bucket must sit idle at least this long before
+ * its row is reclaimed. Deliberately CONSERVATIVE (one hour) because
+ * `lesto_rate_limits` is a SHARED table — `@lesto/identity`'s login/TOTP
+ * brute-force limiters key into it too — and a sweep is table-wide (`DELETE ...
+ * WHERE updated_at < ?`), blind to which limiter owns a row. A retention shorter
+ * than a co-tenant limiter's full-refill horizon would delete a still-throttled
+ * bucket, which then re-materializes FULL on the next check — resetting a
+ * brute-force counter (a limiter bypass). One hour clears the horizon of any
+ * ordinary per-request / per-login limiter; raise it if you run a slower one, and
+ * never set it below the SLOWEST limiter sharing the table.
+ */
+export const DEFAULT_RATELIMIT_SWEEP_RETENTION_MS = 3_600_000;
+
+/** What {@link startRateLimitSweep} accepts. */
+export interface RateLimitSweepOptions {
+  /**
+   * How long a bucket must sit idle before its row is reclaimed, in ms. Each tick
+   * sweeps `updated_at < clock() - retentionMs`. MUST exceed the full-refill
+   * horizon of EVERY limiter sharing the table (see
+   * {@link DEFAULT_RATELIMIT_SWEEP_RETENTION_MS}). Defaults to one hour.
+   */
+  readonly retentionMs?: number;
+
+  /** How often the sweep fires, in ms. Defaults to {@link DEFAULT_RATELIMIT_SWEEP_INTERVAL_MS}. */
+  readonly intervalMs?: number;
+
+  /** Epoch-ms clock, injectable for deterministic tests. Defaults to `Date.now`. */
+  readonly clock?: Clock;
+
+  /**
+   * Where a sweep's rejection goes. A `sweep` that throws (a transient DB fault)
+   * must not become an unhandled rejection or kill the cadence — it is caught and
+   * routed here, then retried on the next tick. Absent → the fault is swallowed
+   * and retried silently.
+   */
+  readonly onError?: (error: unknown) => void;
+
+  /** The timer seam, injectable so tests drive the cadence with no real waiting. */
+  readonly setInterval?: (callback: () => void, ms: number) => unknown;
+
+  /** Clears a handle from {@link RateLimitSweepOptions.setInterval}. */
+  readonly clearInterval?: (handle: unknown) => void;
+}
+
+/** A running sweep. {@link RateLimitSweepHandle.stop} tears down its timer. */
+export interface RateLimitSweepHandle {
+  stop(): void;
+}
+
+/**
+ * Drive a durable {@link SqlRateLimitStore}'s `sweep` on a cadence, safely.
+ *
+ * Mirrors `@lesto/queue`'s `RetentionScheduler.start` — a no-overlap guard so a
+ * slow sweep never stacks a second concurrent delete onto one connection, coded
+ * error routing, and an injectable timer seam — but adds the one thing a
+ * framework-managed default needs: it **`unref`s the timer** (when the runtime's
+ * timer supports it) so a running sweep NEVER keeps the process alive or leaks
+ * across a test (the repo's force-exit-timer trap). Returns a handle whose `stop`
+ * clears the timer for a graceful drain.
+ *
+ * Each tick sweeps `updated_at < clock() - retentionMs`. Choosing `retentionMs`
+ * is a SAFETY decision on a shared table — read
+ * {@link DEFAULT_RATELIMIT_SWEEP_RETENTION_MS}.
+ *
+ *   const sweep = startRateLimitSweep(sqlRateLimitStore(db), { retentionMs: 3_600_000 });
+ *   // on shutdown: sweep.stop();
+ */
+export function startRateLimitSweep(
+  store: Pick<SqlRateLimitStore, "sweep">,
+  options: RateLimitSweepOptions = {},
+): RateLimitSweepHandle {
+  const intervalMs = options.intervalMs ?? DEFAULT_RATELIMIT_SWEEP_INTERVAL_MS;
+  const retentionMs = options.retentionMs ?? DEFAULT_RATELIMIT_SWEEP_RETENTION_MS;
+  const clock = options.clock ?? (() => Date.now());
+  const onError = options.onError;
+  const setTimer = options.setInterval ?? ((callback, ms) => setInterval(callback, ms));
+  const clearTimer = options.clearInterval ?? ((handle) => clearInterval(handle as never));
+
+  // A non-finite / non-positive interval never fires (or throws in the runtime),
+  // silently disabling the bound this exists to enforce; a negative retention would
+  // sweep FUTURE-stamped rows. Fail LOUD at the call, not silently at runtime — a
+  // plain Error, matching the store's maxBuckets construction guard (config
+  // validation is a programmer error, not a coded runtime refusal callers branch on).
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+    throw new Error(
+      `startRateLimitSweep intervalMs must be a positive, finite number, received ${intervalMs}.`,
+    );
+  }
+
+  if (!Number.isFinite(retentionMs) || retentionMs < 0) {
+    throw new Error(
+      `startRateLimitSweep retentionMs must be a non-negative, finite number, received ${retentionMs}.`,
+    );
+  }
+
+  // No-overlap: a slow sweep must not let the next cadence fire a second concurrent
+  // delete over the same connection — skip until the in-flight one settles.
+  let sweeping = false;
+
+  const handle = setTimer(() => {
+    if (sweeping) return;
+
+    sweeping = true;
+
+    void Promise.resolve(store.sweep(clock() - retentionMs))
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          // A throwing reporter must not kill the cadence; a rejection with no
+          // reporter is swallowed and retried next tick (the passive default).
+          if (onError !== undefined) onError(error);
+        },
+      )
+      .finally(() => {
+        sweeping = false;
+      });
+  }, intervalMs);
+
+  // Never pin the event loop open: an unref'd timer lets the process exit cleanly
+  // and keeps a test from hanging on a dangling interval. `unref` is Node/Bun's
+  // Timeout API and may be absent on other runtimes (or an injected fake) — guard it.
+  if (typeof (handle as { unref?: unknown }).unref === "function") {
+    (handle as { unref: () => void }).unref();
+  }
+
+  return {
+    stop: (): void => clearTimer(handle),
   };
 }

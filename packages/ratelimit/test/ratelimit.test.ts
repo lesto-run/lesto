@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   MemoryRateLimitStore,
@@ -7,6 +7,7 @@ import {
   RateLimiter,
   systemClock,
 } from "../src/index";
+import { RATELIMIT_DEAD_ONSATURATED_CODE } from "../src/limiter";
 
 import type { BucketState, RateLimitStore } from "../src/index";
 
@@ -397,7 +398,12 @@ describe("MemoryRateLimitStore hard cap (maxBuckets)", () => {
     // Each key is hit ONCE at cost 1: first-seen (full 5) → spend 1 → stored at 4,
     // BELOW the ceiling, so eviction-on-refill never fires. Without the hard cap the
     // Map would grow to 100; with it, it never exceeds maxBuckets.
-    const bounded = new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, maxBuckets: 4 });
+    const bounded = new MemoryRateLimitStore({
+      capacity: 5,
+      refillPerSecond: 1,
+      maxBuckets: 4,
+      clock,
+    });
     const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
 
     for (let i = 0; i < 100; i++) {
@@ -408,7 +414,12 @@ describe("MemoryRateLimitStore hard cap (maxBuckets)", () => {
   });
 
   it("evicts closest-to-full first, so a flood cannot push out a throttled bucket", async () => {
-    const bounded = new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, maxBuckets: 3 });
+    const bounded = new MemoryRateLimitStore({
+      capacity: 5,
+      refillPerSecond: 1,
+      maxBuckets: 3,
+      clock,
+    });
     const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
 
     // Drain the victim to empty — actively throttled, the farthest thing from full.
@@ -430,7 +441,12 @@ describe("MemoryRateLimitStore hard cap (maxBuckets)", () => {
   });
 
   it("lazily sweeps buckets that refilled to full while idle, in bulk, on overflow", async () => {
-    const bounded = new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, maxBuckets: 3 });
+    const bounded = new MemoryRateLimitStore({
+      capacity: 5,
+      refillPerSecond: 1,
+      maxBuckets: 3,
+      clock,
+    });
     const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
 
     // Three keys each drained to 4 and then left idle — persisted, below the ceiling,
@@ -472,7 +488,12 @@ describe("MemoryRateLimitStore hard cap (maxBuckets)", () => {
   it("breaks a closest-to-full tie toward the LATER-inserted key, protecting the earlier target", async () => {
     // Two buckets end up equally full; the eviction must drop the one inserted
     // LATER (a flood newcomer), never the earlier one (a target throttled first).
-    const bounded = new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, maxBuckets: 2 });
+    const bounded = new MemoryRateLimitStore({
+      capacity: 5,
+      refillPerSecond: 1,
+      maxBuckets: 2,
+      clock,
+    });
     const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
 
     // Insertion order a, b, c with the clock frozen (no refill), so fullness ==
@@ -514,6 +535,7 @@ describe("MemoryRateLimitStore saturation signal", () => {
       capacity: 5,
       refillPerSecond: 1,
       maxBuckets: 3,
+      clock,
       onSaturated: () => {
         calls += 1;
       },
@@ -536,6 +558,7 @@ describe("MemoryRateLimitStore saturation signal", () => {
       capacity: 5,
       refillPerSecond: 1,
       maxBuckets: 3,
+      clock,
       onSaturated: () => {
         calls += 1;
       },
@@ -556,7 +579,12 @@ describe("MemoryRateLimitStore saturation signal", () => {
   it("warns once by DEFAULT (no hook injected), carrying the stable code", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      const bounded = new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, maxBuckets: 2 });
+      const bounded = new MemoryRateLimitStore({
+        capacity: 5,
+        refillPerSecond: 1,
+        maxBuckets: 2,
+        clock,
+      });
       const limiter = new RateLimiter({ store: bounded, capacity: 5, refillPerSecond: 1, clock });
 
       for (let i = 0; i < 5; i++) await limiter.check(`ip:${i}`); // 3 evictions
@@ -641,7 +669,7 @@ describe("RateLimiter store-refill pairing", () => {
     expect(
       () =>
         new RateLimiter({
-          store: new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1 }),
+          store: new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, clock }),
           capacity: 5,
           refillPerSecond: 1,
           clock,
@@ -659,5 +687,152 @@ describe("RateLimiter store-refill pairing", () => {
           clock,
         }),
     ).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MemoryRateLimitStore clock contract (enforced) — L-2dc55e6c
+//
+// The overflow sweep ages every OTHER bucket to decide which have refilled. It
+// used to age them against the just-written `next.updatedAt`, trusting it as the
+// reference "now" — so a single write with a FUTURE timestamp (attacker-derived,
+// or a second limiter under a faster clock) read every throttled bucket as fully
+// refilled and mass-evicted live throttle state. The fix ages against the store's
+// OWN injected clock (never the written timestamp) AND — for a refill-aware store
+// shared by a second limiter under a different clock — refuses the mismatch LOUD.
+// ---------------------------------------------------------------------------
+
+describe("MemoryRateLimitStore clock contract (enforced)", () => {
+  it("ages the overflow sweep against its own clock, not a written future updatedAt", async () => {
+    // Three throttled buckets (tokens 0), then a 4th write whose updatedAt is far in
+    // the FUTURE — the direct-caller / attacker-derived case. The store's frozen clock
+    // is the reference now, so the victims age against ~0 elapsed and survive; only the
+    // over-cap newcomer is shed. Under the old code the future stamp aged all three to
+    // full and mass-evicted them (size would collapse to 1), so these assertions go RED.
+    const bounded = new MemoryRateLimitStore({
+      capacity: 5,
+      refillPerSecond: 1,
+      maxBuckets: 3,
+      clock, // the module clock, frozen at `now`
+    });
+
+    await bounded.update("v1", () => ({ tokens: 0, updatedAt: now }));
+    await bounded.update("v2", () => ({ tokens: 0, updatedAt: now }));
+    await bounded.update("v3", () => ({ tokens: 0, updatedAt: now }));
+    expect(bounded.size).toBe(3);
+
+    // A 4th write, far in the future, tips the store one over the cap.
+    await bounded.update("attacker", () => ({ tokens: 0, updatedAt: now + 1_000_000_000 }));
+
+    // Still bounded, and all three throttled victims are intact (old code: size 1).
+    expect(bounded.size).toBe(3);
+
+    for (const key of ["v1", "v2", "v3"]) {
+      let seen: BucketState | undefined;
+      await bounded.update(key, (current) => {
+        seen = current;
+        return current ?? { tokens: 0, updatedAt: now };
+      });
+      expect(seen).toEqual({ tokens: 0, updatedAt: now });
+    }
+  });
+
+  it("refuses a refill-aware store shared under a SECOND, different clock", () => {
+    // The module-level `clock` (captures `now`) binds the store and the first limiter.
+    const shared = new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, clock });
+
+    // First limiter uses the SAME clock as the store — they match, so this is fine.
+    expect(
+      () => new RateLimiter({ store: shared, capacity: 5, refillPerSecond: 1, clock }),
+    ).not.toThrow();
+
+    // A second limiter under a DIFFERENT clock function would let the overflow sweep
+    // age this store's buckets against the wrong `now` and mass-evict — refused LOUD.
+    const otherClock = (): number => now;
+    const construct = (): RateLimiter =>
+      new RateLimiter({ store: shared, capacity: 5, refillPerSecond: 1, clock: otherClock });
+
+    expect(construct).toThrow(RateLimitError);
+
+    let thrown: unknown;
+    try {
+      construct();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as RateLimitError).code).toBe("RATELIMIT_STORE_CLOCK_MISMATCH");
+  });
+
+  it("accepts a refill-aware store on the shared systemClock default (all-default match)", () => {
+    // Neither store nor limiter overrides the clock: both default to the SAME
+    // systemClock singleton, so the guard matches by reference and never trips —
+    // the common injected-store path stays ergonomic.
+    expect(
+      () =>
+        new RateLimiter({
+          store: new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1 }),
+          capacity: 5,
+          refillPerSecond: 1,
+        }),
+    ).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RateLimiter dead onSaturated (injected store) — L-ebb33e60
+//
+// onSaturated is routed ONLY into the store the limiter builds itself (the `??`
+// below short-circuits the auto-build when a store is injected), so passing BOTH
+// an injected store AND onSaturated is dead config — the hook silently never fires.
+// The adjacent capacity/refill drift THROWS a coded error; this is a lower-severity
+// observability footgun (the injected store still carries its OWN saturation signal),
+// so it warns LOUDLY with a stable code rather than crashing construction — but it is
+// no longer SILENT, which is the inconsistency this closes.
+// ---------------------------------------------------------------------------
+
+describe("RateLimiter dead onSaturated (injected store)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("warns with the coded signal when onSaturated is passed alongside an injected store", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const onSaturated = vi.fn();
+
+    const limiter = new RateLimiter({
+      store: new MemoryRateLimitStore({ capacity: 5, refillPerSecond: 1, clock }),
+      capacity: 5,
+      refillPerSecond: 1,
+      clock,
+      onSaturated,
+    });
+    expect(limiter).toBeDefined();
+
+    // Loud, not silent: exactly one warn at construction, carrying the stable code
+    // (logs branch on the code, never the prose).
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(RATELIMIT_DEAD_ONSATURATED_CODE);
+
+    // And the dead hook is NOT smuggled into the injected store — warning is the whole
+    // remedy; the limiter never wires a limiter-level onSaturated into an injected store.
+    expect(onSaturated).not.toHaveBeenCalled();
+  });
+
+  it("does NOT warn when onSaturated is passed with NO store injected (the live auto-build path)", () => {
+    // The path that DOES route onSaturated (into the store the limiter builds). Nothing
+    // is dead here, so the dead-config warn must stay silent — pins that the guard keys
+    // on an injected store, not merely on onSaturated being set.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const limiter = new RateLimiter({
+      capacity: 5,
+      refillPerSecond: 1,
+      clock,
+      onSaturated: () => undefined,
+    });
+    expect(limiter).toBeDefined();
+
+    expect(warn).not.toHaveBeenCalled();
   });
 });

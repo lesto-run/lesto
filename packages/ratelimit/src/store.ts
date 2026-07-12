@@ -1,6 +1,7 @@
 import { refilledTokens } from "./refill";
+import { systemClock } from "./time";
 
-import type { BucketState, RateLimitStore } from "./types";
+import type { BucketState, Clock, RateLimitStore } from "./types";
 
 /**
  * The default hard ceiling on how many buckets the store retains at once.
@@ -50,6 +51,18 @@ export interface MemoryRateLimitStoreOptions {
 
   /** The hard ceiling on retained buckets — see {@link DEFAULT_MAX_BUCKETS}. */
   readonly maxBuckets?: number;
+
+  /**
+   * The clock the overflow eviction ages *every other* bucket against to decide
+   * which have refilled to full — see {@link MemoryRateLimitStore.clock} and the
+   * `update` clock contract. Defaults to the real system clock. The paired
+   * {@link RateLimiter} injects *its own* clock here so the store ages buckets
+   * against the exact time source that stamped their `updatedAt`; a caller
+   * driving the store directly should do the same. It is a *reference* clock for
+   * aging only — the store never stamps `updatedAt` itself (the caller's `mutate`
+   * owns that).
+   */
+  readonly clock?: Clock;
 
   /**
    * Fired ONCE, the first time the hard cap evicts an actively-throttled bucket
@@ -117,18 +130,23 @@ export interface MemoryRateLimitStoreOptions {
  *
  * ## The store↔limiter pairing
  *
- * `capacity` and `refillPerSecond` describe the SAME token bucket the paired
- * {@link RateLimiter} spends against; they MUST equal the limiter's, or eviction
- * misfires silently (a store ceiling above the limiter's never evicts — the leak
- * returns; below it evicts actively-throttled buckets — a bypass). The limiter
- * owns that pairing: it builds this store at its own `capacity`/`refillPerSecond`
- * when none is injected, and refuses an injected one whose values drift (see the
- * RateLimiter ctor). Both fields are `public readonly` for that guard to read.
- * Left unset, the store simply skips the mechanism that needs them: no `capacity`
+ * `capacity`, `refillPerSecond`, AND `clock` describe the SAME token bucket the
+ * paired {@link RateLimiter} spends against; the first two MUST equal the
+ * limiter's, or eviction misfires silently (a store ceiling above the limiter's
+ * never evicts — the leak returns; below it evicts actively-throttled buckets — a
+ * bypass), and the `clock` MUST be the same time source that stamps each bucket's
+ * `updatedAt`, or the overflow sweep ages buckets against the wrong "now" and can
+ * mass-evict live throttle state (see the `update` clock contract). The limiter
+ * owns all three: it builds this store at its own `capacity`/`refillPerSecond`
+ * and threads in its own `clock` when none is injected, and refuses an injected
+ * one whose `capacity`/`refillPerSecond` drift OR — when refill-aware — whose
+ * `clock` differs from its own (see the RateLimiter ctor). All three are
+ * `public readonly` for those guards to read. Left unset, `capacity`/
+ * `refillPerSecond` simply skip the mechanism that needs them: no `capacity`
  * disables eviction-on-refill; no `refillPerSecond` disables the lazy sweep and
  * makes the hard cap rank by stored tokens (a coarser but still-safe proxy — a
  * drained bucket stores fewer tokens than a fresh one). The hard cap itself is
- * always on.
+ * always on, and the `clock` defaults to the real system clock.
  *
  * ## Observability
  *
@@ -172,6 +190,17 @@ export class MemoryRateLimitStore implements RateLimitStore {
    */
   readonly maxBuckets: number;
 
+  /**
+   * The reference clock the overflow eviction ages every *other* bucket against
+   * (see the `update` clock contract). `public` so the paired {@link RateLimiter}
+   * can enforce — for a refill-aware store — that it equals its own clock, the
+   * one that stamps every `updatedAt`; ages against a *different* time source and
+   * the sweep reads live throttle state as fully refilled and evicts it. Defaults
+   * to {@link systemClock}. NOT used to stamp `updatedAt` — the caller's `mutate`
+   * owns that; this only decides how full an *already-stored* bucket has grown.
+   */
+  readonly clock: Clock;
+
   /** The signal fired once on first live-bucket eviction; see the options field. */
   private readonly onSaturated: () => void;
 
@@ -184,6 +213,7 @@ export class MemoryRateLimitStore implements RateLimitStore {
   constructor(options: MemoryRateLimitStoreOptions = {}) {
     this.capacity = options.capacity;
     this.refillPerSecond = options.refillPerSecond;
+    this.clock = options.clock ?? systemClock;
     this.onSaturated = options.onSaturated ?? warnStoreSaturated;
 
     const maxBuckets = options.maxBuckets ?? DEFAULT_MAX_BUCKETS;
@@ -227,17 +257,27 @@ export class MemoryRateLimitStore implements RateLimitStore {
   /**
    * Atomically read-modify-write one bucket, then enforce the bounds.
    *
-   * ⚠️ **Clock contract.** When a `capacity`/`refillPerSecond` are wired, the
-   * overflow eviction ages *every other* bucket against the just-written
-   * `next.updatedAt` (see below) — it is the reference "now". A `RateLimiter`
-   * satisfies this for free: it stamps every write with a single, real,
-   * monotonic `clock()`. A caller driving this store directly MUST do the same —
-   * a `next.updatedAt` set far in the *future* (attacker-derived, or a second
-   * limiter writing into a shared store under a different/faster clock) would
-   * make the sweep read every throttled bucket as fully refilled and evict them
-   * all, discarding live throttle state. Do not derive `updatedAt` from
-   * untrusted input, and do not share one store across limiters with different
-   * clocks. (Hardening this into an enforced contract is tracked separately.)
+   * **Clock contract (now enforced).** When `capacity`/`refillPerSecond` are
+   * wired, the overflow eviction ages *every other* bucket to decide which have
+   * refilled to full — and it ages them against {@link clock}, the store's OWN
+   * injected reference clock, NEVER against the just-written `next.updatedAt`.
+   * That is the fix for a real foot-gun: aging against the written timestamp let
+   * a single `next.updatedAt` set far in the *future* — attacker-derived from
+   * untrusted input, or written by a second limiter under a faster clock — become
+   * the reference "now" for the WHOLE sweep, reading every genuinely-throttled
+   * bucket as fully refilled and mass-evicting live throttle state. Anchoring the
+   * sweep to `this.clock()` closes it: a future `updatedAt` on one bucket now only
+   * makes *that* bucket look un-refilled (elapsed clamps at 0 → the farthest from
+   * full → the LAST evicted), and cannot age its neighbours out.
+   *
+   * This introduces no new clock to drift from the limiter's: the paired
+   * {@link RateLimiter} injects its OWN clock as {@link clock} (so the store ages
+   * against the exact source that stamped every `updatedAt`), and for a
+   * refill-aware injected store the limiter REFUSES a `clock` that is not its own
+   * — so a store shared across limiters with different clocks (the second
+   * foot-gun) is a loud construction error, not a silent mass-evict. A caller
+   * driving the store directly with no injected clock ages against the real
+   * system clock, which cannot be pushed into the future by a written timestamp.
    */
   async update(
     key: string,
@@ -260,12 +300,13 @@ export class MemoryRateLimitStore implements RateLimitStore {
 
     this.buckets.set(key, next);
 
-    // Enforce the hard cap. `next.updatedAt` is the limiter's own "now" (it stamps
-    // every write with the current clock), so we reuse it as the reference time for
-    // aging every *other* bucket — no separate clock to inject, and no way for a
-    // store clock to drift from the limiter's.
+    // Enforce the hard cap. Age every *other* bucket against `this.clock()` — the
+    // store's own reference clock, which the paired limiter guarantees is the same
+    // source that stamped every `updatedAt` — NOT against the just-written
+    // `next.updatedAt`, which a caller (or a mismatched second limiter) could set
+    // in the future and thereby mass-evict live throttle state (see the contract).
     if (this.buckets.size > this.maxBuckets) {
-      this.evictToBound(next.updatedAt);
+      this.evictToBound(this.clock());
     }
 
     return next;

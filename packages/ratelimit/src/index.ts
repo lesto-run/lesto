@@ -25,8 +25,20 @@ export type { RateLimitOptions } from "./middleware";
 export { MemoryRateLimitStore, RATELIMIT_STORE_SATURATED_CODE } from "./store";
 export type { MemoryRateLimitStoreOptions } from "./store";
 
-export { installRateLimitSchema, isUniqueViolation, sqlRateLimitStore } from "./sql-store";
-export type { Dialect, SqlRateLimitStore } from "./sql-store";
+export {
+  DEFAULT_RATELIMIT_SWEEP_INTERVAL_MS,
+  DEFAULT_RATELIMIT_SWEEP_RETENTION_MS,
+  installRateLimitSchema,
+  isUniqueViolation,
+  sqlRateLimitStore,
+  startRateLimitSweep,
+} from "./sql-store";
+export type {
+  Dialect,
+  RateLimitSweepHandle,
+  RateLimitSweepOptions,
+  SqlRateLimitStore,
+} from "./sql-store";
 
 export { RateLimitError } from "./errors";
 export type { RateLimitErrorCode } from "./errors";

@@ -16,7 +16,7 @@
 import { currentContext } from "@lesto/web";
 import type { LestoRequest, Middleware } from "@lesto/web";
 
-import { RateLimiter } from "./limiter";
+import { RATELIMIT_DEAD_ONSATURATED_CODE, RateLimiter } from "./limiter";
 
 const TOO_MANY_REQUESTS = 429;
 const MS_PER_SECOND = 1000;
@@ -111,8 +111,11 @@ export interface RateLimitOptions {
    * {@link MemoryRateLimitStoreOptions.onSaturated}). Distinct from
    * {@link onDenied}, which fires on every ordinary throttle: this fires only when
    * the store's *memory* bound engages — an attack signal, not a routine 429.
-   * Ignored when a pre-built {@link limiter} is supplied (it owns its store).
-   * Defaults, via the store, to a `console.warn` with a stable code.
+   * Routed ONLY into the store that auto-built limiter creates: when a pre-built
+   * {@link limiter} is supplied it owns its own store, so passing both is dead config
+   * and WARNS once at build time (coded {@link RATELIMIT_DEAD_ONSATURATED_CODE}) rather
+   * than dropping it silently. Defaults, via the store, to a `console.warn` with a
+   * stable code.
    */
   readonly onSaturated?: () => void;
 }
@@ -129,6 +132,24 @@ function warnUnknownClient(): void {
       `bucket. This breaks per-client limiting. Enable trust-proxy on the node server, have ` +
       `the transport set context.ip, or pass a custom keyFor that pulls the client identity ` +
       `from the request.`,
+  );
+}
+
+/**
+ * The dead-`onSaturated` warning for {@link rateLimit}: `onSaturated` was passed
+ * alongside an injected `limiter`, but it is routed only into the store the
+ * middleware's *own* auto-built limiter creates — an injected limiter owns its own
+ * store and saturation signal, so the option is inert. One `console.warn` carrying the
+ * stable {@link RATELIMIT_DEAD_ONSATURATED_CODE}, fired once when the middleware is
+ * built; mirrors {@link warnUnknownClient} and the RateLimiter's own dead-config warn.
+ */
+function warnDeadOnSaturated(): void {
+  console.warn(
+    `[${RATELIMIT_DEAD_ONSATURATED_CODE}] onSaturated was passed to rateLimit() alongside an injected ` +
+      `limiter, but onSaturated is routed only into the store the middleware's auto-built limiter ` +
+      `creates — an injected limiter owns its own store and saturation signal, so this hook is dead. ` +
+      `Set onSaturated on the injected limiter's store instead, or omit the limiter to let rateLimit() ` +
+      `build one.`,
   );
 }
 
@@ -188,6 +209,16 @@ function defaultKeyFor(onUnknownClient: () => void): (request: LestoRequest) => 
  * bucket is meaningless if it resets per request.
  */
 export function rateLimit(options: RateLimitOptions): Middleware {
+  // Dead-config guard: onSaturated is routed only into the store the middleware's own
+  // auto-built limiter creates (the `??` below skips that build when a limiter is
+  // injected), so passing BOTH an injected limiter AND onSaturated silently drops the
+  // hook. Warn LOUDLY (coded, once per middleware) — the injected limiter still carries
+  // its own saturation signal, so this is an observability footgun, not the correctness
+  // hazard the RateLimiter ctor's capacity/refill drift throws on.
+  if (options.limiter !== undefined && options.onSaturated !== undefined) {
+    warnDeadOnSaturated();
+  }
+
   // Default to an in-process memory store: correct for a single node and for
   // tests. A fleet that must share limits injects a `limiter` over a SQL/Redis
   // store. Either way the limiter is built once, so its buckets outlive a single

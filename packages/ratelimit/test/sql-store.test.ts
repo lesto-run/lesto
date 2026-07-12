@@ -9,15 +9,18 @@
  * gives real SQLite — so a Map backing it is an honest stand-in.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  DEFAULT_RATELIMIT_SWEEP_INTERVAL_MS,
+  DEFAULT_RATELIMIT_SWEEP_RETENTION_MS,
   installRateLimitSchema,
   isUniqueViolation,
   MemoryRateLimitStore,
   RateLimiter,
   RateLimitError,
   sqlRateLimitStore,
+  startRateLimitSweep,
 } from "../src/index";
 import type { BucketState, Dialect, SqlDatabase, SqlStatement } from "../src/index";
 
@@ -376,6 +379,265 @@ describe("RateLimiter over sqlRateLimitStore", () => {
       const a = await sql.check("user");
       const b = await memory.check("user");
       expect(a).toEqual(b);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// startRateLimitSweep — the process-safe periodic sweep driver (L-f8e7d11f)
+//
+// A durable SQL store moves growth from RAM to `lesto_rate_limits` ROWS, and the
+// store starts no timer. This driver runs `sweep` on a cadence, unref'd so it never
+// pins the event loop, no-overlap so a slow delete never stacks, with a stop handle
+// for a graceful drain. Tests drive it through an injected timer seam — no waiting.
+// ---------------------------------------------------------------------------
+
+/** A hand-driven timer seam: `fire()` runs the captured callback; records teardown. */
+function timerHarness(handle: unknown = { id: 1 }): {
+  fire: () => void;
+  readonly cleared: boolean;
+  readonly handle: unknown;
+  setInterval: (callback: () => void, ms: number) => unknown;
+  clearInterval: (h: unknown) => void;
+} {
+  let callback: (() => void) | undefined;
+  let cleared = false;
+  const lastMs: number[] = [];
+
+  return {
+    fire: (): void => callback?.(),
+    get cleared(): boolean {
+      return cleared;
+    },
+    get handle(): unknown {
+      return handle;
+    },
+    setInterval: (cb, ms): unknown => {
+      callback = cb;
+      lastMs.push(ms);
+
+      return handle;
+    },
+    clearInterval: (h): void => {
+      if (h === handle) cleared = true;
+    },
+  };
+}
+
+/** Settle the sweep's `.then/.finally` microtasks so `sweeping` resets between ticks. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+}
+
+describe("startRateLimitSweep", () => {
+  it("sweeps each tick against clock() - retentionMs", async () => {
+    const swept: number[] = [];
+    const store = {
+      sweep: async (before: number): Promise<number> => {
+        swept.push(before);
+
+        return 1;
+      },
+    };
+    const timer = timerHarness();
+
+    startRateLimitSweep(store, {
+      retentionMs: 10_000,
+      intervalMs: 1000,
+      clock: () => 1_700_000_000_000,
+      setInterval: timer.setInterval,
+      clearInterval: timer.clearInterval,
+    });
+
+    timer.fire();
+    await settle();
+
+    // The safe threshold: rows untouched for at least the retention window.
+    expect(swept).toEqual([1_700_000_000_000 - 10_000]);
+  });
+
+  it("stop() clears the interval", () => {
+    const timer = timerHarness();
+
+    const sweep = startRateLimitSweep(
+      { sweep: async () => 0 },
+      { setInterval: timer.setInterval, clearInterval: timer.clearInterval },
+    );
+
+    expect(timer.cleared).toBe(false);
+    sweep.stop();
+    expect(timer.cleared).toBe(true);
+  });
+
+  it("does not overlap: a tick while a sweep is in flight is skipped", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const store = {
+      sweep: async (): Promise<number> => {
+        calls += 1;
+        await gate;
+
+        return 0;
+      },
+    };
+    const timer = timerHarness();
+
+    startRateLimitSweep(store, {
+      intervalMs: 1000,
+      setInterval: timer.setInterval,
+      clearInterval: timer.clearInterval,
+    });
+
+    timer.fire(); // starts the in-flight sweep (calls = 1)
+    timer.fire(); // still in flight → skipped
+    expect(calls).toBe(1);
+
+    release();
+    await settle();
+
+    timer.fire(); // the previous one settled → this one runs
+    expect(calls).toBe(2);
+  });
+
+  it("routes a sweep rejection to onError and keeps ticking", async () => {
+    const boom = new Error("db down");
+    let fail = true;
+    const store = {
+      sweep: async (): Promise<number> => {
+        if (fail) throw boom;
+
+        return 0;
+      },
+    };
+    const onError = vi.fn();
+    const timer = timerHarness();
+
+    startRateLimitSweep(store, {
+      intervalMs: 1000,
+      onError,
+      setInterval: timer.setInterval,
+      clearInterval: timer.clearInterval,
+    });
+
+    timer.fire();
+    await settle();
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(boom);
+
+    // A transient fault does not wedge the cadence: the next tick runs.
+    fail = false;
+    timer.fire();
+    await settle();
+
+    expect(onError).toHaveBeenCalledTimes(1); // no new error
+  });
+
+  it("swallows a sweep rejection when no onError is wired", async () => {
+    const store = {
+      sweep: async (): Promise<number> => {
+        throw new Error("ignored");
+      },
+    };
+    const timer = timerHarness();
+
+    startRateLimitSweep(store, {
+      intervalMs: 1000,
+      setInterval: timer.setInterval,
+      clearInterval: timer.clearInterval,
+    });
+
+    // No unhandled rejection escapes: the catch runs with onError undefined.
+    expect(() => timer.fire()).not.toThrow();
+    await settle();
+  });
+
+  it("unrefs a timer that supports it, so it never pins the event loop", () => {
+    const unref = vi.fn();
+    const withUnref = { id: 2, unref };
+    const timer = timerHarness(withUnref);
+
+    startRateLimitSweep(
+      { sweep: async () => 0 },
+      { setInterval: timer.setInterval, clearInterval: timer.clearInterval },
+    );
+
+    expect(unref).toHaveBeenCalledTimes(1);
+  });
+
+  it("tolerates a timer with no unref (a non-Node runtime / fake)", () => {
+    const timer = timerHarness(42); // a bare numeric handle, no unref method
+
+    expect(() =>
+      startRateLimitSweep(
+        { sweep: async () => 0 },
+        { setInterval: timer.setInterval, clearInterval: timer.clearInterval },
+      ),
+    ).not.toThrow();
+  });
+
+  it("uses the system clock and default windows when unconfigured, and really unrefs + clears", async () => {
+    // No injected clock/timers: exercises the Date.now default clock (fired below),
+    // the default interval/retention, the REAL setInterval (unref'd) and clearInterval.
+    const swept: number[] = [];
+    const store = {
+      sweep: async (before: number): Promise<number> => {
+        swept.push(before);
+
+        return 0;
+      },
+    };
+    const before = Date.now();
+
+    // Inject only setInterval so we can fire the tick and observe the default clock,
+    // while leaving retention/interval defaulted.
+    let tick: (() => void) | undefined;
+    const sweep = startRateLimitSweep(store, {
+      setInterval: (cb) => {
+        tick = cb;
+
+        return { unref: () => undefined };
+      },
+    });
+
+    tick?.();
+    await settle();
+
+    const after = Date.now();
+    expect(swept).toHaveLength(1);
+    // The default retention is one hour, and the default clock is the wall clock.
+    expect(swept[0]).toBeGreaterThanOrEqual(before - DEFAULT_RATELIMIT_SWEEP_RETENTION_MS);
+    expect(swept[0]).toBeLessThanOrEqual(after - DEFAULT_RATELIMIT_SWEEP_RETENTION_MS);
+
+    sweep.stop(); // default clearInterval path
+  });
+
+  it("builds and tears down over the real global timers with default options", () => {
+    // Covers the default setInterval + clearInterval arrows (real timers). The 60s
+    // cadence never fires within the test; stop() clears it immediately (and it is
+    // unref'd regardless, so it could never keep the process alive).
+    const sweep = startRateLimitSweep({ sweep: async () => 0 });
+
+    expect(DEFAULT_RATELIMIT_SWEEP_INTERVAL_MS).toBe(60_000);
+    expect(() => sweep.stop()).not.toThrow();
+  });
+
+  it("rejects a non-positive or non-finite intervalMs, loudly, at the call", () => {
+    for (const intervalMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => startRateLimitSweep({ sweep: async () => 0 }, { intervalMs })).toThrow(
+        /intervalMs/,
+      );
+    }
+  });
+
+  it("rejects a negative or non-finite retentionMs, loudly, at the call", () => {
+    for (const retentionMs of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => startRateLimitSweep({ sweep: async () => 0 }, { retentionMs })).toThrow(
+        /retentionMs/,
+      );
     }
   });
 });

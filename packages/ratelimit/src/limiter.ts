@@ -5,6 +5,19 @@ import { systemClock } from "./time";
 
 import type { BucketState, Clock, RateLimitResult, RateLimitStore } from "./types";
 
+/**
+ * The stable code carried by the dead-`onSaturated` warning — a coded *log* signal,
+ * not a thrown `RateLimitError`. Injecting a `store` (RateLimiter) or a `limiter`
+ * (`rateLimit`) makes an `onSaturated` passed at that level inert: the hook is only
+ * ever routed into the store the limiter builds *itself*, and an injected store/limiter
+ * already carries its own saturation signal. That is a lower-severity observability
+ * footgun than the capacity/refill drift the ctor THROWS on (the limiter still works;
+ * only a custom sink is dropped), so it warns loudly rather than crashing construction.
+ * Logs and ops tooling branch on this code; mirrors `RATELIMIT_UNKNOWN_CLIENT_CODE` and
+ * `RATELIMIT_STORE_SATURATED_CODE`.
+ */
+export const RATELIMIT_DEAD_ONSATURATED_CODE = "RATELIMIT_DEAD_ONSATURATED";
+
 export interface RateLimiterOptions {
   /**
    * Where buckets live between checks. OPTIONAL: omit it and the limiter builds
@@ -13,8 +26,10 @@ export interface RateLimiterOptions {
    * limiter's — the common path is drift-proof by construction. Inject one to
    * share a store across limiters or to back the limiter with SQL/Redis. An
    * injected {@link MemoryRateLimitStore} whose `capacity` or `refillPerSecond`
-   * is set MUST equal the values below; the limiter refuses a mismatch LOUDLY at
-   * construction rather than let eviction misfire in production (see the ctor).
+   * is set MUST equal the values below, and — when it is refill-aware (both set) —
+   * its `clock` MUST be the same function as {@link clock}; the limiter refuses a
+   * mismatch on any of the three LOUDLY at construction rather than let eviction
+   * misfire in production (see the ctor).
    */
   readonly store?: RateLimitStore;
 
@@ -28,8 +43,11 @@ export interface RateLimiterOptions {
    * Routed into the auto-constructed {@link MemoryRateLimitStore} as its
    * `onSaturated` signal — fired once when the store's hard cap starts shedding
    * throttled buckets under a flood (see {@link MemoryRateLimitStoreOptions.onSaturated}).
-   * Ignored when a `store` is injected (that store carries its own). Defaults, via
-   * the store, to a `console.warn` with a stable code.
+   * Routed ONLY into that auto-built store: when a `store` is injected the limiter has
+   * no store to thread it into (that store carries its own), so passing both is dead
+   * config and WARNS once at construction (coded {@link RATELIMIT_DEAD_ONSATURATED_CODE})
+   * rather than dropping it silently. Defaults, via the store, to a `console.warn` with
+   * a stable code.
    *
    * Synchronous by design (unlike the awaited, request-context `onDenied`): it
    * fires deep inside the store's atomic read-modify-write, which `check` does not
@@ -39,11 +57,35 @@ export interface RateLimiterOptions {
    */
   readonly onSaturated?: () => void;
 
-  /** Injected for determinism; defaults to the system clock. */
+  /**
+   * Injected for determinism; defaults to the system clock. Threaded into the
+   * auto-built {@link MemoryRateLimitStore} as its eviction reference clock, so the
+   * store ages buckets against the exact source that stamps every `updatedAt`. An
+   * injected refill-aware store MUST carry this same clock (see {@link store}).
+   */
   readonly clock?: Clock;
 }
 
 const MS_PER_SECOND = 1000;
+
+/**
+ * The dead-`onSaturated` warning for {@link RateLimiter}: `onSaturated` was passed
+ * alongside an injected `store`, but the limiter threads `onSaturated` only into the
+ * store it builds *itself* — an injected store owns its own saturation signal, so the
+ * limiter-level hook is inert. One `console.warn` carrying the stable
+ * {@link RATELIMIT_DEAD_ONSATURATED_CODE}; fired once, at construction (the ctor runs
+ * once per limiter), so it is never a per-request flood. Mirrors the middleware's
+ * `warnUnknownClient` and the store's `warnStoreSaturated` coded signals.
+ */
+function warnDeadOnSaturated(): void {
+  console.warn(
+    `[${RATELIMIT_DEAD_ONSATURATED_CODE}] onSaturated was passed to the RateLimiter alongside an ` +
+      `injected store, but onSaturated is routed only into the store the limiter builds itself — an ` +
+      `injected store owns its own saturation signal, so this hook is dead. Set onSaturated on the ` +
+      `injected MemoryRateLimitStore instead (a SQL/Redis store has no in-memory cap to saturate), or ` +
+      `omit the store to let the limiter build one at its own capacity/refillPerSecond.`,
+  );
+}
 
 /**
  * A token-bucket rate limiter.
@@ -67,6 +109,18 @@ export class RateLimiter {
     this.capacity = options.capacity;
     this.refillPerSecond = options.refillPerSecond;
     this.clock = options.clock ?? systemClock;
+
+    // Dead-config guard: `onSaturated` reaches only the store this limiter builds
+    // itself (the `??` below skips that build when a store is injected), so passing
+    // BOTH an injected store AND onSaturated silently drops the hook. Unlike the
+    // capacity/refill drift below — a silent CORRECTNESS hazard that must THROW —
+    // this is an observability footgun: the limiter still throttles correctly and the
+    // injected store keeps its own saturation signal, so we warn LOUDLY (coded, once
+    // per limiter) rather than crash construction. What we do NOT do is silently
+    // reroute the hook into the injected store — that store owns its own.
+    if (options.store !== undefined && options.onSaturated !== undefined) {
+      warnDeadOnSaturated();
+    }
 
     // The limiter OWNS the store↔limiter capacity pairing, because a drift breaks
     // self-eviction SILENTLY — the one thing eviction was built never to do:
@@ -108,6 +162,33 @@ export class RateLimiter {
           },
         );
       }
+
+      // The THIRD paired dimension (L-2dc55e6c): a refill-aware store ages every
+      // OTHER bucket, on overflow, against ITS reference clock — which must be the
+      // same clock that stamps each bucket's `updatedAt`, i.e. ours. Refuse a store
+      // whose clock is a *different* function from the limiter's: that is exactly
+      // the "one store shared by two limiters under different clocks" foot-gun, in
+      // which the sweep would age one limiter's buckets against the other's `now`
+      // and mass-evict live throttle state. Enforced ONLY when the store is
+      // refill-aware (both capacity and rate set) — the only configuration in which
+      // the clock is consulted at all; an uncapped or rate-less store ranks by
+      // stored tokens and never reads the clock, so nothing can drift. The default
+      // clock is a shared singleton (`systemClock`), so the all-default case matches
+      // by reference and never trips this.
+      if (
+        options.store.capacity !== undefined &&
+        options.store.refillPerSecond !== undefined &&
+        options.store.clock !== this.clock
+      ) {
+        throw new RateLimitError(
+          "RATELIMIT_STORE_CLOCK_MISMATCH",
+          `The injected refill-aware MemoryRateLimitStore's clock must be the SAME function as the ` +
+            `RateLimiter's clock — the store ages buckets against its clock while the limiter stamps ` +
+            `updatedAt with its own, so two different clocks let the overflow sweep mass-evict live ` +
+            `throttle state. Pass the same clock to both, or omit the store to let the limiter build it.`,
+          { sameClock: false },
+        );
+      }
     }
 
     this.store =
@@ -115,6 +196,10 @@ export class RateLimiter {
       new MemoryRateLimitStore({
         capacity: this.capacity,
         refillPerSecond: this.refillPerSecond,
+        // Thread the limiter's OWN clock into the store it builds, so the store ages
+        // buckets against the exact source that stamps every `updatedAt` — no second
+        // clock to drift; the common path is drift-proof by construction.
+        clock: this.clock,
         // Thread the saturation signal into the store the limiter owns — only when
         // given, so an unwired caller falls through to the store's own loud
         // `console.warn` default (conditional spread: `exactOptionalPropertyTypes`
