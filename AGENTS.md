@@ -28,17 +28,33 @@ here.
 - `docs/adr/` — architecture decisions. **Check an ADR's `Status` line before
   building on it** (Proposed ≠ shipped). `docs/plans/` — build plans.
 
-## Commands (the gate — CI runs exactly this)
+## Commands (the fast gate — a SUBSET of CI, not all of it)
 
-Bun 1.3.5 (pinned via `packageManager`) + Node ≥ 22. Then:
+Bun 1.3.5 (pinned via `packageManager`) + Node ≥ 22. The fast local gate is
+`bun run gate` — the four checks below; run it before every push:
 
 ```sh
 bun install
-bun run ws:typecheck            # strict tsc across every @lesto/* package
-bun run ws:lint                 # oxlint
-bun run ws:format:check         # oxfmt --check — the formatter owns whitespace
-bun scripts/coverage-gate.ts    # serial 100%-coverage gate
+bun run gate                    # the fast four, in order:
+bun run ws:typecheck            #   strict tsc across every @lesto/* package
+bun run ws:lint                 #   oxlint
+bun run ws:format:check         #   oxfmt --check — the formatter owns whitespace
+bun run ws:test:cov             #   serial 100%-coverage gate (scripts/coverage-gate.ts)
 ```
+
+**`bun run gate` is a SUBSET of CI — going green here is NOT going green in CI.**
+`.github/workflows/ci.yml` additionally runs, on every PR: the e2e-spec typecheck,
+the `test:types` type-regression suite, the `scripts` vitest suite +
+`assert-isolated-node-modules`, the content-package tests, the integration suite,
+the examples gallery, the docs-site test **and** build, `bundle-size`, and the
+`pack-boot`/`pack-import` published-shape smokes — plus **seven** browser
+(Playwright) jobs, **four** Postgres-service-container jobs, a Cloudflare
+`wrangler deploy --dry-run`, and the shell lint (`shellcheck`/`bash -n`).
+`bun run gate:full` reproduces every CI check that needs **no** browser, service
+container, or external tool (it needs Node ≥ 22); the browser/service/tool jobs
+stay CI-only by design. Passing `gate` but failing CI is exactly the 0.1.7-release
+near-miss `RELEASING.md` documents. **When you add a CI step, update `gate:full`
+and this list in the same change.**
 
 The coverage gate is **serial on purpose** — parallel `--filter` + v8 coverage
 oversubscribes the CPU and flakes coverage percentages. Never "optimize" it.

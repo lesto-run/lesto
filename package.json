@@ -15,6 +15,8 @@
     "ws:lint": "bun run --filter '@lesto/*' lint",
     "ws:format:check": "bun run --filter '@lesto/*' format:check",
     "ws:typecheck": "bun run --filter '@lesto/*' typecheck",
+    "gate": "bun run ws:typecheck && bun run ws:lint && bun run ws:format:check && bun run ws:test:cov",
+    "gate:full": "bun run gate && bun run lint && bun run test:types && bun run --cwd packages/e2e typecheck && bun scripts/assert-isolated-node-modules.mjs && bunx vitest run scripts/assert-isolated-node-modules.test.mjs packages/e2e/link-workspace.test.ts packages/e2e/dev-harness.test.ts scripts/publish.test.mjs scripts/new-package.test.mjs scripts/build-public.test.mjs scripts/preflight-versions.test.mjs scripts/gen-readmes.test.mjs && bun run --filter '@lesto/content-*' test && bun run --cwd packages/integration test && bun run examples:test && bun run --filter '@lesto/site' test && bun run --filter '@lesto/site' build && bun run bundle-size && bun run test:pack-boot && bun run test:pack-import",
     "test:types": "tsc -p type-tests/tsconfig.json",
     "test:pack-boot": "node scripts/pack-and-boot.mjs",
     "test:pack-import": "node scripts/pack-and-import.mjs",
@@ -26,12 +28,6 @@
     "release:changeset": "changeset publish"
   },
   "license": "MIT",
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.102.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^11.10.0",
-    "zod": "^4.0.0"
-  },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
     "@react-email/components": "^1.0.12",

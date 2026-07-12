@@ -59,15 +59,29 @@ scaffolds `packages/<name>/` in the correct shape (green out of the box), copyin
 
 ## Running the gate
 
-Run the full gate from the repository root before you open or update a PR. It is
-exactly what CI runs:
+Run the fast gate from the repository root before you open or update a PR —
+`bun run gate` is these four checks:
 
 ```sh
-bun run ws:typecheck       # strict tsc across every @lesto/* package
-bun run ws:lint            # oxlint
-bun run ws:format:check    # oxfmt --check (the formatter owns whitespace)
-bun scripts/coverage-gate.ts   # serial 100%-coverage gate
+bun run gate               # runs the four below, in order:
+bun run ws:typecheck       #   strict tsc across every @lesto/* package
+bun run ws:lint            #   oxlint
+bun run ws:format:check    #   oxfmt --check (the formatter owns whitespace)
+bun run ws:test:cov        #   serial 100%-coverage gate (scripts/coverage-gate.ts)
 ```
+
+**This fast gate is a subset of CI, not the whole of it.** `.github/workflows/ci.yml`
+runs ~9 more blocking checks on every PR — the `test:types` type-regression suite,
+the e2e-spec typecheck, the `scripts` vitest suite + the isolated-layout assertion,
+the content-package tests, the integration suite, the examples gallery, the
+docs-site test **and** build, `bundle-size`, and the `pack-boot`/`pack-import`
+published-shape smokes — plus seven browser (Playwright) jobs, four
+Postgres-service-container jobs, and a Cloudflare dry-run deploy that each need a
+browser, a service container, or an external tool. `bun run gate:full` reproduces
+every CI check that needs **none** of those (it needs Node ≥ 22); the
+browser/service/tool jobs stay CI-only. Passing `bun run gate` but failing CI is
+the 0.1.7-release near-miss `RELEASING.md` warns about — when you add a CI step,
+update `gate:full` and this list in the same change.
 
 The coverage gate runs each package's `test:cov` **serially** on purpose — Bun's
 `--filter` runs every package concurrently with no throttle, and v8 coverage
@@ -94,8 +108,8 @@ bun run typecheck && bun run lint && bun run format:check && bun run test:cov
   `type(scope): summary` (e.g. `feat(queue): …`, `fix(auth): …`,
   `docs(guide): …`, `chore(release): …`).
 - **Keep the subject one line.** Put detail in the body.
-- **Keep the gate green.** A PR that reds any of the four commands above will not
-  merge.
+- **Keep the gate green.** A PR that reds `bun run gate` — or any of the extra CI
+  checks listed above — will not merge.
 - **Wire estate** in the same PR when you change behavior or surface.
 - **Describe the change**: what it does, why, and how you verified it (which gate
   commands you ran). The PR template prompts for this.
