@@ -45,6 +45,7 @@ import { createApp } from "@lesto/kernel";
 
 import { buildTools, dispatch, isLiveReloadUpgradeAllowed, startMcpHttpServer } from "@lesto/mcp";
 import type { LestoMcpContext, McpAuditRecord } from "@lesto/mcp";
+import { isLestoError } from "@lesto/errors";
 
 import { createDevState } from "./dev-state";
 import { declaresIslandDevPeer, isMissingSelfModule, missingModuleSpecifier, run } from "./run";
@@ -1132,37 +1133,66 @@ const wireGenerateUi = async (): Promise<((prompt: string) => Promise<unknown>) 
   return (prompt) => generate.generateUi({ registry, prompt, complete });
 };
 
+// The CLI's central coded-error sink. Every command dispatch — the early
+// interceptors (`mcp`/`openapi`/`generate`/`add`, which bring their own deps and
+// run before the shared core) and the `run` core itself — throws a coded
+// `CliError` (a `LestoError`) for anything it refuses to do. Surface that as the
+// one-line `code: message` the codes were designed to produce, on stderr, and
+// exit 1 — never a raw stack trace. Print the code too: CLI stderr is first-class
+// (CONVENTIONS "Logs") and agents consuming it branch on codes (ADR 0035).
+// Recognize the base via the cross-copy brand (`isLestoError`), never
+// `instanceof` — a duplicate `@lesto/errors` install breaks class identity. A
+// non-coded throw is a genuine bug: rethrow it so it surfaces loudly with its
+// stack.
+function reportCoded(error: unknown): never {
+  if (isLestoError(error)) {
+    console.error(`${error.code}: ${error.message}`);
+
+    process.exit(1);
+  }
+
+  throw error;
+}
+
 // `mcp` and `openapi` live in their own command files (operability-dx #4/#5);
 // the bin dispatches them here, before the shared `run` core, because they bring
 // dependencies (`@lesto/mcp`, `@lesto/openapi`) the rest of the CLI does not. The
 // MCP protocol owns stdout (it is the transport), so its logs and audit trail go
 // to stderr.
 if (command === "mcp") {
-  // Resolve the opt-in `generate_ui` implementation before standing up the server, because
-  // `runMcp` needs to know at build time whether to advertise the tool or omit it.
-  const generateUi = await wireGenerateUi();
+  try {
+    // Resolve the opt-in `generate_ui` implementation before standing up the server, because
+    // `runMcp` needs to know at build time whether to advertise the tool or omit it.
+    const generateUi = await wireGenerateUi();
 
-  await runMcp(commandArgs, {
-    loadApp,
-    createApp,
-    startMcpServer,
-    audit: console.error,
-    log: console.error,
-    ...(generateUi === undefined ? {} : { generateUi }),
-  });
+    await runMcp(commandArgs, {
+      loadApp,
+      createApp,
+      startMcpServer,
+      audit: console.error,
+      log: console.error,
+      ...(generateUi === undefined ? {} : { generateUi }),
+    });
 
-  // The MCP server runs until its stdio transport closes; `runMcp` resolves then.
-  process.exit(0);
+    // The MCP server runs until its stdio transport closes; `runMcp` resolves then.
+    process.exit(0);
+  } catch (error) {
+    reportCoded(error);
+  }
 }
 
 if (command === "openapi") {
-  const exit = await runOpenApi(commandArgs, {
-    loadApp,
-    write: (path, contents) => writeFile(path, contents, "utf8"),
-    out: console.log,
-  });
+  try {
+    const exit = await runOpenApi(commandArgs, {
+      loadApp,
+      write: (path, contents) => writeFile(path, contents, "utf8"),
+      out: console.log,
+    });
 
-  process.exit(exit);
+    process.exit(exit);
+  } catch (error) {
+    reportCoded(error);
+  }
 }
 
 // `eval` (PREVIEW) runs the app's declared evals as a gate (ADR 0021's evals hook).
@@ -1223,7 +1253,10 @@ if (command === "eval") {
       process.exit(1);
     }
 
-    throw error;
+    // Any other coded error prints its `code: message` cleanly; a non-coded throw
+    // still surfaces with its stack. CLI_EVAL_FAILED's message-only gate output
+    // above is preserved untouched.
+    reportCoded(error);
   }
 }
 
@@ -1262,40 +1295,48 @@ if (command === "generate" || command === "g") {
   // content config), with a genuine pipeline failure surfaced to stderr. The UI
   // dialect is omitted on purpose: the artifacts stay useful without evaluating
   // `lesto.app.ts` (and its boot side effects) just to stamp a dialect line.
-  if (commandArgs[0] === "agents") {
-    const exit = await runGenerateAgents(commandArgs.slice(1), {
+  try {
+    if (commandArgs[0] === "agents") {
+      const exit = await runGenerateAgents(commandArgs.slice(1), {
+        ...generateIO,
+        readRoutes: readAgentRoutes,
+        readIslands: readAgentIslands,
+        readCollections: createCollectionsReader(readContentConfig, (error) =>
+          console.warn(`lesto: content collections unavailable — ${String(error)}`),
+        ),
+        summary: { framework: "lesto" },
+        out: console.log,
+      });
+
+      process.exit(exit);
+    }
+
+    const exit = await runGenerate(commandArgs, {
       ...generateIO,
-      readRoutes: readAgentRoutes,
-      readIslands: readAgentIslands,
-      readCollections: createCollectionsReader(readContentConfig, (error) =>
-        console.warn(`lesto: content collections unavailable — ${String(error)}`),
-      ),
-      summary: { framework: "lesto" },
+      now: Date.now,
       out: console.log,
     });
 
     process.exit(exit);
+  } catch (error) {
+    reportCoded(error);
   }
-
-  const exit = await runGenerate(commandArgs, {
-    ...generateIO,
-    now: Date.now,
-    out: console.log,
-  });
-
-  process.exit(exit);
 }
 
 // `add` wires a batteries-included integration (ADR 0039) — several files plus a bit of
 // composition, not one resource. It shares `generate`'s project-rooted filesystem seam
 // (`exists`/`read`/`write`), so it lives here next to `generate` and writes into the project.
 if (command === "add") {
-  const exit = await runAdd(commandArgs, {
-    ...generateIO,
-    out: console.log,
-  });
+  try {
+    const exit = await runAdd(commandArgs, {
+      ...generateIO,
+      out: console.log,
+    });
 
-  process.exit(exit);
+    process.exit(exit);
+  } catch (error) {
+    reportCoded(error);
+  }
 }
 
 // The live-reload socket is opened ONLY for `dev` — no other command needs it, and
@@ -1412,54 +1453,61 @@ const startDevMcp: CliDeps["startDevMcp"] =
       }
     : undefined;
 
-const code = await run(argv, {
-  loadApp,
-  serve,
-  buildContent,
-  persistEntries,
-  pruneEntries,
-  deleteEntry,
-  createEntry,
-  loadSites,
-  loadBuildHook,
-  cleanDir,
-  sink: nodeSink,
-  readAsset: nodeStaticReader(join(process.cwd(), DEV_ASSET_DIR)),
-  hasIslandsDir,
-  buildClientAssets,
-  resolvePublicEnvDefine,
-  cssEntryExists,
-  buildAppStyles,
-  watchIslands,
-  watchStyleSources,
-  watchRoutes,
-  reloadApp,
-  regenerateRoutes,
-  ...(liveReload === undefined ? {} : { liveReload }),
-  ...(aiOverlay === undefined ? {} : { aiOverlay }),
-  ...(islandDev === undefined ? {} : { islandDev }),
-  ...(devState === undefined ? {} : { devState }),
-  ...(startDevMcp === undefined ? {} : { startDevMcp }),
-  uploader: nodeUploader,
-  releaseStore,
-  now: Date.now,
-  cloudflare: wranglerDeployer,
-  checkHealth: httpHealthCheck,
-  // On a deploy's rolling restart, drain in-flight requests then exit cleanly. The
-  // same productized helper the long-lived examples dogfood: SIGTERM + SIGINT, a
-  // double-signal guard (a second Ctrl-C mid-drain is a no-op, never a re-entry —
-  // it is NOT a second escape hatch), and exit 0 on a clean drain / exit 1 + stderr
-  // on a teardown REJECTION (a socket close that threw, the dev MCP / trace flush
-  // that rejected — never an unhandled rejection). The escape hatch for a teardown
-  // that itself wedges (`dev`'s drain closes watchers/the loopback MCP server/a
-  // trace flush and CAN hang) is the force-exit deadline: `DEFAULT_FORCE_EXIT_TIMEOUT_MS`,
-  // the same default `serveWithGracefulShutdown` arms for the examples, so a
-  // genuinely stuck `lesto dev`/`lesto serve` force-exits on schedule instead of
-  // waiting on the platform's SIGKILL.
-  installShutdown: (drain) =>
-    onShutdownSignals(drain, { forceExitTimeoutMs: DEFAULT_FORCE_EXIT_TIMEOUT_MS }),
-  out: console.log,
-});
+let code: number;
+try {
+  code = await run(argv, {
+    loadApp,
+    serve,
+    buildContent,
+    persistEntries,
+    pruneEntries,
+    deleteEntry,
+    createEntry,
+    loadSites,
+    loadBuildHook,
+    cleanDir,
+    sink: nodeSink,
+    readAsset: nodeStaticReader(join(process.cwd(), DEV_ASSET_DIR)),
+    hasIslandsDir,
+    buildClientAssets,
+    resolvePublicEnvDefine,
+    cssEntryExists,
+    buildAppStyles,
+    watchIslands,
+    watchStyleSources,
+    watchRoutes,
+    reloadApp,
+    regenerateRoutes,
+    ...(liveReload === undefined ? {} : { liveReload }),
+    ...(aiOverlay === undefined ? {} : { aiOverlay }),
+    ...(islandDev === undefined ? {} : { islandDev }),
+    ...(devState === undefined ? {} : { devState }),
+    ...(startDevMcp === undefined ? {} : { startDevMcp }),
+    uploader: nodeUploader,
+    releaseStore,
+    now: Date.now,
+    cloudflare: wranglerDeployer,
+    checkHealth: httpHealthCheck,
+    // On a deploy's rolling restart, drain in-flight requests then exit cleanly. The
+    // same productized helper the long-lived examples dogfood: SIGTERM + SIGINT, a
+    // double-signal guard (a second Ctrl-C mid-drain is a no-op, never a re-entry —
+    // it is NOT a second escape hatch), and exit 0 on a clean drain / exit 1 + stderr
+    // on a teardown REJECTION (a socket close that threw, the dev MCP / trace flush
+    // that rejected — never an unhandled rejection). The escape hatch for a teardown
+    // that itself wedges (`dev`'s drain closes watchers/the loopback MCP server/a
+    // trace flush and CAN hang) is the force-exit deadline: `DEFAULT_FORCE_EXIT_TIMEOUT_MS`,
+    // the same default `serveWithGracefulShutdown` arms for the examples, so a
+    // genuinely stuck `lesto dev`/`lesto serve` force-exits on schedule instead of
+    // waiting on the platform's SIGKILL.
+    installShutdown: (drain) =>
+      onShutdownSignals(drain, { forceExitTimeoutMs: DEFAULT_FORCE_EXIT_TIMEOUT_MS }),
+    out: console.log,
+  });
+} catch (error) {
+  // Same central contract as the early-dispatch commands: a coded `CliError`
+  // prints `code: message` and exits 1; anything else rethrows with its stack.
+  reportCoded(error);
+}
 
 // Long-running commands keep the process alive on their own socket; everything
 // else has said all it has to say, so exit with the code the core returned.
