@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 
 import Database from "better-sqlite3";
 import { installSchema, Queue } from "@lesto/queue";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_TOLERANCE_MS,
@@ -19,7 +19,7 @@ import {
   Webhooks,
 } from "../src/index";
 
-import type { SqlDatabase } from "@lesto/queue";
+import type { JsonValue, SqlDatabase } from "@lesto/queue";
 import type {
   FetchLike,
   Resolver,
@@ -49,6 +49,7 @@ interface Call {
     headers: Record<string, string>;
     body: string;
     redirect?: "manual";
+    signal?: AbortSignal;
   };
 }
 
@@ -96,6 +97,42 @@ function rawPayload(id: number): string {
   return row.payload;
 }
 
+// A transport that models the real `fetch`'s abort contract: it settles ONLY when
+// the deadline signal handed to it aborts, rejecting with that signal's reason (or
+// a caller-supplied stand-in, to exercise a differently-NAMED reason). A stub that
+// IGNORED the signal would hang forever — the deadline lives inside the signal, so
+// honoring it is the only thing that ever lets this fetch reject.
+function deadlineFetch(reasonOverride?: unknown): FetchLike {
+  return (_url, init) =>
+    new Promise<WebhookResponse>((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(reasonOverride ?? init.signal?.reason), {
+        once: true,
+      });
+    });
+}
+
+// The queue records only `error.message`, so a code/detail assertion on a delivery
+// failure can't ride `runOnce`. Spy `queue.define` to capture the deliver handler
+// the ctor registers, so a test can invoke it directly and inspect the coded
+// WebhookError it throws. (`vi.spyOn` calls the original through, so the handler is
+// still registered on the queue as usual.)
+function deliverHandler(
+  fetch: FetchLike,
+  deliveryTimeoutMs: number,
+): ((payload: JsonValue) => void | Promise<void>) | undefined {
+  const defineSpy = vi.spyOn(queue, "define");
+
+  const hooks = new Webhooks({ queue, fetch, resolver: publicResolver, deliveryTimeoutMs });
+  expect(hooks).toBeInstanceOf(Webhooks); // the ctor is what registers the handler
+
+  const registered = defineSpy.mock.calls[0]?.[1];
+
+  // The ctor registers a 1-arg closure `(payload) => deliver(payload)`; `JobHandler`
+  // widens that to `(payload, context)`, but the runtime value genuinely ignores
+  // its context, so narrowing back to a payload-only call is a TRUE cast.
+  return registered as ((payload: JsonValue) => void | Promise<void>) | undefined;
+}
+
 beforeEach(() => {
   raw = new Database(":memory:");
   const db = raw as unknown as SqlDatabase;
@@ -106,6 +143,7 @@ beforeEach(() => {
 
 afterEach(() => {
   raw.close();
+  vi.restoreAllMocks();
 });
 
 describe("sign & verify", () => {
@@ -762,6 +800,94 @@ describe("Webhooks delivery", () => {
 
     expect(error.code).toBe("WEBHOOK_DELIVERY_FAILED");
     expect(Object.isFrozen(error.details)).toBe(true);
+  });
+});
+
+describe("Webhooks delivery timeout (DoS bound)", () => {
+  const HOOK_URL = "https://example.com/hook";
+
+  // A minimal deliver payload, shaped like what `send` enqueues — driven straight
+  // through the captured handler when a test needs the thrown error's `code`.
+  const job: JsonValue = { url: HOOK_URL, event: "ping", payload: {} };
+
+  it("maps the real fetch/undici TimeoutError abort to a distinct WEBHOOK_DELIVERY_TIMEOUT (not keyed on AbortError)", async () => {
+    // The default global-fetch/undici/workerd path aborts with a DOMException
+    // NAMED "TimeoutError". Keying the catch on `name === "AbortError"` would MISS
+    // it — the exact production hole this task closes. `deadlineFetch()` rejects
+    // with the signal's real reason (that TimeoutError), so this goes RED against
+    // any name-keyed catch and green only under the structural mapping.
+    const deliver = deliverHandler(deadlineFetch(), 5);
+
+    const error = await rejection(Promise.resolve(deliver?.(job)));
+
+    expect(error).toBeInstanceOf(WebhookError);
+    expect((error as WebhookError).code).toBe("WEBHOOK_DELIVERY_TIMEOUT");
+    expect((error as WebhookError).details["url"]).toBe(HOOK_URL);
+    expect((error as WebhookError).details["timeoutMs"]).toBe(5);
+  });
+
+  it("maps a node:http-style AbortError abort to the SAME code (structural, not name-matching)", async () => {
+    // The Node `http.request({ signal })` (pinning) path aborts with an error
+    // NAMED "AbortError". A differently-named reason must land on the SAME code —
+    // proof the mapping is by structure, catching BOTH transport shapes uniformly.
+    const abortError = new DOMException("The operation was aborted.", "AbortError");
+    const deliver = deliverHandler(deadlineFetch(abortError), 5);
+
+    const error = await rejection(Promise.resolve(deliver?.(job)));
+
+    expect(error).toBeInstanceOf(WebhookError);
+    expect((error as WebhookError).code).toBe("WEBHOOK_DELIVERY_TIMEOUT");
+  });
+
+  it("lets a coded WebhookError from the transport pass through unchanged (SSRF refusal not masked as a timeout)", async () => {
+    // The pinning fetch can reject with WEBHOOK_URL_BLOCKED at connect time (a DNS
+    // rebind refused). That verdict is already correct and must NOT be relabeled a
+    // timeout — the catch re-throws an already-coded WebhookError untouched.
+    const blocked: FetchLike = () =>
+      Promise.reject(
+        new WebhookError("WEBHOOK_URL_BLOCKED", "Refusing to connect: rebind", { url: HOOK_URL }),
+      );
+    const deliver = deliverHandler(blocked, 5);
+
+    const error = await rejection(Promise.resolve(deliver?.(job)));
+
+    expect(error).toBeInstanceOf(WebhookError);
+    expect((error as WebhookError).code).toBe("WEBHOOK_URL_BLOCKED"); // NOT re-coded as TIMEOUT
+  });
+
+  it("surfaces a delivery timeout as a RETRYABLE failure through the queue", async () => {
+    // End-to-end: the stalled receiver aborts by the deadline, the job fails, and —
+    // because the timeout carries no `permanentFailure` marker — the queue RETRIES
+    // it (a transiently-slow endpoint deserves another attempt, unlike a blocked URL).
+    const hooks = new Webhooks({
+      queue,
+      fetch: deadlineFetch(),
+      resolver: publicResolver,
+      deliveryTimeoutMs: 5,
+    });
+    const id = await hooks.send(HOOK_URL, "ping", {}, { maxAttempts: 5 });
+
+    const result = await queue.runOnce();
+
+    expect(result?.outcome).toBe("retry"); // retried, not retired to `failed`
+    const retried = await queue.find(id);
+    expect(retried?.status).toBe("ready");
+    expect(retried?.attempts).toBe(1); // attempt 1 of 5 — four remain
+    expect(retried?.lastError).toContain("did not complete within 5ms");
+  });
+
+  it("hands the transport an AbortSignal and still delivers a fast 2xx (deadline present, unused)", async () => {
+    const hooks = new Webhooks({
+      queue,
+      fetch: fakeFetch({ ok: true, status: 200 }),
+      resolver: publicResolver,
+      deliveryTimeoutMs: 50,
+    });
+    await hooks.send(HOOK_URL, "ping", { ok: true });
+
+    expect((await queue.runOnce())?.outcome).toBe("done");
+    // The deadline is wired onto every POST, including the ones that never trip it.
+    expect(calls[0]?.init.signal).toBeInstanceOf(AbortSignal);
   });
 });
 

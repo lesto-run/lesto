@@ -89,6 +89,7 @@ export const DEFAULT_TOLERANCE_MS = 5 * 60 * 1000;
 
 export type WebhookErrorCode =
   | "WEBHOOK_DELIVERY_FAILED"
+  | "WEBHOOK_DELIVERY_TIMEOUT"
   | "WEBHOOK_SECRET_NOT_FOUND"
   | "WEBHOOK_SECRET_UNRESOLVED"
   | "WEBHOOK_URL_BLOCKED";
@@ -484,6 +485,15 @@ export type FetchLike = (
      * too. Optional so older fetch stubs still type-check.
      */
     redirect?: "manual";
+
+    /**
+     * The per-delivery deadline as an abort signal (see
+     * {@link WebhooksOptions.deliveryTimeoutMs}). The deliverer ALWAYS sets it so
+     * a slow or hostile receiver cannot pin a queue worker; the real `fetch` and
+     * the Node pinning transport both honor it, destroying the socket on abort.
+     * Optional so older fetch stubs still type-check.
+     */
+    signal?: AbortSignal;
   },
 ) => Promise<WebhookResponse>;
 
@@ -540,6 +550,22 @@ export interface WebhooksOptions {
    * the receiver to the enqueuing request's trace.
    */
   readonly traceparent?: TraceparentSource;
+
+  /**
+   * Abort — and so fail, then retry — an outbound delivery if the POST does not
+   * complete within this many ms. A tenant-provided URL that completes the
+   * TCP/TLS handshake and then never responds (or trickles bytes) would otherwise
+   * hold a queue worker's `await` open until the OS-level timeout (minutes),
+   * letting one slow or hostile receiver starve the shared delivery pool — a
+   * denial-of-service on the webhook subsystem. Surfaces as a retryable
+   * {@link WebhookError} coded `WEBHOOK_DELIVERY_TIMEOUT`.
+   *
+   * Defaults to 10_000. It MUST sit well under the queue's job-visibility window
+   * (30_000ms in `@lesto/queue`): the delivery has to fail and release the worker
+   * BEFORE the visibility deadline lapses, or the queue reclaims the still-
+   * "running" job and delivers it a SECOND time.
+   */
+  readonly deliveryTimeoutMs?: number;
 }
 
 interface DeliverPayload {
@@ -696,6 +722,14 @@ export const defaultUrlGuard: UrlGuard = async (url, resolver) => {
   return undefined;
 };
 
+/**
+ * Default per-delivery deadline: ten seconds, comfortably under `@lesto/queue`'s
+ * 30s job-visibility window so a delivery fails and releases its worker before the
+ * queue would reclaim the still-"running" job and deliver it twice. See
+ * {@link WebhooksOptions.deliveryTimeoutMs}.
+ */
+const DEFAULT_DELIVERY_TIMEOUT_MS = 10_000;
+
 export class Webhooks {
   private readonly queue: Queue;
 
@@ -709,6 +743,8 @@ export class Webhooks {
 
   private readonly traceparent: TraceparentSource | undefined;
 
+  private readonly deliveryTimeoutMs: number;
+
   constructor(options: WebhooksOptions) {
     this.queue = options.queue;
     this.fetchFn = options.fetch ?? (globalThis.fetch as unknown as FetchLike);
@@ -716,6 +752,7 @@ export class Webhooks {
     this.resolver = options.resolver ?? systemResolver;
     this.urlGuard = options.urlGuard ?? defaultUrlGuard;
     this.traceparent = options.traceparent;
+    this.deliveryTimeoutMs = options.deliveryTimeoutMs ?? DEFAULT_DELIVERY_TIMEOUT_MS;
 
     this.queue.define(DELIVER_JOB, (payload) => this.deliver(payload as unknown as DeliverPayload));
   }
@@ -799,12 +836,43 @@ export class Webhooks {
     // 3xx must not be followed to an unguarded (possibly private) endpoint. A
     // manual redirect surfaces as a non-ok 3xx response, which falls into the
     // delivery-failure path below — retried like any other failed attempt.
-    const response = await this.fetchFn(payload.url, {
-      method: "POST",
-      headers,
-      body,
-      redirect: "manual",
-    });
+    //
+    // `signal` bounds the WHOLE POST. Without it a receiver that completes the
+    // handshake and then stalls would hold this worker's `await` open until the
+    // OS TCP timeout (minutes) — long past the queue's visibility window — so one
+    // slow or hostile tenant could starve the shared delivery pool. The deadline
+    // aborts the request instead, turning a stall into a clean retryable failure.
+    let response: WebhookResponse;
+
+    try {
+      response = await this.fetchFn(payload.url, {
+        method: "POST",
+        headers,
+        body,
+        redirect: "manual",
+        signal: AbortSignal.timeout(this.deliveryTimeoutMs),
+      });
+    } catch (cause) {
+      // A coded WebhookError from the transport itself — e.g. the pinning fetch
+      // refusing a connect-time DNS rebind with WEBHOOK_URL_BLOCKED — is already
+      // the right verdict; pass it through untouched.
+      if (cause instanceof WebhookError) throw cause;
+
+      // Everything else is the deadline firing (or a transport-level error). Map
+      // it by STRUCTURE, never by exception NAME: `AbortSignal.timeout` rejects
+      // with a `DOMException` named "TimeoutError" on the global-fetch/undici/
+      // workerd path but with "AbortError" on the Node `http.request` (pinning)
+      // path, so keying the catch on `name === "AbortError"` would MISS the real
+      // production timeout. A distinct, retryable code keeps "slow" legible apart
+      // from "errored" (callers branch on `code`) and is retried like any other
+      // failed attempt — permanence is marker-based, and this failure carries no
+      // `permanentFailure` marker.
+      throw new WebhookError(
+        "WEBHOOK_DELIVERY_TIMEOUT",
+        `Webhook delivery to ${payload.url} did not complete within ${this.deliveryTimeoutMs}ms.`,
+        { url: payload.url, timeoutMs: this.deliveryTimeoutMs, cause },
+      );
+    }
 
     if (!response.ok) {
       const reason =

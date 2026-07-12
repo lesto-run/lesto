@@ -54,7 +54,18 @@ export interface PinnedClientRequest {
  */
 export type HttpRequester = (
   url: string,
-  options: { method: string; headers: Record<string, string>; lookup: LookupFunction },
+  options: {
+    method: string;
+    headers: Record<string, string>;
+    lookup: LookupFunction;
+    /**
+     * The delivery deadline, forwarded straight to `node:http`/`node:https` — an
+     * abort destroys the socket, so a stalled receiver can't pin the worker. May
+     * be `undefined` (a caller that set no deadline); node treats that as "no
+     * signal", so it forwards straight through with no branch.
+     */
+    signal?: AbortSignal | undefined;
+  },
   onResponse: (response: PinnedResponse) => void,
 ) => PinnedClientRequest;
 
@@ -190,7 +201,7 @@ export function nodePinningFetch(options: NodePinningFetchOptions = {}): FetchLi
 
       const request = requester(
         url,
-        { method: init.method, headers: init.headers, lookup },
+        { method: init.method, headers: init.headers, lookup, signal: init.signal },
         (response) => {
           response.resume();
           response.on("error", reject);

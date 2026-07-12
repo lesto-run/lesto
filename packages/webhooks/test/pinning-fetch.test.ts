@@ -179,11 +179,23 @@ describe("nodePinningFetch — delivery over an injected requester", () => {
     const request = new FakeRequest();
 
     let captured:
-      | { url: string; method: string; headers: Record<string, string>; lookup: LookupFunction }
+      | {
+          url: string;
+          method: string;
+          headers: Record<string, string>;
+          lookup: LookupFunction;
+          signal: AbortSignal | undefined;
+        }
       | undefined;
 
     const requester: HttpRequester = (url, options, onResponse) => {
-      captured = { url, method: options.method, headers: options.headers, lookup: options.lookup };
+      captured = {
+        url,
+        method: options.method,
+        headers: options.headers,
+        lookup: options.lookup,
+        signal: options.signal,
+      };
       onResponse(response);
 
       return request;
@@ -312,6 +324,28 @@ describe("nodePinningFetch — delivery over an injected requester", () => {
     const { err } = await runLookup(lookup as LookupFunction, "internal.example", {});
     expect((err as WebhookError).code).toBe("WEBHOOK_URL_BLOCKED");
     expect(isPrivateAddress(PRIVATE_V4)).toBe(true);
+  });
+
+  it("forwards the delivery deadline signal to the requester (so an abort can destroy the socket)", async () => {
+    const { response, requester, captured } = setup(200);
+    const controller = new AbortController();
+
+    const fetchFn = nodePinningFetch({ requester, resolver: staticResolver([PUBLIC_V4]) });
+    const promise = fetchFn("https://example.com/hook", {
+      method: "POST",
+      headers: {},
+      body: "{}",
+      signal: controller.signal,
+    });
+
+    response.emitEnd();
+    await promise;
+
+    // The deliverer's `AbortSignal.timeout` deadline must reach node's request
+    // options — a signal the transport ignores is inert, and a hung POST would
+    // never be aborted. The default requester passes it to node's `http.request`,
+    // whose abort destroys the socket.
+    expect(captured()?.signal).toBe(controller.signal);
   });
 });
 
