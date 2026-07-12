@@ -15,8 +15,9 @@
 // the baseline is the floor, hand edits are the ceiling, and the generator only ever
 // fills the floor.
 //
-// The baseline is deliberately snippet-free — an accurate one-line pitch (the manifest
-// `description`, which is the single source of truth), the install line, and real docs
+// The baseline is deliberately snippet-free — an accurate one-line pitch copied from the
+// manifest `description` at generation time (a frozen snapshot: skip-existing means a later
+// `description` edit does NOT propagate into an already-stamped README), the install line, and real docs
 // links (verified `/batteries/<slug>` deep links + the agent-readable `llms.txt`). The
 // house rule is "do not invent API" (plans/006 §Conventions), so a usage snippet is
 // hand-authored into the high-value packages' READMEs against their `src/index.ts`
