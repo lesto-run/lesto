@@ -68,13 +68,13 @@
     "he": "^1.2.0",
     "jsdom": "^24.0.0",
     "lru-cache": "^10.0.0",
-    "serialize-javascript": "^6.0.0",
+    "serialize-javascript": "^7.0.5",
     "zod": "^3.22.0"
   },
   "devDependencies": {
     "@types/dompurify": "^3.0.0",
     "@types/he": "^1.2.0",
-    "@types/serialize-javascript": "^5.0.0",
+    "@types/serialize-javascript": "^5.0.4",
     "mdast-util-to-string": "^4.0.0",
     "remark-parse": "^11.0.0",
     "unified": "^11.0.0",
