@@ -60,6 +60,7 @@ export {
   Mailer,
   MailError,
   assertHeaders,
+  assertMessageId,
   assertNoInjection,
   failureCode,
   messageIdFor,

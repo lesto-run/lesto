@@ -21,7 +21,16 @@ class FakeSocket implements SmtpSocket {
 
   ended = false;
 
-  private dataListener: ((chunk: string) => void) | undefined;
+  /**
+   * True once {@link removeAllListeners} was called. A STARTTLS `rebind` must do
+   * a TARGETED `off("data", …)` on the pre-upgrade socket, NOT a blanket
+   * `removeAllListeners()` (that would strip the still-live socket's `error`
+   * handler — an uncaught-exception crash). The rebind-cleanup test asserts this
+   * stayed false on the old socket.
+   */
+  removeAllListenersCalled = false;
+
+  private dataListener: ((chunk: Buffer | string) => void) | undefined;
 
   private errorListener: ((error: Error) => void) | undefined;
 
@@ -40,6 +49,16 @@ class FakeSocket implements SmtpSocket {
     this.greets = greets;
   }
 
+  /** Whether a `data` listener is currently attached (rebind detaches it). */
+  get hasDataListener(): boolean {
+    return this.dataListener !== undefined;
+  }
+
+  /** Whether an `error` listener is currently attached (rebind must KEEP it). */
+  get hasErrorListener(): boolean {
+    return this.errorListener !== undefined;
+  }
+
   write(data: string): void {
     this.written.push(data);
     this.emitNext();
@@ -47,7 +66,7 @@ class FakeSocket implements SmtpSocket {
 
   on(event: "data" | "error" | "close", listener: (arg: never) => void): void {
     if (event === "data") {
-      this.dataListener = listener as (chunk: string) => void;
+      this.dataListener = listener as (chunk: Buffer | string) => void;
 
       if (this.greets) {
         queueMicrotask(() => this.emitNext());
@@ -57,7 +76,15 @@ class FakeSocket implements SmtpSocket {
     }
   }
 
+  off(_event: "data", listener: (chunk: Buffer | string) => void): void {
+    // Match `net.Socket#off` semantics: drop only the referenced `data` listener.
+    if (this.dataListener === listener) {
+      this.dataListener = undefined;
+    }
+  }
+
   removeAllListeners(): void {
+    this.removeAllListenersCalled = true;
     this.dataListener = undefined;
     this.errorListener = undefined;
   }
@@ -124,6 +151,7 @@ function scriptedSocket(options: { split?: boolean }): {
         queueMicrotask(() => deliver("220 ready\r\n"));
       }
     },
+    off(): void {},
     removeAllListeners(): void {},
     end(): void {},
   } as unknown as SmtpSocket;
@@ -402,6 +430,7 @@ describe("createSmtpTransport", () => {
           queueMicrotask(() => (listener as (e: Error) => void)(new Error("ECONNRESET")));
         }
       },
+      off(): void {},
       removeAllListeners(): void {},
       end(): void {},
     };
@@ -431,6 +460,7 @@ describe("createSmtpTransport", () => {
           errorListener = listener as (e: Error) => void;
         }
       },
+      off(): void {},
       removeAllListeners(): void {},
       end(): void {},
     };
@@ -475,6 +505,105 @@ describe("createSmtpTransport", () => {
     await expect(
       transport.send({ ...base(), from: "f@app.com", headers: { X: "bad\r\nY: 1" } }),
     ).rejects.toMatchObject({ code: "MAIL_INVALID_HEADER" });
+  });
+
+  // messageId is spliced RAW into `Message-ID: <…>` and the MIME boundary
+  // (`boundary="lesto-<messageId>"`). A RenderedEmail is public surface, so the
+  // transport must re-validate it — the Mailer's own ids are safe, a hand-built
+  // one is not. Both tests use a socket with a FULL reply set so that WITHOUT the
+  // guard the send would RESOLVE (a clean assertion miss), never hang.
+  const fullDialogue = (): FakeSocket =>
+    new FakeSocket([
+      "220 ready\r\n",
+      "250 ok\r\n", // EHLO
+      "250 ok\r\n", // MAIL FROM
+      "250 ok\r\n", // RCPT TO
+      "354 go\r\n", // DATA
+      "250 queued\r\n", // body
+      "221 bye\r\n", // QUIT
+    ]);
+
+  it("rejects a CRLF-bearing messageId at the transport edge, before dialing (Message-ID injection)", async () => {
+    let connected = false;
+    const transport = createSmtpTransport({
+      host: "h",
+      port: 25,
+      secure: false,
+      connect: async () => {
+        connected = true;
+
+        return fullDialogue();
+      },
+    });
+
+    await expect(
+      transport.send({ ...base(), from: "f@app.com", messageId: "id\r\nBcc: evil@x.com" }),
+    ).rejects.toMatchObject({ code: "MAIL_INVALID_HEADER" });
+    // Edge validation runs BEFORE the dial — a rejected id never opens a socket.
+    expect(connected).toBe(false);
+  });
+
+  it("rejects a messageId containing a double-quote or whitespace (MIME boundary injection)", async () => {
+    // Neither carries a CRLF, so assertNoInjection alone would pass them through —
+    // it is the token/charset check that closes the boundary vector.
+    const quote = createSmtpTransport({
+      host: "h",
+      port: 25,
+      secure: false,
+      connect: async () => fullDialogue(),
+    });
+
+    await expect(
+      quote.send({ ...base(), from: "f@app.com", text: "hi", messageId: 'x"bad' }),
+    ).rejects.toMatchObject({ code: "MAIL_INVALID_HEADER" });
+
+    const space = createSmtpTransport({
+      host: "h",
+      port: 25,
+      secure: false,
+      connect: async () => fullDialogue(),
+    });
+
+    await expect(
+      space.send({ ...base(), from: "f@app.com", text: "hi", messageId: "x bad" }),
+    ).rejects.toMatchObject({ code: "MAIL_INVALID_HEADER" });
+  });
+});
+
+describe("SmtpConnection — STARTTLS rebind listener cleanup", () => {
+  it("detaches ONLY the pre-upgrade socket's data listener — never removeAllListeners, never its error handler", async () => {
+    const plain = new FakeSocket(["220 ready\r\n", "250 ok\r\n", "220 go-tls\r\n"]);
+    const secure = new FakeSocket(
+      [
+        "250 ok\r\n", // EHLO (post-TLS)
+        "250 ok\r\n", // MAIL FROM
+        "250 ok\r\n", // RCPT TO
+        "354 go\r\n", // DATA
+        "250 queued\r\n", // body
+        "221 bye\r\n", // QUIT
+      ],
+      false,
+    );
+
+    const transport = createSmtpTransport({
+      host: "mail.test",
+      port: 587,
+      connect: async () => plain,
+      upgrade: async () => secure,
+    });
+
+    await transport.send({ ...base(), from: "f@app.com" });
+
+    // After the upgrade the plaintext socket becomes the TLS transport's underlying
+    // stream. rebind must drop OUR 'data' handler — else post-upgrade bytes corrupt
+    // the shared reply buffer …
+    expect(plain.hasDataListener).toBe(false);
+    // … but MUST leave 'error' attached and MUST NOT removeAllListeners(): a live
+    // socket with no 'error' listener turns a later error into an uncaught
+    // exception (a process crash) that send()'s try/catch cannot catch. Flip rebind
+    // to removeAllListeners() (or add off("error", …)) and both of these go red.
+    expect(plain.hasErrorListener).toBe(true);
+    expect(plain.removeAllListenersCalled).toBe(false);
   });
 });
 
@@ -606,6 +735,10 @@ class PrebufferedSocket implements SmtpSocket {
     }
   }
 
+  off(): void {
+    this.listener = undefined;
+  }
+
   removeAllListeners(): void {
     this.listener = undefined;
   }
@@ -659,6 +792,10 @@ class TarpitSocket implements SmtpSocket {
       // The banner is the server's first "step": delivered after one delay.
       this.scheduleNext();
     }
+  }
+
+  off(): void {
+    this.dataListener = undefined;
   }
 
   removeAllListeners(): void {
@@ -716,6 +853,7 @@ describe("SmtpConnection lost-wakeup and dialogue timeout (F15)", () => {
       const silent: SmtpSocket = {
         write(): void {},
         on(): void {},
+        off(): void {},
         removeAllListeners(): void {},
         end(): void {},
       };

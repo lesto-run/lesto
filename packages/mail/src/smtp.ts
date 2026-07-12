@@ -1,6 +1,12 @@
 import { LestoError } from "@lesto/errors";
 
-import { assertHeaders, assertNoInjection, type MailTransport, type RenderedEmail } from "./mailer";
+import {
+  assertHeaders,
+  assertMessageId,
+  assertNoInjection,
+  type MailTransport,
+  type RenderedEmail,
+} from "./mailer";
 
 /**
  * A minimal, dependency-light SMTP transport.
@@ -36,6 +42,14 @@ export interface SmtpSocket {
   on(event: "data", listener: (chunk: Buffer | string) => void): void;
   on(event: "error", listener: (error: Error) => void): void;
   on(event: "close", listener: () => void): void;
+  /**
+   * Detach a previously-added `data` listener by reference — used by
+   * {@link SmtpConnection.rebind} to drop the pre-upgrade socket's `data` handler
+   * across a STARTTLS swap WITHOUT the blanket {@link removeAllListeners} that
+   * would also strip the still-live socket's own (and the TLS transport's)
+   * handlers. Both `net.Socket` and `tls.TLSSocket` expose it (EventEmitter#off).
+   */
+  off(event: "data", listener: (chunk: Buffer | string) => void): void;
   removeAllListeners(): void;
   end(): void;
 }
@@ -243,6 +257,10 @@ function validate(email: RenderedEmail): void {
   if (email.headers !== undefined) {
     assertHeaders(email.headers);
   }
+
+  // messageId is spliced raw into `Message-ID: <…>` AND the multipart boundary
+  // (`boundary="lesto-<messageId>"`), so it must be a single injection-safe token.
+  assertMessageId(email.messageId);
 }
 
 async function authenticate(conn: SmtpConnection, auth: SmtpAuth): Promise<void> {
@@ -311,67 +329,94 @@ class SmtpConnection {
     this.bind();
   }
 
-  /** Swap in the upgraded (TLS) socket after STARTTLS. */
+  /**
+   * Swap in the upgraded (TLS) socket after STARTTLS.
+   *
+   * Detach ONLY our `data` handler from the pre-upgrade socket first. That socket
+   * does not disappear — it becomes the TLS transport's underlying stream — so a
+   * lingering `data` handler on it would append post-upgrade bytes (ciphertext, or
+   * a late plaintext frame) into the SAME `this.buffer` the new socket feeds, and
+   * mis-settle a waiting reply: a listener leak on every STARTTLS send at best, a
+   * protocol mis-settle at worst.
+   *
+   * We deliberately leave `error`/`close` attached and NEVER `removeAllListeners()`.
+   * Stripping the still-live underlying socket's `error` handler would turn any
+   * later socket error into an unhandled `'error'` event — an uncaught exception
+   * (process crash) that `send()`'s try/catch cannot catch — and a blanket
+   * `removeAllListeners()` would additionally tear off the TLS transport's own
+   * listeners on that socket. A stale `close`/`error` from the old socket is
+   * instead neutralized by clearing `this.failure` below, so it can never make the
+   * first post-upgrade read throw spuriously.
+   */
   rebind(socket: SmtpSocket): void {
+    this.socket.off("data", this.onData);
     this.socket = socket;
     this.buffer = "";
-    // A fresh socket carries no failure yet: clear anything the pre-upgrade socket
-    // recorded (its 'error'/'close' handlers stay attached — they cannot be removed
-    // without also stripping the TLS transport's own listeners) so a stale close on
-    // the old socket can never make the first post-upgrade read throw spuriously.
     this.failure = undefined;
     this.bind();
   }
 
   private bind(): void {
-    this.socket.on("data", (chunk) => {
-      this.buffer += chunk.toString();
-
-      // SMTP is strictly request-response, so a reply is only consumed once a
-      // reader is waiting for it. With no reader pending the bytes stay buffered
-      // for the next `readLine` to drain — never dropped (that is what makes the
-      // lost-wakeup guard in `readLine` sound).
-      if (!this.pending) {
-        return;
-      }
-
-      const line = this.takeReply();
-
-      if (line === undefined) {
-        return;
-      }
-
-      const settle = this.pending;
-      this.pending = undefined;
-      clearTimeout(settle.timer);
-      settle.resolve(line);
-    });
-
-    this.socket.on("error", (error) => {
-      this.failure = error;
-      this.wakePending(error);
-    });
-
-    // A graceful FIN (the peer calls `end()`) closes the connection WITHOUT an
-    // 'error' — e.g. a relay that hangs up the instant it accepts the DATA body,
-    // withholding its 221. With only the 'error' handler above, the pending
-    // reply-wait would then sit idle until the whole-dialogue deadline fires (a
-    // needless multi-second stall on a send that has ALREADY committed). Settle it
-    // the moment the socket closes, using the same `_CONNECTION` signal the RST
-    // path already produces: `send()`'s post-commit QUIT/221 catch swallows it and
-    // resolves at once, and a close mid-dialogue fails fast into a clean retry
-    // instead of waiting out the budget. Ordering is benign in both races: an RST
-    // fires 'error' first (recording that more-specific failure, which `??=`
-    // keeps), and a normal QUIT/221 close cannot reach here at all — `send()`'s
-    // finally removes these listeners before it ends the socket.
-    this.socket.on("close", () => {
-      this.failure ??= new SmtpTransportError(
-        "MAIL_TRANSPORT_SMTP_CONNECTION",
-        "SMTP connection closed before the dialogue completed.",
-      );
-      this.wakePending(this.failure);
-    });
+    this.socket.on("data", this.onData);
+    this.socket.on("error", this.onError);
+    this.socket.on("close", this.onClose);
   }
+
+  /**
+   * Consume arriving bytes and, once a full reply has landed AND a reader is
+   * parked, settle it. SMTP is strictly request-response, so with no reader
+   * pending the bytes stay buffered for the next `readLine` to drain — never
+   * dropped (that is what makes the lost-wakeup guard in `readLine` sound).
+   *
+   * Stored as ONE stable reference (not a fresh closure per {@link bind}) so
+   * {@link rebind} can `off()` exactly this handler off the pre-upgrade socket.
+   */
+  private readonly onData = (chunk: Buffer | string): void => {
+    this.buffer += chunk.toString();
+
+    if (!this.pending) {
+      return;
+    }
+
+    const line = this.takeReply();
+
+    if (line === undefined) {
+      return;
+    }
+
+    const settle = this.pending;
+    this.pending = undefined;
+    clearTimeout(settle.timer);
+    settle.resolve(line);
+  };
+
+  /** Record a socket error and wake any parked reader with it. */
+  private readonly onError = (error: Error): void => {
+    this.failure = error;
+    this.wakePending(error);
+  };
+
+  /**
+   * Settle a parked reader when the socket closes. A graceful FIN (the peer calls
+   * `end()`) closes the connection WITHOUT an 'error' — e.g. a relay that hangs up
+   * the instant it accepts the DATA body, withholding its 221. With only the
+   * 'error' handler, the pending reply-wait would then sit idle until the
+   * whole-dialogue deadline fires (a needless multi-second stall on a send that has
+   * ALREADY committed). Settle it the moment the socket closes, using the same
+   * `_CONNECTION` signal the RST path already produces: `send()`'s post-commit
+   * QUIT/221 catch swallows it and resolves at once, and a close mid-dialogue fails
+   * fast into a clean retry instead of waiting out the budget. Ordering is benign
+   * in both races: an RST fires 'error' first (recording that more-specific
+   * failure, which `??=` keeps), and a normal QUIT/221 close cannot reach here at
+   * all — `send()`'s finally removes these listeners before it ends the socket.
+   */
+  private readonly onClose = (): void => {
+    this.failure ??= new SmtpTransportError(
+      "MAIL_TRANSPORT_SMTP_CONNECTION",
+      "SMTP connection closed before the dialogue completed.",
+    );
+    this.wakePending(this.failure);
+  };
 
   /**
    * Wake a parked {@link readLine} with a transport failure — a no-op when none

@@ -207,6 +207,33 @@ describe("createFetchProviderTransport", () => {
       code: "MAIL_INVALID_HEADER",
     });
   });
+
+  it("re-validates messageId at the transport edge (rides the Idempotency-Key header)", async () => {
+    // messageId is spliced into the `Idempotency-Key` header, so a CRLF is header
+    // injection and a `"`/whitespace is a malformed token. A full-2xx fetch mock
+    // means that WITHOUT the guard the send would RESOLVE — a clean assertion miss.
+    const fetchMock = fetchMockReturning(async () => okResponse());
+    const transport = createFetchProviderTransport({
+      endpoint: "https://api.test/emails",
+      apiKey: "k",
+      fetch: fetchMock,
+    });
+
+    await expect(
+      transport.send({ ...base(), messageId: "id\r\nX-Injected: 1" }),
+    ).rejects.toMatchObject({ code: "MAIL_INVALID_HEADER" });
+
+    await expect(transport.send({ ...base(), messageId: 'id"bad' })).rejects.toMatchObject({
+      code: "MAIL_INVALID_HEADER",
+    });
+
+    await expect(transport.send({ ...base(), messageId: "id bad" })).rejects.toMatchObject({
+      code: "MAIL_INVALID_HEADER",
+    });
+
+    // A rejected id never reaches the network.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("FetchProviderError", () => {

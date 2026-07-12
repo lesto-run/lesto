@@ -2,10 +2,10 @@ import { createServer } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createSmtpTransport, SmtpTransportError } from "../src/index";
+import { createSmtpTransport, nodeConnect, SmtpTransportError } from "../src/index";
 
 import type { Socket } from "node:net";
-import type { RenderedEmail } from "../src/index";
+import type { RenderedEmail, SmtpSocket } from "../src/index";
 
 /**
  * Real-SMTP end-to-end boundary tests for {@link createSmtpTransport}.
@@ -454,5 +454,167 @@ describe("createSmtpTransport — real loopback SMTP e2e", () => {
     // and the server reset instead of acking it.
     expect(server.state.quitReceived).toBe(true);
     expect(server.state.quitReplySent).toBe(false);
+  });
+});
+
+/**
+ * A minimal scripted `SmtpSocket` standing in for the post-STARTTLS (TLS) socket:
+ * it does not greet and answers each written command with the next scripted reply.
+ * In the rebind crash-regression below the PRE-upgrade socket is a genuine
+ * `node:net` Socket (real EventEmitter semantics); only the upgraded leg is faked.
+ * A real TLS handshake is deliberately avoided — it would require committing a
+ * private key, which the repo's pre-push secret scan rejects, and is irrelevant to
+ * the crash: the bug is listener bookkeeping on the pre-upgrade socket, not TLS.
+ */
+class ScriptedSocket implements SmtpSocket {
+  private dataListener: ((chunk: Buffer | string) => void) | undefined;
+
+  private readonly queue: string[];
+
+  constructor(replies: string[]) {
+    this.queue = [...replies];
+  }
+
+  write(): void {
+    const next = this.queue.shift();
+
+    if (next !== undefined) {
+      queueMicrotask(() => this.dataListener?.(next));
+    }
+  }
+
+  on(event: "data" | "error" | "close", listener: (arg: never) => void): void {
+    if (event === "data") {
+      this.dataListener = listener as (chunk: Buffer | string) => void;
+    }
+  }
+
+  off(): void {
+    this.dataListener = undefined;
+  }
+
+  removeAllListeners(): void {
+    this.dataListener = undefined;
+  }
+
+  end(): void {}
+}
+
+/**
+ * Start a real loopback server that speaks plaintext SMTP up through STARTTLS,
+ * then goes quiet (the post-upgrade dialogue runs on the injected fake socket).
+ */
+function startStartTlsServer(): Promise<{ port: number; close: () => Promise<void> }> {
+  const sockets = new Set<Socket>();
+
+  const server = createServer((socket) => {
+    sockets.add(socket);
+
+    let buf = "";
+
+    // A client reset during teardown is expected noise, never a test failure.
+    socket.on("error", () => {});
+    socket.on("close", () => sockets.delete(socket));
+
+    socket.on("data", (chunk: Buffer | string) => {
+      buf += chunk.toString();
+
+      for (let nl = buf.indexOf("\r\n"); nl !== -1; nl = buf.indexOf("\r\n")) {
+        const line = buf.slice(0, nl).toUpperCase();
+        buf = buf.slice(nl + 2);
+
+        if (line.startsWith("EHLO")) {
+          socket.write("250 ok\r\n");
+        } else if (line.startsWith("STARTTLS")) {
+          socket.write("220 go-tls\r\n");
+        }
+      }
+    });
+
+    // Banner. Node buffers it until the client attaches its `data` listener.
+    socket.write("220 ready\r\n");
+  });
+
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+
+      if (address === null || typeof address === "string") {
+        reject(new Error("expected an AddressInfo from listen(0) on 127.0.0.1"));
+
+        return;
+      }
+
+      resolve({
+        port: address.port,
+        close: () =>
+          new Promise<void>((done) => {
+            for (const socket of sockets) {
+              socket.destroy();
+            }
+
+            server.close(() => done());
+          }),
+      });
+    });
+  });
+}
+
+describe("createSmtpTransport — STARTTLS rebind over a real socket (crash regression)", () => {
+  // THE false-oracle guard AGENTS.md warns about: the FakeSocket unit tests cannot
+  // reproduce the post-upgrade crash because a fake never throws on an unhandled
+  // 'error'. A genuine node:net Socket does — so this drives the DEFAULT nodeConnect
+  // to obtain a REAL pre-upgrade socket, runs the real rebind, then proves the
+  // socket still has an 'error' handler. Revert rebind to removeAllListeners() (or
+  // add off("error", …)) and the real socket is left listener-less: the emit below
+  // throws an uncaught exception — the exact process crash this test pins closed.
+  it("keeps an 'error' handler on the pre-upgrade socket after rebind, so a later socket error is handled, not thrown", async () => {
+    const server = await startStartTlsServer();
+
+    // Carries the post-STARTTLS dialogue (EHLO/MAIL/RCPT/DATA/body/QUIT) to a 221.
+    const upgraded = new ScriptedSocket([
+      "250 ok\r\n",
+      "250 ok\r\n",
+      "250 ok\r\n",
+      "354 go\r\n",
+      "250 queued\r\n",
+      "221 bye\r\n",
+    ]);
+
+    let preUpgrade: Socket | undefined;
+
+    try {
+      const transport = createSmtpTransport({
+        host: "127.0.0.1",
+        port: server.port,
+        ehloName: "client.e2e",
+        timeoutMs: 2000,
+        connect: async (host, port) => {
+          // The DEFAULT connect path — a genuine node:net Socket, captured so the
+          // test can probe its listeners and emit a real 'error' after rebind.
+          const socket = (await nodeConnect(host, port)) as unknown as Socket;
+          preUpgrade = socket;
+
+          return socket as unknown as SmtpSocket;
+        },
+        upgrade: async () => upgraded,
+      });
+
+      await expect(transport.send(baseEmail())).resolves.toBeUndefined();
+
+      expect(preUpgrade).toBeDefined();
+
+      // rebind LEFT the 'error' handler on the still-live pre-upgrade socket …
+      expect(preUpgrade!.listenerCount("error")).toBeGreaterThan(0);
+      // … so a later error on it is handled by our onError, never an uncaught throw.
+      expect(() => preUpgrade!.emit("error", new Error("post-upgrade reset"))).not.toThrow();
+      // … while its 'data' handler WAS detached, so post-upgrade bytes cannot
+      // append into the (now new-socket) reply buffer and mis-settle a reply.
+      expect(preUpgrade!.listenerCount("data")).toBe(0);
+    } finally {
+      preUpgrade?.destroy();
+      await server.close();
+    }
   });
 });

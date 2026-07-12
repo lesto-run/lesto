@@ -507,6 +507,36 @@ export function assertHeaders(headers: Record<string, string>): Record<string, s
   return headers;
 }
 
+/**
+ * Validate a `messageId` at the transport edge — the one source of truth every
+ * transport shares.
+ *
+ * A {@link RenderedEmail} is public surface: a caller can build one by hand and
+ * hand it straight to a transport, so the id is re-validated here rather than
+ * trusted from the {@link Mailer} (whose own `lesto-mail-<jobId>` ids are always
+ * safe). The id is spliced RAW into two places: the `Message-ID: <…>` header
+ * and, in the SMTP transport, the multipart boundary (`boundary="lesto-<id>"`).
+ * So two vectors must close:
+ *
+ *   - CR/LF is header injection — the same guard the other header-bound fields
+ *     use ({@link assertNoInjection}).
+ *   - A `"` or any whitespace breaks OUT of the quoted boundary (and the
+ *     angle-bracketed header), splitting or corrupting the MIME part even with no
+ *     CR/LF present. CR/LF are already barred above, so this closes the residual
+ *     boundary vector, keeping the id a single safe token.
+ */
+export function assertMessageId(messageId: string): void {
+  assertNoInjection("messageId", messageId, "MAIL_INVALID_HEADER");
+
+  if (/["\s]/.test(messageId)) {
+    throw new MailError(
+      "MAIL_INVALID_HEADER",
+      "`messageId` must not contain whitespace or a double-quote (MIME boundary / header injection).",
+      { field: "messageId" },
+    );
+  }
+}
+
 interface DeliverPayload {
   readonly mailer: string;
   readonly params: JsonValue;

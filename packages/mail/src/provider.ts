@@ -1,6 +1,12 @@
 import { LestoError } from "@lesto/errors";
 
-import { assertHeaders, assertNoInjection, type MailTransport, type RenderedEmail } from "./mailer";
+import {
+  assertHeaders,
+  assertMessageId,
+  assertNoInjection,
+  type MailTransport,
+  type RenderedEmail,
+} from "./mailer";
 
 /**
  * A fetch-based HTTP-provider transport (Resend / SES-HTTP-API-shaped).
@@ -130,6 +136,9 @@ function validate(email: RenderedEmail): void {
   if (email.headers !== undefined) {
     assertHeaders(email.headers);
   }
+
+  // messageId rides the `Idempotency-Key` header (and the JSON body) — see `send`.
+  assertMessageId(email.messageId);
 }
 
 async function safeText(response: Response): Promise<string> {
