@@ -4224,6 +4224,226 @@ describe("run deploy", () => {
     expect(checked).toEqual(["https://estate.example.com/healthz"]);
     expect(lines).toContain("health check passed: https://estate.example.com/healthz");
   });
+
+  // ── deploy --json: the machine-readable verdict (the cross-tool contract) ────
+  // Orchestrators (Studio's fleet deploy step is the first consumer) read the LAST
+  // stdout line that parses as the verdict — wrangler's streamed noise precedes it —
+  // so these pin both the shape AND the "final line" placement.
+  function lastLineVerdict(): Record<string, unknown> {
+    return JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+  }
+
+  it("--cloudflare --json appends a retained verdict as the FINAL stdout line on a healthy deploy", async () => {
+    const code = await run(
+      ["deploy", "--cloudflare", "--json"],
+      depsWith({
+        loadApp,
+        loadSites: () => Promise.resolve(sites),
+        sink: recordingSink().sink,
+        cloudflare: {
+          deploy: () => Promise.resolve({ url: "https://estate.workers.dev" }),
+          rollback: vi.fn(),
+        },
+        checkHealth: () => Promise.resolve(true),
+      }),
+    );
+
+    expect(code).toBe(0);
+    // The human lines still print — the verdict is additive, not a mode switch…
+    expect(lines).toContain("deployed → https://estate.workers.dev");
+    // …and the verdict is the final line, parseable on its own.
+    expect(lastLineVerdict()).toEqual({
+      schemaVersion: 1,
+      status: "retained",
+      deployedUrl: "https://estate.workers.dev",
+      healthUrl: "https://estate.workers.dev/readyz",
+      errorCode: null,
+      message: null,
+    });
+  });
+
+  it("--json reports a SKIPPED gate honestly: retained with healthUrl null (nothing was probed)", async () => {
+    const code = await run(
+      ["deploy", "--cloudflare", "--json"],
+      depsWith({
+        loadApp,
+        loadSites: () => Promise.resolve(sites),
+        sink: recordingSink().sink,
+        cloudflare: { deploy: () => Promise.resolve({ url: undefined }), rollback: vi.fn() },
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(lastLineVerdict()).toEqual({
+      schemaVersion: 1,
+      status: "retained",
+      deployedUrl: null,
+      healthUrl: null,
+      errorCode: null,
+      message: null,
+    });
+  });
+
+  it("--json emits a rolled-back verdict when the health gate fails — and still refuses by code", async () => {
+    const rollback = vi.fn(() => Promise.resolve());
+
+    await expect(
+      run(
+        ["deploy", "--cloudflare", "--json"],
+        depsWith({
+          loadApp,
+          loadSites: () => Promise.resolve(sites),
+          sink: recordingSink().sink,
+          cloudflare: {
+            deploy: () => Promise.resolve({ url: "https://estate.workers.dev" }),
+            rollback,
+          },
+          checkHealth: () => Promise.resolve(false),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "CLI_DEPLOY_UNHEALTHY" });
+
+    expect(rollback).toHaveBeenCalledOnce();
+
+    const verdict = lastLineVerdict();
+
+    expect(verdict).toMatchObject({
+      schemaVersion: 1,
+      status: "rolled-back",
+      deployedUrl: null,
+      healthUrl: "https://estate.workers.dev/readyz",
+      errorCode: "CLI_DEPLOY_UNHEALTHY",
+    });
+    expect(verdict.message).toContain("rolled the Worker back");
+  });
+
+  it("⚠️ a rollback that ITSELF fails is a coded FAILED verdict — never reported rolled-back", async () => {
+    // The state a prose scraper gets exactly backwards: the failure text contains the
+    // word "rollback", but the revert did NOT happen — the unhealthy Worker may still
+    // be serving. The verdict must say `failed` (not `rolled-back`) and name it.
+    await expect(
+      run(
+        ["deploy", "--cloudflare", "--json"],
+        depsWith({
+          loadApp,
+          loadSites: () => Promise.resolve(sites),
+          sink: recordingSink().sink,
+          cloudflare: {
+            deploy: () => Promise.resolve({ url: "https://estate.workers.dev" }),
+            rollback: () => Promise.reject(new Error("wrangler rollback exited with code 1")),
+          },
+          checkHealth: () => Promise.resolve(false),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "CLI_DEPLOY_ROLLBACK_FAILED" });
+
+    const verdict = lastLineVerdict();
+
+    expect(verdict).toMatchObject({
+      schemaVersion: 1,
+      status: "failed",
+      deployedUrl: null,
+      healthUrl: "https://estate.workers.dev/readyz",
+      errorCode: "CLI_DEPLOY_ROLLBACK_FAILED",
+    });
+    expect(verdict.message).toContain("may still be live");
+    expect(verdict.message).toContain("wrangler rollback exited with code 1");
+  });
+
+  it("a NON-Error rollback rejection is still coded, stringified into the message", async () => {
+    // A driver can reject with anything; the coded wrap must not assume an Error.
+    await expect(
+      run(
+        ["deploy", "--cloudflare"],
+        depsWith({
+          loadApp,
+          loadSites: () => Promise.resolve(sites),
+          sink: recordingSink().sink,
+          cloudflare: {
+            deploy: () => Promise.resolve({ url: "https://estate.workers.dev" }),
+            // oxlint-disable-next-line no-throw-literal -- the non-Error rejection IS the case under test
+            rollback: () => Promise.reject("quota exceeded"),
+          },
+          checkHealth: () => Promise.resolve(false),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "CLI_DEPLOY_ROLLBACK_FAILED",
+      message: expect.stringContaining("quota exceeded") as string,
+    });
+  });
+
+  it("a failed rollback is coded (CLI_DEPLOY_ROLLBACK_FAILED) without --json too — never a bare stack", async () => {
+    await expect(
+      run(
+        ["deploy", "--cloudflare"],
+        depsWith({
+          loadApp,
+          loadSites: () => Promise.resolve(sites),
+          sink: recordingSink().sink,
+          cloudflare: {
+            deploy: () => Promise.resolve({ url: "https://estate.workers.dev" }),
+            rollback: () => Promise.reject(new Error("wrangler rollback exited with code 1")),
+          },
+          checkHealth: () => Promise.resolve(false),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "CLI_DEPLOY_ROLLBACK_FAILED",
+      details: { healthUrl: "https://estate.workers.dev/readyz" },
+    });
+  });
+
+  it("--json emits a failed verdict for a coded refusal BEFORE the deploy (unknown --target)", async () => {
+    await expect(
+      run(
+        ["deploy", "--cloudflare", "--json", "--target", "nope"],
+        depsWith({ loadApp, loadSites: () => Promise.resolve(sites), sink: recordingSink().sink }),
+      ),
+    ).rejects.toMatchObject({ code: "CLI_UNKNOWN_TARGET" });
+
+    expect(lastLineVerdict()).toMatchObject({
+      schemaVersion: 1,
+      status: "failed",
+      deployedUrl: null,
+      healthUrl: null,
+      errorCode: "CLI_UNKNOWN_TARGET",
+    });
+  });
+
+  it("--json without --cloudflare is refused by code — no verdict shape exists for the static path", async () => {
+    await expect(
+      run(
+        ["deploy", "--json"],
+        depsWith({ loadApp, loadSites: () => Promise.resolve(sites), sink: recordingSink().sink }),
+      ),
+    ).rejects.toMatchObject({ code: "CLI_DEPLOY_JSON_UNSUPPORTED" });
+
+    // Refused before any work: no ship, no prose — and deliberately NO verdict line
+    // either (the refusal is itself pre-contract).
+    expect(lines).toEqual([]);
+  });
+
+  it("--json emits NO verdict on a non-coded crash — absence means UNKNOWN, never an inferred outcome", async () => {
+    await expect(
+      run(
+        ["deploy", "--cloudflare", "--json"],
+        depsWith({
+          loadApp,
+          loadSites: () => Promise.resolve(sites),
+          sink: recordingSink().sink,
+          cloudflare: {
+            deploy: () => Promise.reject(new Error("network sneezed")),
+            rollback: vi.fn(),
+          },
+        }),
+      ),
+    ).rejects.toThrow("network sneezed");
+
+    // A genuine bug must not fold into a tidy verdict a consumer would trust: nothing
+    // printed parses as one.
+    expect(lines.some((line) => line.includes('"schemaVersion"'))).toBe(false);
+  });
 });
 
 describe("run rollback", () => {

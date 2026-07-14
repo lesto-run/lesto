@@ -19,6 +19,10 @@ export type CliErrorCode =
   | "CLI_CONTENT_MISSING_ARGS"
   | "CLI_CONTENT_PACKAGES_MISSING"
   | "CLI_DEPLOY_INCOMPLETE_REMOTE"
+  /** `deploy --json` (the machine-readable verdict line) was asked for on a path that has no single verdict to report — it is only supported with `--cloudflare`. */
+  | "CLI_DEPLOY_JSON_UNSUPPORTED"
+  /** The post-deploy health gate failed AND the rollback ITSELF failed — the unhealthy Worker may still be serving traffic. Coded (never a bare stack) so both stderr and the `--json` verdict name the state. */
+  | "CLI_DEPLOY_ROLLBACK_FAILED"
   | "CLI_DEPLOY_UNHEALTHY"
   /** The in-preview AI bridge (ADR 0033 Inc 3) refused a turn: its tool is not on the positive read-only allowlist, or the dev MCP seam is not wired — inspect-only, fail-closed. */
   | "CLI_DEV_MCP_UNAVAILABLE"

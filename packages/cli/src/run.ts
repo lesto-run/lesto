@@ -687,7 +687,9 @@ const USAGE = [
   "  build             Prerender static sites to disk (--target <name>, --out <dir>, default out)",
   "  deploy            Build and ship the app. --cloudflare is the one-command edge deploy:",
   "                    `lesto deploy --cloudflare` pushes the Worker + its Static Assets via wrangler",
-  "                    (health-gated with --health-url <url>). Otherwise it ships static sites and prints",
+  "                    (health-gated with --health-url <url>; --json appends a machine-readable verdict",
+  "                    line — retained | rolled-back | failed — as the last line of stdout, for",
+  "                    orchestrators). Otherwise it ships static sites and prints",
   "                    the routing plan (--target, --out, --dist; --release for a versioned,",
   "                    atomically-flipped release, --version <v> to name it; publish a release to S3/R2",
   "                    with --bucket <name> --endpoint <url> [--region auto] [--pointer <key>] (implies",
@@ -2348,15 +2350,32 @@ function versionStamp(now: () => number): string {
  * with `/readyz` appended. With neither — the driver could not determine a URL and
  * none was supplied — the deploy still lands but the gate is skipped, and the CLI
  * says so out loud rather than silently shipping ungated.
+ *
+ * Resolves with the retained deploy's coordinates (for the `--json` verdict); every
+ * not-retained outcome is a coded throw: `CLI_DEPLOY_UNHEALTHY` when the gate failed
+ * and the rollback restored the previous deployment, `CLI_DEPLOY_ROLLBACK_FAILED`
+ * when the gate failed and the rollback ALSO failed — the one state that must never
+ * surface as a bare stack, because the unhealthy Worker may still be serving.
  */
-async function deployToCloudflare(args: readonly string[], deps: CliDeps): Promise<number> {
+async function deployToCloudflare(
+  args: readonly string[],
+  deps: CliDeps,
+): Promise<{ url: string | undefined; healthUrl: string | undefined }> {
   const { url } = await deps.cloudflare.deploy();
 
   const healthUrl =
     parseStringFlag(args, "health-url") ?? (url === undefined ? undefined : `${url}/readyz`);
 
   if (healthUrl !== undefined && !(await deps.checkHealth(healthUrl))) {
-    await deps.cloudflare.rollback();
+    try {
+      await deps.cloudflare.rollback();
+    } catch (cause) {
+      throw new CliError(
+        "CLI_DEPLOY_ROLLBACK_FAILED",
+        `Post-deploy health check failed at ${healthUrl} and the rollback also failed — the unhealthy Worker may still be live: ${cause instanceof Error ? cause.message : String(cause)}`,
+        { healthUrl },
+      );
+    }
 
     throw new CliError(
       "CLI_DEPLOY_UNHEALTHY",
@@ -2373,10 +2392,86 @@ async function deployToCloudflare(args: readonly string[], deps: CliDeps): Promi
       : `health check passed: ${healthUrl}`,
   );
 
-  return 0;
+  return { url, healthUrl };
+}
+
+/**
+ * The machine-readable verdict `lesto deploy --cloudflare --json` appends as the FINAL
+ * stdout line — a versioned cross-tool contract, so an orchestrator (Studio's fleet
+ * deploy step is the first consumer) reads the health-gate outcome instead of scraping
+ * this CLI's human prose. `schemaVersion` bumps on ANY shape or semantics change.
+ *
+ * Exactly one verdict is emitted per `--json` run:
+ *   - `retained`     the deploy is live (gate passed, or skipped because there was no
+ *                    URL to probe — `healthUrl: null` distinguishes the skip);
+ *   - `rolled-back`  the gate failed and the previous deployment WAS restored;
+ *   - `failed`       the deploy did not go live — including the gate-failed-AND-
+ *                    rollback-failed state (`errorCode: "CLI_DEPLOY_ROLLBACK_FAILED"`),
+ *                    where the unhealthy Worker may STILL be serving.
+ *
+ * Wrangler's streamed transcript precedes the verdict on stdout, so a consumer must
+ * take the LAST line that parses and validates — never the first URL-ish token or a
+ * bare "Deployed" in the driver noise. A run that emits NO verdict (a non-coded crash)
+ * is UNKNOWN; consumers must not infer an outcome from its absence.
+ */
+export type DeployJsonVerdict = {
+  readonly schemaVersion: 1;
+  readonly status: "retained" | "rolled-back" | "failed";
+  readonly deployedUrl: string | null;
+  readonly healthUrl: string | null;
+  readonly errorCode: string | null;
+  readonly message: string | null;
+};
+
+/** The current {@link DeployJsonVerdict} schema version. */
+const DEPLOY_JSON_SCHEMA_VERSION = 1;
+
+/** Print the `--json` verdict — one line, the last thing on stdout. */
+function emitDeployJsonVerdict(
+  deps: CliDeps,
+  verdict: Omit<DeployJsonVerdict, "schemaVersion">,
+): void {
+  deps.out(JSON.stringify({ schemaVersion: DEPLOY_JSON_SCHEMA_VERSION, ...verdict }));
 }
 
 async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number> {
+  if (!args.includes("--json")) return runDeployCore(args, deps);
+
+  // `--json` reports the single health-gated Cloudflare verdict. The static-ship
+  // path has no gate and no one verdict to report, so a `--json` there would emit
+  // fiction — refuse loud instead of inventing a shape.
+  if (!args.includes("--cloudflare")) {
+    throw new CliError(
+      "CLI_DEPLOY_JSON_UNSUPPORTED",
+      "--json is only supported with --cloudflare (it reports the health-gated deploy verdict).",
+    );
+  }
+
+  try {
+    return await runDeployCore(args, deps);
+  } catch (error) {
+    // Emit the failure verdict for anything CODED — the CLI's deliberate refusals,
+    // health-gate outcomes included — then rethrow so the bin still prints
+    // `code: message` on stderr and exits 1. A non-coded throw is a genuine bug:
+    // no verdict is emitted (absence = unknown, never an inferred outcome) and the
+    // stack surfaces loudly.
+    if (isLestoError(error)) {
+      const healthUrl = error.details["healthUrl"];
+
+      emitDeployJsonVerdict(deps, {
+        status: error.code === "CLI_DEPLOY_UNHEALTHY" ? "rolled-back" : "failed",
+        deployedUrl: null,
+        healthUrl: typeof healthUrl === "string" ? healthUrl : null,
+        errorCode: error.code,
+        message: error.message,
+      });
+    }
+
+    throw error;
+  }
+}
+
+async function runDeployCore(args: readonly string[], deps: CliDeps): Promise<number> {
   const config = await deps.loadApp();
 
   const app = await createApp(config);
@@ -2416,7 +2511,19 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
   // bound Static Assets in one atomic step, so the builds above merely freshen
   // `out/` for it — there is no separate static ship or pointer flip here.
   if (args.includes("--cloudflare")) {
-    return deployToCloudflare(args, deps);
+    const { url, healthUrl } = await deployToCloudflare(args, deps);
+
+    if (args.includes("--json")) {
+      emitDeployJsonVerdict(deps, {
+        status: "retained",
+        deployedUrl: url ?? null,
+        healthUrl: healthUrl ?? null,
+        errorCode: null,
+        message: null,
+      });
+    }
+
+    return 0;
   }
 
   const plan = planDeploy(selected, manifest);
