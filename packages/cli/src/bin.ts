@@ -1502,6 +1502,15 @@ try {
     installShutdown: (drain) =>
       onShutdownSignals(drain, { forceExitTimeoutMs: DEFAULT_FORCE_EXIT_TIMEOUT_MS }),
     out: console.log,
+    // Drain stdout before this bin's hard `process.exit(code)` below: exit "may result
+    // in data written to process.stdout being truncated" on an async pipe (Node docs),
+    // and the deploy --json verdict is exactly a final stdout line an orchestrator is
+    // parsing. The empty write queues BEHIND any pending chunk, so its callback fires
+    // only once the real output is on the wire.
+    flushOut: () =>
+      new Promise((resolve) => {
+        process.stdout.write("", () => resolve());
+      }),
   });
 } catch (error) {
   // Same central contract as the early-dispatch commands: a coded `CliError`

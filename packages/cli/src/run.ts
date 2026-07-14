@@ -666,6 +666,17 @@ export interface CliDeps {
 
   /** Where a line of output goes (the bin passes `console.log`). */
   out: (line: string) => void;
+
+  /**
+   * Resolves once everything handed to {@link out} is ON THE WIRE (the bin queues an
+   * empty `process.stdout.write` behind the pending chunks). Needed because the bin
+   * hard-`process.exit()`s after a command returns, and Node documents that exit "may
+   * result in data written to `process.stdout` being truncated" on an async pipe —
+   * and the `deploy --json` verdict is exactly a final stdout line an orchestrator
+   * parses. Awaited after every verdict emission; optional so tests and embedders
+   * without a process boundary can omit it.
+   */
+  flushOut?: () => Promise<void>;
 }
 
 /** The usage text printed for `help`, an empty command, or an unknown command. */
@@ -2366,6 +2377,9 @@ async function deployToCloudflare(
   const healthUrl =
     parseStringFlag(args, "health-url") ?? (url === undefined ? undefined : `${url}/readyz`);
 
+  // Both gate-failure throws carry the Worker's reported URL in `details` (never in the
+  // verdict's `deployedUrl`, which means "the live RETAINED artifact") — on the
+  // rollback-failed arm it names what may still be serving unhealthy traffic.
   if (healthUrl !== undefined && !(await deps.checkHealth(healthUrl))) {
     try {
       await deps.cloudflare.rollback();
@@ -2373,14 +2387,14 @@ async function deployToCloudflare(
       throw new CliError(
         "CLI_DEPLOY_ROLLBACK_FAILED",
         `Post-deploy health check failed at ${healthUrl} and the rollback also failed — the unhealthy Worker may still be live: ${cause instanceof Error ? cause.message : String(cause)}`,
-        { healthUrl },
+        { healthUrl, deployedUrl: url ?? null },
       );
     }
 
     throw new CliError(
       "CLI_DEPLOY_UNHEALTHY",
       `Post-deploy health check failed at ${healthUrl}; rolled the Worker back to its previous deployment.`,
-      { healthUrl },
+      { healthUrl, deployedUrl: url ?? null },
     );
   }
 
@@ -2423,15 +2437,33 @@ export type DeployJsonVerdict = {
   readonly message: string | null;
 };
 
-/** The current {@link DeployJsonVerdict} schema version. */
+/**
+ * The current {@link DeployJsonVerdict} schema version.
+ *
+ * v1 vocabulary decisions, so a future editor doesn't re-litigate them blind
+ * (chief-architect review, 2026-07-14):
+ *  - NO fourth `rollback-failed` status: `status` is the coarse phase, `errorCode` the
+ *    fine reason (`CLI_DEPLOY_ROLLBACK_FAILED` distinguishes it) — coarse-status +
+ *    fine-code keeps the enum stable as new failure reasons appear.
+ *  - NO separate `healthStatus` field: within v1, `retained` + `healthUrl: null` IS the
+ *    gate-skipped encoding (nothing was probed). Adding a field later is an ADDITIVE
+ *    v1 change (consumers must tolerate unknown keys); changing what an existing field
+ *    MEANS is what bumps `schemaVersion`.
+ */
 const DEPLOY_JSON_SCHEMA_VERSION = 1;
 
-/** Print the `--json` verdict — one line, the last thing on stdout. */
-function emitDeployJsonVerdict(
+/**
+ * Print the `--json` verdict — one line, the last thing on stdout — and wait for it to
+ * reach the wire (see {@link CliDeps.flushOut}) so the bin's hard exit cannot truncate
+ * the one line the contract promises.
+ */
+async function emitDeployJsonVerdict(
   deps: CliDeps,
   verdict: Omit<DeployJsonVerdict, "schemaVersion">,
-): void {
+): Promise<void> {
   deps.out(JSON.stringify({ schemaVersion: DEPLOY_JSON_SCHEMA_VERSION, ...verdict }));
+
+  await deps.flushOut?.();
 }
 
 async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number> {
@@ -2458,7 +2490,7 @@ async function runDeploy(args: readonly string[], deps: CliDeps): Promise<number
     if (isLestoError(error)) {
       const healthUrl = error.details["healthUrl"];
 
-      emitDeployJsonVerdict(deps, {
+      await emitDeployJsonVerdict(deps, {
         status: error.code === "CLI_DEPLOY_UNHEALTHY" ? "rolled-back" : "failed",
         deployedUrl: null,
         healthUrl: typeof healthUrl === "string" ? healthUrl : null,
@@ -2514,7 +2546,7 @@ async function runDeployCore(args: readonly string[], deps: CliDeps): Promise<nu
     const { url, healthUrl } = await deployToCloudflare(args, deps);
 
     if (args.includes("--json")) {
-      emitDeployJsonVerdict(deps, {
+      await emitDeployJsonVerdict(deps, {
         status: "retained",
         deployedUrl: url ?? null,
         healthUrl: healthUrl ?? null,

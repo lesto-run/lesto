@@ -4284,6 +4284,39 @@ describe("run deploy", () => {
     });
   });
 
+  it("an explicit --health-url gates a NO-URL worker: gate failure details carry deployedUrl null", async () => {
+    // The driver reported no URL, so the gate runs only because --health-url named a
+    // probe target. On failure the coded details' deployedUrl is honestly null — there
+    // is no known Worker URL to report, rollback succeeded or not.
+    const gateDeps = (rollback: () => Promise<void>): Partial<CliDeps> => ({
+      loadApp,
+      loadSites: () => Promise.resolve(sites),
+      sink: recordingSink().sink,
+      cloudflare: { deploy: () => Promise.resolve({ url: undefined }), rollback },
+      checkHealth: () => Promise.resolve(false),
+    });
+
+    await expect(
+      run(
+        ["deploy", "--cloudflare", "--health-url", "https://estate.example.com/healthz"],
+        depsWith(gateDeps(() => Promise.resolve())),
+      ),
+    ).rejects.toMatchObject({
+      code: "CLI_DEPLOY_UNHEALTHY",
+      details: { healthUrl: "https://estate.example.com/healthz", deployedUrl: null },
+    });
+
+    await expect(
+      run(
+        ["deploy", "--cloudflare", "--health-url", "https://estate.example.com/healthz"],
+        depsWith(gateDeps(() => Promise.reject(new Error("wrangler rollback exited with code 1")))),
+      ),
+    ).rejects.toMatchObject({
+      code: "CLI_DEPLOY_ROLLBACK_FAILED",
+      details: { healthUrl: "https://estate.example.com/healthz", deployedUrl: null },
+    });
+  });
+
   it("--json emits a rolled-back verdict when the health gate fails — and still refuses by code", async () => {
     const rollback = vi.fn(() => Promise.resolve());
 
@@ -4390,8 +4423,62 @@ describe("run deploy", () => {
       ),
     ).rejects.toMatchObject({
       code: "CLI_DEPLOY_ROLLBACK_FAILED",
-      details: { healthUrl: "https://estate.workers.dev/readyz" },
+      // details carry the Worker's URL — on this arm it names what may still be
+      // serving unhealthy traffic (it is deliberately NOT the verdict's deployedUrl,
+      // which means the live RETAINED artifact).
+      details: {
+        healthUrl: "https://estate.workers.dev/readyz",
+        deployedUrl: "https://estate.workers.dev",
+      },
     });
+  });
+
+  it("--json awaits the stdout flush seam AFTER emitting the verdict — both arms (exit-truncation guard)", async () => {
+    // The bin hard-`process.exit()`s after a command returns, and Node documents that
+    // exit may truncate a pending async pipe write — the verdict is exactly a final
+    // stdout line an orchestrator parses. Each emission must await deps.flushOut with
+    // the verdict already in the output.
+    const flushes: number[] = [];
+    const flushOut = (): Promise<void> => {
+      flushes.push(lines.length);
+
+      return Promise.resolve();
+    };
+    const cloudflareDeps = (healthy: boolean): Partial<CliDeps> => ({
+      loadApp,
+      loadSites: () => Promise.resolve(sites),
+      sink: recordingSink().sink,
+      cloudflare: {
+        deploy: () => Promise.resolve({ url: "https://estate.workers.dev" }),
+        rollback: vi.fn(),
+      },
+      checkHealth: () => Promise.resolve(healthy),
+      flushOut,
+    });
+
+    // Retained arm: flushed exactly once, after the verdict line landed.
+    const code = await run(["deploy", "--cloudflare", "--json"], depsWith(cloudflareDeps(true)));
+
+    expect(code).toBe(0);
+    expect(flushes).toEqual([lines.length]);
+    expect(JSON.parse(lines.at(-1) as string)).toMatchObject({ status: "retained" });
+
+    // Failure arm: the rolled-back verdict is flushed BEFORE the coded throw reaches
+    // the bin (which will hard-exit) — and the coded details carry the Worker URL.
+    lines = [];
+    flushes.length = 0;
+
+    await expect(
+      run(["deploy", "--cloudflare", "--json"], depsWith(cloudflareDeps(false))),
+    ).rejects.toMatchObject({
+      code: "CLI_DEPLOY_UNHEALTHY",
+      details: {
+        healthUrl: "https://estate.workers.dev/readyz",
+        deployedUrl: "https://estate.workers.dev",
+      },
+    });
+    expect(flushes).toEqual([lines.length]);
+    expect(JSON.parse(lines.at(-1) as string)).toMatchObject({ status: "rolled-back" });
   });
 
   it("--json emits a failed verdict for a coded refusal BEFORE the deploy (unknown --target)", async () => {
