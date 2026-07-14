@@ -74,6 +74,11 @@ function resolverFor(map: Record<string, readonly string[]>): Resolver {
 const PUBLIC = "93.184.216.34"; // example.com
 const publicResolver: Resolver = resolverFor({ "example.com": [PUBLIC] });
 
+// A transport that rejects INSTANTLY — a connect-time failure (ECONNREFUSED, DNS
+// ENOTFOUND, a TLS handshake error, undici's `TypeError: fetch failed`) that lands
+// BEFORE any delivery deadline fires. Module-scoped: it captures nothing.
+const instantTransportFailure: FetchLike = () => Promise.reject(new TypeError("fetch failed"));
+
 // A secrets source backed by an in-memory map, standing in for env/a vault.
 function secretsFrom(map: Record<string, string>): SecretSource {
   return (secretId) => map[secretId];
@@ -845,8 +850,7 @@ describe("Webhooks delivery timeout (DoS bound)", () => {
     // so `deadline.aborted` is false. The old catch mislabeled every such error as
     // WEBHOOK_DELIVERY_TIMEOUT ("did not complete within 5ms" — factually false);
     // structural discrimination on `deadline.aborted` gives it the honest code.
-    const failing: FetchLike = () => Promise.reject(new TypeError("fetch failed"));
-    const deliver = deliverHandler(failing, 5);
+    const deliver = deliverHandler(instantTransportFailure, 5);
 
     const error = await rejection(Promise.resolve(deliver?.(job)));
 
