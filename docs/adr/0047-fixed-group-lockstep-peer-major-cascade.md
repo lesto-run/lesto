@@ -82,39 +82,60 @@ Adopt **Option A**:
 1. `.changeset/config.json` sets
    `___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH.onlyUpdatePeerDependentsWhenOutOfRange = true`.
 2. Every intra-workspace `@lesto→@lesto` peer range becomes `workspace:>=0.1.0` (all eight edges,
-   including the two inert private ones, for uniformity so the guard needs no private-exemption and a
-   future de-privatization cannot reopen the bug). `peerDependenciesMeta.optional` is unchanged.
+   including the one inert private-to-private edge `content-components→content-mdx`, for uniformity so
+   the guard needs no private-exemption and a future de-privatization cannot reopen the bug).
+   `peerDependenciesMeta.optional` is unchanged.
 3. `rm -f bun.lock && bun install`; commit the resynced lockfile.
 4. A committed regression gate (`scripts/lib/assert-no-phantom-major.mjs` +
-   `scripts/assert-no-phantom-major.test.mjs`, wired into `test:scripts-unit`) asserts both
-   preconditions on the real config + manifests: the config key is `true`, and every peer whose name is
-   itself a workspace package uses an open `>=X.Y.Z` floor. These two conditions are jointly
-   **necessary and sufficient** to prevent the cascade for changesets 6.x — a peer edge is the only
-   spurious-major source, and a satisfied floor + out-of-range gating makes `shouldBumpMajor` false for
-   every intra-group edge.
+   `scripts/assert-no-phantom-major.test.mjs`, wired into `test:scripts-unit`) with **two layers**:
+   - **Static diagnostic** over the publishable `packages/` set — flags the exact bad edge and how to
+     fix it. An intra-group peer range is safe iff it is an open `>=X.Y.Z` floor **and** that floor is
+     at or below the peer's current version (a floor *above* current, e.g. `>=0.5.0` at 0.2.0, is
+     syntactically a floor but still leaves range on the next bump — a fail-open the wrap-up review
+     caught and this layer now rejects).
+   - **Behavioral proof** (authoritative) — loads the **full** workspace set (`packages/` + `site/` +
+     `www/` + `examples/*`) via `@manypkg/get-packages`, injects a synthetic **minor** changeset, runs
+     the real `assembleReleasePlan`, and asserts zero major bumps. It also pins the installed
+     `@changesets/assemble-release-plan` major at 6. Because it recomputes the *real* release plan, it
+     fails **closed** if any changesets upgrade renames/ignores the config option or changes
+     `shouldBumpMajor` (the plan would show majors → red) — closing the residual below for the common
+     cases, not just documenting it.
+
+   The invariant the gate proves — a satisfied floor + out-of-range gating makes `shouldBumpMajor`
+   false for every intra-group edge, and a peer edge is the only spurious-major originator (verified in
+   `determineDependents`) — is jointly **necessary and sufficient** for changesets 6.x.
 
 Verified harmless downstream: `rewriteDepRange` publishes `workspace:>=0.1.0` as the bare `>=0.1.0`
 floor (no leftover `workspace:` for `publish.mjs`'s fail-closed guard); `isExternalPeer` exempts
 `@lesto/*` siblings so the peer-honesty gate is unaffected; bun 1.3.5 accepts `workspace:>=0.1.0` and
-links the local workspace package (a full `rm -f bun.lock && bun install` succeeded and touched only
-the eight peer-range lines). If a future bun regresses `workspace:>=`, fall back to the bare literal
-`>=0.1.0` — it resolves locally and publishes identically, and the gate predicate accepts both.
+links the local workspace package (a full `rm -f bun.lock && bun install` succeeded, changing the eight
+peer-range lines **plus** one darwin-scoped `rollup/fsevents` optional-dep line — a macOS resolution
+artifact bun records cross-platform-safely; `bun install --frozen-lockfile` stays green). If a future
+bun regresses `workspace:>=`, fall back to the bare literal `>=0.1.0` — it resolves locally and
+publishes identically, and the gate predicate accepts both.
 
 ## Consequences
 
 - **Positive:** minors land as minors forever with no human intervention; the guard runs on every CI
   push (`test:scripts-unit`); no runtime script, no patched dependency; published optional-peer ranges
   become honest floors; local resolution and the publish pipeline are provably unaffected.
-- **Negative / accepted:** the seven published optional-peer ranges widen from an exact pin to
-  `>=0.1.0` (a loose floor — acceptable and arguably correct for opt-in lockstep add-ons); the fix
-  relies on `___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH`, an API upstream marks as changeable in
-  a patch (stable for years, and the gate would catch a break).
-- **Residual risk (fail-open on a changesets *major* upgrade):** the static gate's sufficiency proof is
-  bound to changesets 6.x; a major upgrade could in principle change `shouldBumpMajor` semantics while
-  the gate stays green. Mitigations: the documented behavioral dry-run alternative (`assembleReleasePlan`
-  against a synthetic minor — immune to fail-open, kept as the repro probe under gitignored `var/`), an
-  optional one-line installed-major assertion in the gate, and the existing human version-read at
-  `release:cut`. A changesets major bump is a deliberate, reviewed event.
+- **Negative / accepted:** the seven published optional-peer ranges widen from an exact pin to a loose
+  `>=0.1.0` floor. **Trade-off (accepted):** an unbounded `>=` floor never advances, so post-1.0
+  `@lesto/identity` still advertises compatibility with `@lesto/mail@0.1.0`; because these peers ship in
+  lockstep the co-installed version always satisfies it, but a consumer independently pinning an old
+  dependent against a much newer peer would see a looser-than-real compatibility claim. Acceptable for
+  opt-in add-ons (lockstep publishing doesn't itself establish cross-version API compat); revisit with a
+  bounded range at a genuine major if it ever matters. The fix also relies on
+  `___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH`, an API upstream marks as changeable in a patch
+  (stable for years; see the residual + its behavioral mitigation below).
+- **Residual risk (changesets upgrade):** the *static* layer's sufficiency proof is bound to changesets
+  6.x. The **behavioral** layer closes the common cases — it recomputes the real release plan, so if any
+  changesets upgrade (major *or* minor) renames/ignores `onlyUpdatePeerDependentsWhenOutOfRange` or
+  changes `shouldBumpMajor`, the computed plan shows majors and the test goes **red**; it also pins the
+  installed major at 6, so a major bump additionally trips a clear assertion. The un-closeable tail is a
+  changesets change that *both* preserves the synthetic-minor's zero-major output *and* silently breaks
+  some other release — vanishingly unlikely, and the human version-read at `release:cut` remains the
+  backstop. A changesets major bump is a deliberate, reviewed event.
 
 ## Alternatives considered (and why not)
 
