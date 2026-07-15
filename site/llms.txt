@@ -9,7 +9,7 @@
 - `search`
 
 ## Content collections
-- `docs` (42 entries)
+- `docs` (44 entries)
 
 ## CLI commands
 - `lesto add`: Wire an integration (mcp-auth: an authenticated MCP Resource Server)

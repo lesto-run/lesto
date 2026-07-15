@@ -18,7 +18,7 @@ _No file-based routes (`app/routes/`). This app registers its pages programmatic
 
 ## Content collections
 
-- `docs` — 42 entries
+- `docs` — 44 entries
 
 ## CLI commands
 
