@@ -329,6 +329,10 @@ describe.each(drivers)("full-app journey + cross-process sharing: $name", (drive
       "lesto_sessions",
       "lesto_rate_limits",
       "lesto_cache",
+      // The 2FA migration creates both; drop them or a shared-Postgres re-migrate
+      // collides with `relation "totp_factors" already exists`.
+      "totp_factors",
+      "recovery_codes",
       "users",
       "schema_migrations",
     ]) {

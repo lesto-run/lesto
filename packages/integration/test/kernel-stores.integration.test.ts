@@ -70,6 +70,10 @@ describe.each(drivers)("createApp({ db }) durable by default: $name", (driver) =
     // Fresh schema each test (Postgres persists across tests).
     await handle.exec("DROP TABLE IF EXISTS lesto_sessions");
     await handle.exec("DROP TABLE IF EXISTS lesto_rate_limits");
+    // The 2FA migration (totpMigration) creates both of these; drop them too or a
+    // shared-Postgres re-migrate collides with `relation "totp_factors" already exists`.
+    await handle.exec("DROP TABLE IF EXISTS totp_factors");
+    await handle.exec("DROP TABLE IF EXISTS recovery_codes");
     await handle.exec("DROP TABLE IF EXISTS users");
     await handle.exec("DROP TABLE IF EXISTS schema_migrations");
   });
