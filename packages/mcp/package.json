@@ -22,8 +22,8 @@
     "zod": "^4.0.0"
   },
   "peerDependencies": {
-    "@lesto/content-core": "workspace:*",
-    "@lesto/content-store": "workspace:*"
+    "@lesto/content-core": "workspace:>=0.1.0",
+    "@lesto/content-store": "workspace:>=0.1.0"
   },
   "peerDependenciesMeta": {
     "@lesto/content-core": {

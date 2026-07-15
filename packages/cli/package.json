@@ -44,10 +44,10 @@
     "@lesto/ui-kit": "workspace:*"
   },
   "peerDependencies": {
-    "@lesto/content-core": "workspace:*",
-    "@lesto/content-store": "workspace:*",
-    "@lesto/island-dev": "workspace:*",
-    "@lesto/styles": "workspace:*"
+    "@lesto/content-core": "workspace:>=0.1.0",
+    "@lesto/content-store": "workspace:>=0.1.0",
+    "@lesto/island-dev": "workspace:>=0.1.0",
+    "@lesto/styles": "workspace:>=0.1.0"
   },
   "peerDependenciesMeta": {
     "@lesto/content-core": {
