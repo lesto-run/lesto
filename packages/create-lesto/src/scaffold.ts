@@ -49,7 +49,7 @@ import type { LestoDepResolver } from "./templates";
 const PACKAGES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /** The published range a scaffolded app pins each `@lesto/*` dep at by default. */
-const LESTO_DEP_RANGE = "^0.1.0";
+const LESTO_DEP_RANGE = "^0.2.0";
 
 /** Default pin: the published `^0.x` range (resolves from the registry post-publish). */
 export const publishedRangePin: LestoDepResolver = () => LESTO_DEP_RANGE;

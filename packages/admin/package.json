@@ -1,6 +1,6 @@
 {
   "name": "@lesto/admin",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "license": "MIT",
   "description": "Lesto's admin operations layer — CRUD over a @lesto/db Table with Zod-validated input, the backbone for a generic admin UI.",
   "type": "module",

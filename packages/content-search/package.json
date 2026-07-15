@@ -1,6 +1,6 @@
 {
   "name": "@lesto/content-search",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "PREVIEW (not part of the supported v1 content seam) — client-safe vector search for semantic content discovery. Brute-force O(n) cosine/Hamming search: practical only up to ~10k documents. Experimental, coverage-gate-exempt.",
   "type": "module",
   "sideEffects": false,

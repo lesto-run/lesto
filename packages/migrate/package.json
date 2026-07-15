@@ -1,6 +1,6 @@
 {
   "name": "@lesto/migrate",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "license": "MIT",
   "description": "Lesto's migrator — a Tracks-style migration system (ordering, bookkeeping, indexes) over @lesto/db schema-as-value DDL on an injected SQL database.",
   "type": "module",
