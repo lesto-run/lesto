@@ -1238,7 +1238,13 @@ export function serve(app: App, options: ServeOptions = {}): Promise<Server> {
     compress: options.compress !== false,
     trustProxy: options.trustProxy ?? false,
     newRequestId: options.newRequestId ?? randomUUID,
-    logRequest: options.logRequest ?? defaultLogRequest,
+    // Guarded, because the access sink is APP code now (`LestoAppConfig.logRequest`) and it
+    // runs in the request `finally` BEFORE the span is closed. An unguarded throw there
+    // skipped `span.setStatus`/`span.end()`, so one bad line — a redaction regex meeting an
+    // unexpected path — silently leaked every request span and starved the OTLP exporter
+    // while the request itself still answered 200. A logging failure must never break
+    // serving or tracing: report it through the error sink and carry on.
+    logRequest: guardedLogRequest(options.logRequest ?? defaultLogRequest, logError),
     logError,
     now: options.now ?? Date.now,
     concurrency: concurrencyLimiter(options.maxInFlightRequests ?? DEFAULT_MAX_IN_FLIGHT_REQUESTS),
@@ -2125,6 +2131,29 @@ export function respondWithError(
 /** The default error sink: structured-enough for a server log. */
 function defaultLogError(message: string, error: unknown): void {
   console.error(message, error);
+}
+
+/**
+ * Wrap an access-log sink so a throw from it can never escape into the request path.
+ *
+ * The sink is called from the request's `finally`, ahead of the span-closing block, so an
+ * unguarded throw both skipped `span.end()` (leaking the span, and with an OTLP tracer
+ * exporting nothing at all) and surfaced as a rejected promise from the connection handler.
+ * Since `LestoAppConfig.logRequest` lets an APP supply this function, that has to be a
+ * reported non-event rather than a silent hole: the failure goes to the error sink and the
+ * request finishes normally. Applied once to whichever sink is in play — custom or default.
+ */
+function guardedLogRequest(
+  sink: (entry: AccessEntry) => void,
+  logError: (message: string, error: unknown) => void,
+): (entry: AccessEntry) => void {
+  return (entry) => {
+    try {
+      sink(entry);
+    } catch (error) {
+      logError("the access-log sink threw (the request was served normally)", error);
+    }
+  };
 }
 
 /**

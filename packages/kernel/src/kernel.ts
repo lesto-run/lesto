@@ -115,10 +115,16 @@ export type KernelDatabase = SqlDatabase;
  * One served request's access record, as handed to {@link LestoAppConfig.logRequest}.
  *
  * A STRUCTURAL MIRROR of `@lesto/runtime`'s `AccessEntry`, not an import: `@lesto/runtime`
- * depends on this package, so importing it here would close a dependency cycle. The two are
- * kept honest by the compiler rather than by discipline — `@lesto/cli`'s `runServe` assigns a
- * config's `logRequest` straight into `serve`'s option, which imports the REAL `AccessEntry`,
- * so a field that drifts out of this mirror fails that assignment's typecheck.
+ * depends on this package, so importing it here would close a dependency cycle. (The same
+ * shape `EdgeAccessEntry`, `RequestTracer`, and `TraceparentParser` are already mirrored in.)
+ *
+ * Drift is caught by the compiler, but only in ONE direction on its own. `@lesto/cli`'s
+ * `runServe` assigns a config's `logRequest` into `serve`'s option, and under
+ * `strictFunctionTypes` a callback parameter is CONTRAVARIANT — so that assignment rejects a
+ * field REMOVED from `AccessEntry` or RETYPED, while a field ADDED to it compiles clean and
+ * silently never reaches an app's sink. Addition is the likely direction (both `truncated` and
+ * `activeStreams` arrived that way), so the honest guard is the explicit both-ways assertion in
+ * `@lesto/cli`'s `test/run.test.ts` — the one package that can see both types.
  */
 export interface AccessLogEntry {
   readonly method: string;
@@ -202,17 +208,28 @@ export interface LestoAppConfig {
    * `serve` has always taken this seam; what it lacked was a way for an APP to reach it.
    * `lesto serve` builds its serve options itself, so a project had no hook and every
    * deploy got the default sink — which logs `path` VERBATIM. That is a real leak for a
-   * URL that carries a credential in the path (a signed calendar/feed URL, a
-   * capability link): the secret lands in stdout and then in whatever ships logs
-   * onward. Setting this to a redacting sink turns the "known gap" ADR 0009 documents
-   * into a live control, configured where the rest of the app is configured.
+   * URL that carries a credential in the path (a signed calendar/feed URL, a capability
+   * link): the secret lands in stdout and then in whatever ships logs onward. Setting
+   * this to a redacting sink makes that an app-level control, configured where the rest
+   * of the app is configured.
    *
-   * Read by `@lesto/cli` when it stands the server up; the kernel itself never calls it
-   * (it wires no server), the same way it carries `ui.css` for the CLI to read.
+   * Read by `@lesto/cli` on the `lesto serve` path; the kernel itself never calls it (it
+   * wires no server), the same way it carries `ui.css` for the CLI to read.
+   *
+   * SCOPE — this is the served stdout access line, and nothing else:
+   *   - `lesto dev` does NOT honour it. Dev installs its own sink to feed the dev-state
+   *     ring the MCP control plane reads (ADR 0032), so a dev run still logs — and still
+   *     records — the verbatim path.
+   *   - A Cloudflare Worker entry builds its own app and passes its own `logRequest` to
+   *     `toFetchHandler`, so it never reads this field.
+   *   - With `LESTO_OTLP_URL` set, the request SPAN still carries `http.path` verbatim.
+   *     Redacting the log does not redact the trace.
    *
    * A custom sink REPLACES the default wholesale rather than layering on it, so a sink
    * that only forwards to a collector also silences the console line — call
-   * `defaultLogRequest` from inside it when you want both.
+   * `defaultLogRequest` from inside it when you want both. It is a SINK, not a
+   * transform: returning a redacted string changes nothing, and a throw is caught and
+   * reported rather than failing the request.
    */
   logRequest?: (entry: AccessLogEntry) => void;
 

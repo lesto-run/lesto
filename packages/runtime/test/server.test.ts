@@ -35,6 +35,7 @@ import {
   withSecurityHeaders,
   withTimeout,
 } from "../src/server";
+import type { ServeOptions } from "../src/server";
 import { etagFor } from "../src/index";
 import { RuntimeError } from "../src/errors";
 import { gunzipSync } from "node:zlib";
@@ -1117,6 +1118,61 @@ describe("serve", () => {
     expect(line.truncated).toBeUndefined();
 
     logSpy.mockRestore();
+  });
+
+  it("survives a THROWING access-log sink: the request is served, the span still closes, and the failure is reported", async () => {
+    // `LestoAppConfig.logRequest` lets an APP supply this sink, and it runs in the request's
+    // `finally` AHEAD of the span-closing block. Unguarded, one throw — a redaction regex
+    // meeting an unexpected path — skipped `span.end()` entirely, so with an OTLP tracer the
+    // exporter received NOTHING while requests still answered 200. A silent, total loss of
+    // tracing from a logging bug. The guard turns that into a reported non-event.
+    const errors: Array<{ message: string; error: unknown }> = [];
+
+    const started: string[] = [];
+    const ended: string[] = [];
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: {}, body: "ok" }),
+    };
+
+    server = await serve(app, {
+      port: 0,
+      newRequestId: () => "throwing-sink-1",
+      logRequest: () => {
+        throw new Error("BOOM from the app's access-log sink");
+      },
+      logError: (message, error) => errors.push({ message, error }),
+      // A minimal structural tracer: records whether each span was closed.
+      tracer: {
+        startSpan: (name: string) => {
+          started.push(name);
+
+          return {
+            setAttribute: () => undefined,
+            setStatus: () => undefined,
+            end: () => ended.push(name),
+            data: { traceId: "trace-1", spanId: "span-1" },
+          };
+        },
+      } satisfies NonNullable<ServeOptions["tracer"]>,
+    });
+
+    const response = await makeRequest(server.port, { method: "GET", path: "/x" });
+
+    // The request is unaffected — a logging failure must never change what the client gets.
+    expect(response.status).toBe(200);
+    expect(response.body).toBe("ok");
+
+    // ...and the span STILL closed. This is the assertion that fails without the guard:
+    // the throw would have skipped `span.end()`, leaving started=1, ended=0.
+    expect(started).toHaveLength(1);
+    expect(ended).toEqual(started);
+
+    // The failure is reported rather than swallowed — loud, but not fatal.
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.message).toContain("access-log sink threw");
+    expect((errors[0]!.error as Error).message).toBe("BOOM from the app's access-log sink");
   });
 
   it("bounds the readiness probe: a wedged probe answers 503 rather than hanging", async () => {
