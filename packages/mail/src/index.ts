@@ -81,6 +81,7 @@ export type {
 } from "./mailer";
 
 export {
+  buildMessage,
   createSmtpTransport,
   SmtpTransportError,
   nodeConnect,
@@ -89,6 +90,7 @@ export {
   loadTls,
 } from "./smtp";
 export type {
+  RandomBytes,
   SmtpAuth,
   SmtpErrorCode,
   SmtpSocket,

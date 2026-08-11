@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildMessage,
   createSmtpTransport,
   loadNet,
   loadTls,
@@ -9,7 +10,7 @@ import {
   SmtpTransportError,
 } from "../src/index";
 
-import type { NetModule, RenderedEmail, SmtpSocket, TlsModule } from "../src/index";
+import type { NetModule, RandomBytes, RenderedEmail, SmtpSocket, TlsModule } from "../src/index";
 
 /**
  * A scripted fake SMTP server socket. For each command the client writes, it
@@ -254,8 +255,12 @@ describe("createSmtpTransport", () => {
     expect(body).toBeDefined();
     expect(body).toContain("text/plain");
     expect(body).toContain("text/html");
-    // A blank line ends the header block before the first MIME boundary.
-    expect(body).toContain('boundary="lesto-lesto-mail-7"\r\n\r\n--lesto-lesto-mail-7');
+    // The boundary is CSPRNG-minted per build (never messageId-derived), so
+    // read it back off the header, then hold the body to it: a blank line ends
+    // the header block before the first delimiter line.
+    const boundary = /boundary="([^"]+)"/.exec(body!)?.[1];
+    expect(boundary).toMatch(/^lesto-[0-9a-f]{32}$/);
+    expect(body).toContain(`boundary="${boundary}"\r\n\r\n--${boundary}`);
   });
 
   it("falls back to the auth user as From when none is given", async () => {
@@ -507,11 +512,11 @@ describe("createSmtpTransport", () => {
     ).rejects.toMatchObject({ code: "MAIL_INVALID_HEADER" });
   });
 
-  // messageId is spliced RAW into `Message-ID: <…>` and the MIME boundary
-  // (`boundary="lesto-<messageId>"`). A RenderedEmail is public surface, so the
-  // transport must re-validate it — the Mailer's own ids are safe, a hand-built
-  // one is not. Both tests use a socket with a FULL reply set so that WITHOUT the
-  // guard the send would RESOLVE (a clean assertion miss), never hang.
+  // messageId is spliced RAW into `Message-ID: <…>` (the MIME boundary is
+  // CSPRNG-minted, no longer id-derived). A RenderedEmail is public surface, so
+  // the transport must re-validate it — the Mailer's own ids are safe, a
+  // hand-built one is not. Both tests use a socket with a FULL reply set so that
+  // WITHOUT the guard the send would RESOLVE (a clean assertion miss), never hang.
   const fullDialogue = (): FakeSocket =>
     new FakeSocket([
       "220 ready\r\n",
@@ -543,9 +548,10 @@ describe("createSmtpTransport", () => {
     expect(connected).toBe(false);
   });
 
-  it("rejects a messageId containing a double-quote or whitespace (MIME boundary injection)", async () => {
+  it("rejects a messageId containing a double-quote or whitespace (header-token injection)", async () => {
     // Neither carries a CRLF, so assertNoInjection alone would pass them through —
-    // it is the token/charset check that closes the boundary vector.
+    // it is the token/charset check that keeps the id one unbroken token inside
+    // its angle-bracketed / quoted header slot.
     const quote = createSmtpTransport({
       host: "h",
       port: 25,
@@ -567,6 +573,136 @@ describe("createSmtpTransport", () => {
     await expect(
       space.send({ ...base(), from: "f@app.com", text: "hi", messageId: "x bad" }),
     ).rejects.toMatchObject({ code: "MAIL_INVALID_HEADER" });
+  });
+});
+
+/**
+ * A scripted byte source: call N returns bytes filled with `fills[N]` (the
+ * last fill repeats), and records each requested length — the deterministic
+ * stand-in the injectable-seam exists for.
+ */
+const scriptedRandom = (...fills: number[]): { calls: number[]; randomBytes: RandomBytes } => {
+  const calls: number[] = [];
+
+  return {
+    calls,
+    randomBytes: (byteLength) => {
+      const fill = fills[Math.min(calls.length, fills.length - 1)]!;
+      calls.push(byteLength);
+
+      return new Uint8Array(byteLength).fill(fill);
+    },
+  };
+};
+
+/** The boundary `scriptedRandom(fill)` yields: `lesto-` + 16 bytes of `fill` in hex. */
+const boundaryFor = (fill: number): string =>
+  `lesto-${fill.toString(16).padStart(2, "0").repeat(16)}`;
+
+const readBoundary = (message: string): string | undefined =>
+  /boundary="([^"]+)"/.exec(message)?.[1];
+
+describe("buildMessage — CSPRNG MIME boundary (part-splice hardening)", () => {
+  // The boundary was once `lesto-<messageId>` — a predictable, job-derived
+  // token, so anyone who could influence a body part could pre-compute it and
+  // splice `--<boundary>` lines into text/html, forging extra MIME parts. These
+  // tests pin the fix: the boundary is CSPRNG-minted per build, provably absent
+  // from both parts, and a broken random source fails coded instead of ever
+  // splicing a colliding delimiter.
+
+  const multipart = (): RenderedEmail => ({
+    ...base(),
+    from: "f@app.com",
+    text: "plain alternative",
+  });
+
+  it("mints the boundary from the CSPRNG — never messageId-derived, distinct across two builds", () => {
+    const email = multipart();
+    const first = readBoundary(buildMessage(email, "f@app.com"));
+    const second = readBoundary(buildMessage(email, "f@app.com"));
+
+    // 128 bits of entropy behind the recognizable prefix …
+    expect(first).toMatch(/^lesto-[0-9a-f]{32}$/);
+    expect(second).toMatch(/^lesto-[0-9a-f]{32}$/);
+    // … carrying no trace of the predictable job-derived id …
+    expect(first).not.toContain(email.messageId);
+    // … and fresh per build: even the same email never reuses a boundary, so a
+    // boundary observed once predicts nothing about the next send.
+    expect(first).not.toBe(second);
+  });
+
+  it("emits a multipart body whose delimiter lines are exactly the header's boundary", () => {
+    const message = buildMessage(multipart(), "f@app.com");
+    const boundary = readBoundary(message);
+    expect(boundary).toBeDefined();
+
+    // The structure still parses: two opening delimiters (text part, html
+    // part) and one closing delimiter, all referencing the header's boundary.
+    const lines = message.split("\r\n");
+    expect(lines.filter((line) => line === `--${boundary}`)).toHaveLength(2);
+    expect(lines.filter((line) => line === `--${boundary}--`)).toHaveLength(1);
+    // The parts sit in declared order between the delimiters.
+    expect(message.indexOf("text/plain")).toBeGreaterThan(message.indexOf(`--${boundary}`));
+    expect(message.indexOf("text/html")).toBeGreaterThan(message.indexOf("text/plain"));
+  });
+
+  it("regenerates when the text part already contains the minted boundary", () => {
+    const { calls, randomBytes } = scriptedRandom(0xaa, 0xbb);
+    const email = { ...multipart(), text: `pre --${boundaryFor(0xaa)} post` };
+
+    const message = buildMessage(email, "f@app.com", randomBytes);
+
+    // First mint collided with the text part → a second draw was taken …
+    expect(calls).toEqual([16, 16]);
+    // … and the message is framed by the clean SECOND boundary; the colliding
+    // token survives in the text part as inert content, never as a delimiter.
+    expect(readBoundary(message)).toBe(boundaryFor(0xbb));
+    expect(message).toContain(`pre --${boundaryFor(0xaa)} post`);
+  });
+
+  it("regenerates when the html part already contains the minted boundary", () => {
+    const { calls, randomBytes } = scriptedRandom(0xaa, 0xbb);
+    const email = { ...multipart(), html: `<p>--${boundaryFor(0xaa)}</p>` };
+
+    const message = buildMessage(email, "f@app.com", randomBytes);
+
+    expect(calls).toEqual([16, 16]);
+    expect(readBoundary(message)).toBe(boundaryFor(0xbb));
+  });
+
+  it("throws the coded boundary error once the retry budget is exhausted (broken random source)", () => {
+    // A constant-byte source — the real-world shape of this failure — collides
+    // with the body on every draw, so the bound must trip rather than spin or,
+    // worse, splice the colliding boundary anyway.
+    const { calls, randomBytes } = scriptedRandom(0xaa);
+    const email = { ...multipart(), html: `<p>${boundaryFor(0xaa)}</p>` };
+
+    let caught: unknown;
+
+    try {
+      buildMessage(email, "f@app.com", randomBytes);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(SmtpTransportError);
+    expect(caught).toMatchObject({
+      code: "MAIL_TRANSPORT_SMTP_BOUNDARY",
+      details: { attempts: 5 },
+    });
+    // Exactly the budget was spent — bounded, never an unbounded spin.
+    expect(calls).toEqual([16, 16, 16, 16, 16]);
+  });
+
+  it("builds an html-only message with no boundary at all (nothing to collide)", () => {
+    const { calls, randomBytes } = scriptedRandom(0xaa);
+    const email: RenderedEmail = { ...base(), from: "f@app.com" };
+
+    const message = buildMessage(email, "f@app.com", randomBytes);
+
+    expect(calls).toEqual([]);
+    expect(message).not.toContain("boundary=");
+    expect(message).toContain('Content-Type: text/html; charset="utf-8"');
   });
 });
 

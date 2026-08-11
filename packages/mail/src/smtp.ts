@@ -26,7 +26,17 @@ export type SmtpErrorCode =
   | "MAIL_TRANSPORT_SMTP_PROTOCOL"
   | "MAIL_TRANSPORT_SMTP_AUTH"
   | "MAIL_TRANSPORT_SMTP_CONNECTION"
-  | "MAIL_TRANSPORT_SMTP_TIMEOUT";
+  | "MAIL_TRANSPORT_SMTP_TIMEOUT"
+  /**
+   * {@link buildMessage} could not mint a MIME boundary absent from the body
+   * parts within its retry budget. With the real CSPRNG this is astronomically
+   * improbable (a 128-bit token would have to appear verbatim in the body five
+   * times running), so in practice it means the injected random source is broken
+   * — e.g. returning constant bytes. Failing coded, rather than splicing a
+   * colliding boundary, is what keeps a body part from ever terminating or
+   * forging MIME parts.
+   */
+  | "MAIL_TRANSPORT_SMTP_BOUNDARY";
 
 export class SmtpTransportError extends LestoError<SmtpErrorCode> {
   constructor(code: SmtpErrorCode, message: string, details?: Record<string, unknown>) {
@@ -258,8 +268,10 @@ function validate(email: RenderedEmail): void {
     assertHeaders(email.headers);
   }
 
-  // messageId is spliced raw into `Message-ID: <…>` AND the multipart boundary
-  // (`boundary="lesto-<messageId>"`), so it must be a single injection-safe token.
+  // messageId is spliced raw into `Message-ID: <…>`, so it must stay a single
+  // injection-safe token. (The multipart boundary is deliberately NOT derived
+  // from it — a predictable, job-derived id would let a body part pre-compute
+  // the boundary and splice forged MIME parts; see `generateBoundary`.)
   assertMessageId(email.messageId);
 }
 
@@ -520,6 +532,58 @@ class SmtpConnection {
   }
 }
 
+/** A CSPRNG byte source — injectable so tests can drive collisions; see {@link buildMessage}. */
+export type RandomBytes = (byteLength: number) => Uint8Array;
+
+/** The real CSPRNG: Web Crypto's `getRandomValues`, global on Node and the edge alike. */
+function cryptoRandomBytes(byteLength: number): Uint8Array {
+  return globalThis.crypto.getRandomValues(new Uint8Array(byteLength));
+}
+
+/** 16 CSPRNG bytes → 32 hex chars: a 128-bit boundary no body author can predict. */
+const BOUNDARY_RANDOM_BYTES = 16;
+
+/**
+ * How many fresh boundaries {@link generateBoundary} mints before concluding
+ * the random source is broken and failing coded. With real CSPRNG output a
+ * single collision is already a ~2^-128 event, so the budget exists for the
+ * INJECTED-source failure mode (a stub or a broken shim returning constant
+ * bytes), where retrying forever would spin.
+ */
+const BOUNDARY_MAX_ATTEMPTS = 5;
+
+/**
+ * Mint a multipart boundary that provably does not occur in either body part.
+ *
+ * The boundary is CSPRNG-derived — NEVER derived from `messageId`. The id is a
+ * predictable, job-derived token (`lesto-mail-<jobId>`), so a boundary built
+ * from it lets anyone who can influence a body part pre-compute the delimiter
+ * and splice `--<boundary>` lines into the text/html, forging extra MIME parts
+ * (RFC 2046 §5.1.1 requires a delimiter that does not occur in the
+ * encapsulated material — which a predictable one cannot guarantee against an
+ * adversarial body). Randomness makes the boundary unguessable; the containment
+ * scan then makes non-occurrence a checked fact rather than a probability, and
+ * a scan hit regenerates. Exhausting the retry budget means the random source
+ * is broken — fail coded rather than splice a colliding boundary.
+ */
+function generateBoundary(text: string, html: string, randomBytes: RandomBytes): string {
+  for (let attempt = 0; attempt < BOUNDARY_MAX_ATTEMPTS; attempt += 1) {
+    // Hex output: RFC 2046 `bchars` allows [0-9a-f-] freely, and the token
+    // never needs quoting or escaping (38 chars, under the 70-char cap).
+    const boundary = `lesto-${Buffer.from(randomBytes(BOUNDARY_RANDOM_BYTES)).toString("hex")}`;
+
+    if (!text.includes(boundary) && !html.includes(boundary)) {
+      return boundary;
+    }
+  }
+
+  throw new SmtpTransportError(
+    "MAIL_TRANSPORT_SMTP_BOUNDARY",
+    `Could not generate a MIME boundary absent from the body in ${BOUNDARY_MAX_ATTEMPTS} attempts (broken random source?).`,
+    { attempts: BOUNDARY_MAX_ATTEMPTS },
+  );
+}
+
 // DEFERRED (out of scope for the F15 data-integrity pass; tracked for a
 // follow-up — see docs/reviews/2026-07-10-build-vs-buy-portfolio-review.md):
 // this builder does not yet do RFC 2047 encoded-words for non-ASCII headers,
@@ -527,7 +591,20 @@ class SmtpConnection {
 // 998-octet limit (RFC 5321 §4.5.3.1.6), support implicit TLS on :465, or emit
 // a Date header. A relay generally supplies its own Date, but the rest are real
 // interop gaps that a Nodemailer-backed transport behind this facade would close.
-function buildMessage(email: RenderedEmail, from: string): string {
+/**
+ * Assemble the RFC 5322 message put on the wire in `DATA`.
+ *
+ * Exported as a seam: `randomBytes` feeds the multipart boundary (see
+ * {@link generateBoundary} for why it is CSPRNG-derived) and is injectable the
+ * same way {@link nodeConnect}'s net loader is, so tests can force boundary
+ * collisions deterministically; production callers omit it and get the real
+ * CSPRNG.
+ */
+export function buildMessage(
+  email: RenderedEmail,
+  from: string,
+  randomBytes: RandomBytes = cryptoRandomBytes,
+): string {
   const headers: string[] = [
     `From: ${from}`,
     `To: ${email.to}`,
@@ -543,7 +620,7 @@ function buildMessage(email: RenderedEmail, from: string): string {
   let body: string;
 
   if (email.text !== undefined) {
-    const boundary = `lesto-${email.messageId}`;
+    const boundary = generateBoundary(email.text, email.html, randomBytes);
     headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
     body = [
       `--${boundary}`,

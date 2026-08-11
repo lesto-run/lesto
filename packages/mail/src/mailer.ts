@@ -514,16 +514,20 @@ export function assertHeaders(headers: Record<string, string>): Record<string, s
  * A {@link RenderedEmail} is public surface: a caller can build one by hand and
  * hand it straight to a transport, so the id is re-validated here rather than
  * trusted from the {@link Mailer} (whose own `lesto-mail-<jobId>` ids are always
- * safe). The id is spliced RAW into two places: the `Message-ID: <…>` header
- * and, in the SMTP transport, the multipart boundary (`boundary="lesto-<id>"`).
- * So two vectors must close:
+ * safe). The id is spliced RAW into the `Message-ID: <…>` header (and rides
+ * provider idempotency keys), so two vectors must close:
  *
  *   - CR/LF is header injection — the same guard the other header-bound fields
  *     use ({@link assertNoInjection}).
- *   - A `"` or any whitespace breaks OUT of the quoted boundary (and the
- *     angle-bracketed header), splitting or corrupting the MIME part even with no
- *     CR/LF present. CR/LF are already barred above, so this closes the residual
- *     boundary vector, keeping the id a single safe token.
+ *   - A `"` or any whitespace breaks the id out of its angle-bracketed (or a
+ *     provider's quoted) header slot even with no CR/LF present, so the id must
+ *     stay one unbroken token.
+ *
+ * The SMTP transport's multipart boundary is deliberately NOT derived from this
+ * id (it once was): the id is a predictable, job-derived token, so a
+ * body-part author could pre-compute the boundary and splice forged MIME parts.
+ * The boundary is fresh CSPRNG output per build — see `buildMessage` in
+ * `./smtp` — which is why no boundary rationale appears here.
  */
 export function assertMessageId(messageId: string): void {
   assertNoInjection("messageId", messageId, "MAIL_INVALID_HEADER");
