@@ -33,6 +33,10 @@ const advance = (ms: number): void => {
 
 function adapt(database: Database.Database): SqlDatabase {
   const adapted: SqlDatabase = {
+    // Stamped like the blessed adapters stamp their handles, so the whole
+    // behavioral suite below runs the queue against a marker-carrying handle
+    // with NO explicit `dialect` option — the inference path, end to end.
+    dialect: "sqlite",
     exec: async (statement) => {
       database.exec(statement);
     },
@@ -471,6 +475,102 @@ describe("claim & reclaim", () => {
     await new Queue({ db: capture, clock }).claim();
 
     expect(claimSql).not.toContain("FOR UPDATE");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dialect resolution from the driver's stamped marker
+//
+// The corruption trap this closes: a Postgres app that forgot
+// `dialect: "postgres"` used to silently drop `FOR UPDATE SKIP LOCKED` from the
+// atomic claim — double-delivery with no error to warn anyone. Blessed adapters
+// now stamp `SqlDatabase.dialect` on the handles they mint, the queue INFERS
+// from the stamp when no option is given, and an option that CONTRADICTS the
+// stamp is refused loudly with the coded QUEUE_DIALECT_MISMATCH.
+// ---------------------------------------------------------------------------
+
+// A capture fake stamped the way a blessed adapter stamps its handle: records
+// the claim UPDATE's SQL and every DDL `exec`, so both forks are observable.
+function markedDb(dialect: "sqlite" | "postgres"): {
+  db: SqlDatabase;
+  claimSql: () => string;
+  ddl: () => string;
+} {
+  let claim = "";
+  let ddl = "";
+  const handle: SqlDatabase = {
+    dialect,
+    prepare: (sql) => {
+      if (sql.includes("SET status = 'running'")) claim = sql;
+
+      return {
+        run: async () => ({ changes: 0 }),
+        get: async () => undefined,
+        all: async () => [],
+      };
+    },
+    exec: async (sql) => {
+      ddl += `${sql}\n`;
+    },
+    transaction: async (fn) => fn(handle),
+  };
+
+  return { db: handle, claimSql: () => claim, ddl: () => ddl };
+}
+
+describe("dialect resolution (driver marker)", () => {
+  it("infers postgres from the handle's marker: the claim carries FOR UPDATE SKIP LOCKED with NO explicit option", async () => {
+    const { db: stamped, claimSql } = markedDb("postgres");
+
+    // The forgotten-flag scenario, now safe: no `dialect` option at all.
+    await new Queue({ db: stamped, clock }).claim();
+
+    expect(claimSql()).toContain("FOR UPDATE SKIP LOCKED");
+  });
+
+  it("an explicit option that AGREES with the marker is accepted", async () => {
+    const { db: stamped, claimSql } = markedDb("postgres");
+
+    await new Queue({ db: stamped, clock, dialect: "postgres" }).claim();
+
+    expect(claimSql()).toContain("FOR UPDATE SKIP LOCKED");
+  });
+
+  it("construction refuses an explicit option that CONTRADICTS the marker with QUEUE_DIALECT_MISMATCH", () => {
+    const { db: stamped } = markedDb("sqlite");
+    const build = (): Queue => new Queue({ db: stamped, clock, dialect: "postgres" });
+
+    try {
+      build();
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(QueueError);
+      expect((error as QueueError).code).toBe("QUEUE_DIALECT_MISMATCH");
+      expect((error as QueueError).details).toEqual({ option: "postgres", marker: "sqlite" });
+      expect(Object.isFrozen((error as QueueError).details)).toBe(true);
+    }
+  });
+
+  it("installSchema infers postgres from the handle's marker with NO explicit dialect", async () => {
+    const { db: stamped, ddl } = markedDb("postgres");
+
+    await installSchema(stamped);
+
+    expect(ddl()).toContain("BIGINT  PRIMARY KEY GENERATED ALWAYS AS IDENTITY");
+    expect(ddl()).toContain("idx_lesto_jobs_ready");
+  });
+
+  it("installSchema refuses a contradicting explicit dialect with QUEUE_DIALECT_MISMATCH before any DDL runs", async () => {
+    const { db: stamped, ddl } = markedDb("postgres");
+
+    await expect(installSchema(stamped, "sqlite")).rejects.toMatchObject({
+      code: "QUEUE_DIALECT_MISMATCH",
+      details: { option: "sqlite", marker: "postgres" },
+    });
+
+    // Fail loud BEFORE touching the schema: a half-installed wrong-dialect
+    // schema would be worse than no install at all.
+    expect(ddl()).toBe("");
   });
 });
 

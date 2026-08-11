@@ -56,7 +56,8 @@ function referencesClause(reference: ColumnReference): string {
  *
  * This mirrors the `Dialect` seam `@lesto/ratelimit` already proves; it is the
  * single source of the dialect vocabulary the queue/cache/workflow installers
- * and the migrator thread through.
+ * and the migrator thread through — and of the driver marker the blessed
+ * adapters stamp on the handles they mint (see `SqlDatabase.dialect`).
  */
 export type Dialect = "sqlite" | "postgres";
 

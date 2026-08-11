@@ -798,10 +798,18 @@ export interface QueryEvent {
 /** Options for {@link createDb}. */
 export interface DbOptions {
   /**
-   * Which SQL dialect to render for. Defaults to `"sqlite"`. The only query the
-   * dialect changes is offset-without-limit (SQLite needs `LIMIT -1`, Postgres
-   * takes a bare `OFFSET`); every other statement is identical. A `tx` opened by
+   * Which SQL dialect to render for. The only query the dialect changes is
+   * offset-without-limit (SQLite needs `LIMIT -1`, Postgres takes a bare
+   * `OFFSET`); every other statement is identical. A `tx` opened by
    * {@link Db.transaction} inherits its parent's dialect.
+   *
+   * Usually OMIT it: a blessed driver handle carries its own dialect stamp
+   * (`SqlDatabase.dialect`) and `createDb` infers from that, so a Postgres
+   * handle renders Postgres SQL with no flag to remember. Passing it on a
+   * stamped handle is a cross-check — a value that contradicts the stamp
+   * throws the coded `DB_DIALECT_MISMATCH` rather than rendering the wrong
+   * engine's SQL. Only an unstamped (foreign) handle with no explicit option
+   * falls back to `"sqlite"`.
    */
   readonly dialect?: Dialect;
 
@@ -862,9 +870,34 @@ function instrument(sql: SqlDatabase, onQuery: (event: QueryEvent) => void): Sql
   };
 }
 
+/**
+ * Resolve which dialect to render for the given handle.
+ *
+ * Precedence: an explicit option and the handle's driver stamp
+ * ({@link SqlDatabase.dialect}) must AGREE — a contradiction throws the coded
+ * `DB_DIALECT_MISMATCH`, because one of the two is wrong and rendering the
+ * wrong engine's SQL corrupts quietly. With no option the stamp wins (that is
+ * the inference blessed adapters exist for); an unstamped foreign handle keeps
+ * the historical `"sqlite"` default.
+ */
+function resolveDialect(sql: SqlDatabase, option: Dialect | undefined): Dialect {
+  const marker = sql.dialect;
+
+  if (option !== undefined && marker !== undefined && option !== marker) {
+    throw new DbError(
+      "DB_DIALECT_MISMATCH",
+      `createDb was told to render "${option}" but the driver handle is stamped "${marker}" — ` +
+        `one of the two is wrong; fix the option (or drop it and let the stamp decide).`,
+      { option, marker },
+    );
+  }
+
+  return option ?? marker ?? "sqlite";
+}
+
 /** Build a {@link Db} bound to the given driver handle. */
 export function createDb(sql: SqlDatabase, options: DbOptions = {}): Db {
-  const dialect = options.dialect ?? "sqlite";
+  const dialect = resolveDialect(sql, options.dialect);
   const onQuery = options.onQuery;
 
   // Instrument the handle once, here, so every terminal AND `raw` reports through

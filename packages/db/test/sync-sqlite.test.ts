@@ -96,6 +96,20 @@ describe("adaptSyncSqlite", () => {
     expect(calls).toEqual(["BEGIN", "COMMIT"]);
   });
 
+  it("stamps the sqlite dialect marker on the handle AND on the tx handle", async () => {
+    const { statements } = createFakeHandle();
+    const db = adaptSyncSqlite(statements);
+
+    // The marker is what lets a consumer (the queue, createDb) infer the engine
+    // instead of trusting a caller-remembered flag — it must survive into the
+    // tx-scoped handle too, which is itself a SqlDatabase.
+    expect(db.dialect).toBe("sqlite");
+
+    await db.transaction(async (tx) => {
+      expect(tx.dialect).toBe("sqlite");
+    });
+  });
+
   it("serializes two overlapping transactions FIFO — the second never BEGINs before the first settles", async () => {
     const { calls, statements } = createFakeHandle();
     const db = adaptSyncSqlite(statements);

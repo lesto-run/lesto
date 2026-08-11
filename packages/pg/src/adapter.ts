@@ -94,6 +94,12 @@ export function createPgDatabase(pool: PgPool): SqlDatabase {
   return {
     ...statementsOver(pool),
 
+    // The driver marker (see `SqlDatabase.dialect`): this handle — and the
+    // tx handle below — speaks Postgres, so dialect-forking consumers (the
+    // queue's `FOR UPDATE SKIP LOCKED` claim, `createDb`) infer the engine
+    // from the handle itself instead of a caller-remembered flag.
+    dialect: "postgres",
+
     transaction: async (fn) => {
       const client = await pool.connect();
       let failure: unknown;
@@ -106,6 +112,7 @@ export function createPgDatabase(pool: PgPool): SqlDatabase {
         // callback on the same client (flat) — the migrator never nests.
         const tx: SqlDatabase = {
           ...statementsOver(client),
+          dialect: "postgres",
           transaction: (inner) => inner(tx),
         };
 

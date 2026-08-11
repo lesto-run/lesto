@@ -21,6 +21,8 @@
  * Drivers adapt one shape to the other; the layer above sees `params: unknown[]`.
  */
 
+import type { Dialect } from "./ddl";
+
 export interface SqlStatement {
   /**
    * Execute a write. `lastInsertRowid` is **optional**: SQLite supplies it
@@ -33,6 +35,25 @@ export interface SqlStatement {
 }
 
 export interface SqlDatabase {
+  /**
+   * Which SQL dialect this handle speaks — the driver's own stamp.
+   *
+   * OPTIONAL, and stamped by every blessed adapter that mints a `SqlDatabase`
+   * (`adaptSyncSqlite` — and through it `@lesto/runtime`'s `openSqlite` and
+   * `@lesto/live`'s OPFS driver — plus `@lesto/pg`'s pool adapter and
+   * `@lesto/cloudflare`'s D1/Hyperdrive adapters), INCLUDING on the tx handle
+   * their `transaction()` hands out (a tx handle is a `SqlDatabase` too).
+   *
+   * Consumers whose SQL forks on the engine (the queue's `FOR UPDATE SKIP
+   * LOCKED` claim, `createDb`'s offset rendering) read it to INFER the dialect
+   * when the caller passed none — so a Postgres app that forgets the flag gets
+   * Postgres semantics, not a silent downgrade — and to CROSS-CHECK an explicit
+   * option against it, refusing a contradiction with a coded error rather than
+   * rendering the wrong engine's SQL. Absent on foreign (hand-rolled) handles,
+   * which keep each consumer's historical `"sqlite"` default.
+   */
+  readonly dialect?: Dialect;
+
   exec(sql: string): Promise<void>;
 
   prepare(sql: string): SqlStatement;

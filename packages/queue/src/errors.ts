@@ -14,6 +14,14 @@ export type QueueErrorCode =
   | "QUEUE_BATCH_EMPTY"
   | "QUEUE_BATCH_FORWARD_DEPENDENCY"
   | "QUEUE_BATCH_NOT_FOUND"
+  /**
+   * An explicit `dialect` (on `new Queue()` or `installSchema`) contradicts the
+   * dialect the driver handle itself is stamped with (`SqlDatabase.dialect`).
+   * One of the two is wrong, and silently picking a side is exactly the old
+   * double-delivery trap (a Postgres app losing `FOR UPDATE SKIP LOCKED` from
+   * the atomic claim) — so the contradiction is refused loudly instead.
+   */
+  | "QUEUE_DIALECT_MISMATCH"
   | "QUEUE_HANDLER_NOT_A_FUNCTION"
   | "QUEUE_HANDLER_NOT_FOUND"
   | "QUEUE_INVALID_CRON_EXPRESSION"

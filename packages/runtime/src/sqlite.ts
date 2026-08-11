@@ -119,6 +119,8 @@ export async function openSqlite(
   // `KernelDatabase` is an alias of `@lesto/db`'s `SqlDatabase` (kernel.ts), so the shared
   // adapter's return type lines up with no cast. See {@link adaptSyncSqlite} for the
   // FIFO/rollback/flat-nesting invariants this connection now shares with the OPFS driver.
+  // The adapter also stamps the `dialect: "sqlite"` driver marker on the handle (and its
+  // tx handle), so consumers (the queue, `createDb`) infer the engine with no flag to remember.
   const db: KernelDatabase = adaptSyncSqlite(statements);
 
   return { db, close: () => raw.close() };

@@ -110,6 +110,12 @@ export function hyperdriveToSqlDatabase(connection: HyperdriveConnection): SqlDa
   return {
     ...statements,
 
+    // The driver marker (see `SqlDatabase.dialect`): Hyperdrive fronts a real
+    // Postgres, so dialect-forking consumers (the queue's `FOR UPDATE SKIP
+    // LOCKED` claim, `createDb`) infer `"postgres"` from the handle itself —
+    // and the tx handle below carries the same stamp.
+    dialect: "postgres",
+
     transaction: async (fn) => {
       await connection.query("BEGIN");
 
@@ -118,6 +124,7 @@ export function hyperdriveToSqlDatabase(connection: HyperdriveConnection): SqlDa
       // node Postgres driver — the migrator never nests.
       const tx: SqlDatabase = {
         ...statements,
+        dialect: "postgres",
         transaction: (inner) => inner(tx),
       };
 

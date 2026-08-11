@@ -193,4 +193,18 @@ describe("hyperdriveToSqlDatabase — transaction", () => {
     expect(calls.filter((c) => c.text === "COMMIT")).toHaveLength(1);
     expect(calls.map((c) => c.text)).toEqual(["BEGIN", "UPDATE t SET a = 1", "COMMIT"]);
   });
+
+  it("stamps the postgres dialect marker on the handle AND on the tx handle", async () => {
+    const { connection } = makeHyperdrive();
+    const db = hyperdriveToSqlDatabase(connection);
+
+    // Hyperdrive fronts a real Postgres, so the marker lets a consumer (the
+    // queue, createDb) infer `"postgres"` from the handle itself — and the tx
+    // handle is a SqlDatabase too, so it must carry the same stamp.
+    expect(db.dialect).toBe("postgres");
+
+    await db.transaction(async (tx) => {
+      expect(tx.dialect).toBe("postgres");
+    });
+  });
 });

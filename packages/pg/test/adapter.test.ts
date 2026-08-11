@@ -186,6 +186,20 @@ describe("createPgDatabase — transaction", () => {
     expect(state.connected).toBe(1);
     expect(state.released).toBe(1);
   });
+
+  it("stamps the postgres dialect marker on the handle AND on the tx handle", async () => {
+    const { pool } = fakePg();
+    const db = createPgDatabase(pool);
+
+    // The marker is what lets a consumer (the queue, createDb) infer the engine
+    // instead of trusting a caller-remembered flag — and the tx handle is a
+    // SqlDatabase too, so it must carry the same stamp.
+    expect(db.dialect).toBe("postgres");
+
+    await db.transaction(async (tx) => {
+      expect(tx.dialect).toBe("postgres");
+    });
+  });
 });
 
 describe("openPostgres", () => {

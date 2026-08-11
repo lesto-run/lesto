@@ -53,6 +53,12 @@ export interface D1Database {
 /** Adapt a Cloudflare D1 binding to the async `SqlDatabase` surface `@lesto/db` consumes. */
 export function d1ToSqlDatabase(d1: D1Database): SqlDatabase {
   const adapted: SqlDatabase = {
+    // The driver marker (see `SqlDatabase.dialect`): D1 is Cloudflare's SQLite,
+    // so dialect-forking consumers (the queue, `createDb`) infer `"sqlite"`
+    // from the handle itself — a queue over D1 must never emit `FOR UPDATE
+    // SKIP LOCKED`. (No tx handle to stamp: `transaction()` refuses below.)
+    dialect: "sqlite",
+
     // DDL: a single prepared statement (NOT `d1.exec`, which splits on newlines
     // and would shred a multi-line CREATE TABLE into broken fragments).
     exec: async (sql) => {

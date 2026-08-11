@@ -69,6 +69,13 @@ export function adaptSyncSqlite(statements: Pick<SqlDatabase, "exec" | "prepare"
   const db: SqlDatabase = {
     ...statements,
 
+    // The driver marker (see `SqlDatabase.dialect`): this adapter only ever
+    // wraps a synchronous SQLite engine, so every handle it mints — including
+    // the tx handle below — speaks sqlite. Consumers (the queue, `createDb`)
+    // infer the dialect from this stamp instead of trusting a caller-remembered
+    // flag, and both `openSqlite` and the OPFS driver inherit it from here.
+    dialect: "sqlite",
+
     // Single-connection FIFO transaction. Each call appends its span to `chain` and waits for
     // the previous span to settle before `BEGIN`, so spans never overlap on the one connection.
     // A rolled-back (rejected) span must not poison the queue: the sequencing link swallows the
@@ -83,7 +90,11 @@ export function adaptSyncSqlite(statements: Pick<SqlDatabase, "exec" | "prepare"
           // `transaction` runs `inner` FLAT on this same span — SQLite has no nested BEGIN, so
           // composing flat (rather than re-enqueuing, which would deadlock against the chain
           // this span already holds) matches the shape a real Postgres adapter uses.
-          const tx: SqlDatabase = { ...statements, transaction: (inner) => inner(tx) };
+          const tx: SqlDatabase = {
+            ...statements,
+            dialect: "sqlite",
+            transaction: (inner) => inner(tx),
+          };
 
           const out = await fn(tx);
 

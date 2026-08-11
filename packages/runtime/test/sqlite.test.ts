@@ -55,6 +55,21 @@ describe("openSqlite", () => {
     close();
   });
 
+  it("stamps the sqlite dialect marker on the handle AND on the tx handle", async () => {
+    const { db, close } = await openSqlite();
+
+    // The marker (inherited from @lesto/db's adaptSyncSqlite) is what lets a
+    // consumer (the queue, createDb) infer the engine from the handle itself —
+    // and the tx handle is a SqlDatabase too, so it must carry the same stamp.
+    expect(db.dialect).toBe("sqlite");
+
+    await db.transaction(async (tx) => {
+      expect(tx.dialect).toBe("sqlite");
+    });
+
+    close();
+  });
+
   it("commits a transaction and returns fn's resolved value", async () => {
     const { db, close } = await openSqlite();
 

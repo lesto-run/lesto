@@ -145,4 +145,12 @@ describe("d1ToSqlDatabase", () => {
 
     await expect(db.transaction(async () => 1)).rejects.toBeInstanceOf(CloudflareError);
   });
+
+  it("stamps the sqlite dialect marker on the handle (D1 speaks SQLite)", () => {
+    // The marker lets a consumer (the queue, createDb) infer the engine from the
+    // handle itself: D1 is Cloudflare's SQLite, so a queue over D1 must NOT emit
+    // `FOR UPDATE SKIP LOCKED`. (No tx-handle assertion here — `transaction()`
+    // refuses on D1, so no tx handle ever exists to stamp.)
+    expect(d1ToSqlDatabase(makeD1().d1).dialect).toBe("sqlite");
+  });
 });

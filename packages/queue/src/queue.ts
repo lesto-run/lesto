@@ -63,23 +63,55 @@ const STALLED_ERROR =
  */
 
 /**
+ * Resolve which dialect to speak against `db` — shared by {@link installSchema}
+ * and the {@link Queue} constructor, so the two can never quietly disagree.
+ *
+ * Precedence: an explicit `dialect` and the handle's driver stamp
+ * ({@link SqlDatabase.dialect} — every blessed adapter stamps the handles it
+ * mints) must AGREE; a contradiction throws the coded `QUEUE_DIALECT_MISMATCH`
+ * rather than silently downgrading the claim's locking clause (the old
+ * double-delivery trap). With no explicit dialect the stamp wins — the
+ * forgotten-flag Postgres app now infers `"postgres"` and keeps `FOR UPDATE
+ * SKIP LOCKED`. An unstamped foreign handle with no option keeps the
+ * historical `"sqlite"` default.
+ */
+function resolveDialect(db: SqlDatabase, option: Dialect | undefined): Dialect {
+  const marker = db.dialect;
+
+  if (option !== undefined && marker !== undefined && option !== marker) {
+    throw new QueueError(
+      "QUEUE_DIALECT_MISMATCH",
+      `The queue was told to speak "${option}" but the driver handle is stamped "${marker}" — ` +
+        `one of the two is wrong; fix the option (or drop it and let the stamp decide).`,
+      { option, marker },
+    );
+  }
+
+  return option ?? marker ?? "sqlite";
+}
+
+/**
  * Create the jobs table. Idempotent; call it from a migration or once at boot.
  *
- * `dialect` defaults to `"sqlite"`; pass `"postgres"` to declare the surrogate
- * key as a `BIGINT … GENERATED ALWAYS AS IDENTITY` column (Postgres has no
- * `AUTOINCREMENT` keyword, and an int4 key would cap the queue at ~2.1B jobs).
- * Every other column is spelled identically on both engines.
+ * `dialect` is usually OMITTED: a blessed driver handle carries its own stamp
+ * (`SqlDatabase.dialect`) and the installer infers from it. On `"postgres"` the
+ * surrogate key is declared `BIGINT … GENERATED ALWAYS AS IDENTITY` (Postgres
+ * has no `AUTOINCREMENT` keyword, and an int4 key would cap the queue at ~2.1B
+ * jobs); every other column is spelled identically on both engines. Only an
+ * unstamped (foreign) handle with no explicit dialect falls back to `"sqlite"`.
  *
- * IMPORTANT: this `dialect` and the {@link Queue}'s `dialect` MUST agree. The
- * Queue's `dialect` is what decides whether the atomic claim carries `FOR UPDATE
- * SKIP LOCKED`; a Postgres app that installs the schema here with `"postgres"`
- * but forgets `dialect: "postgres"` on `new Queue()` silently DROPS that clause
- * and reintroduces double-delivery under concurrency — with no error to warn
- * you. Pass the same dialect to both.
+ * This installer and the {@link Queue} MUST speak the same dialect — the
+ * Queue's is what decides whether the atomic claim carries `FOR UPDATE SKIP
+ * LOCKED`. Both now resolve it the same way ({@link resolveDialect}): inferred
+ * from the handle's stamp, with an explicit dialect that CONTRADICTS the stamp
+ * refused loudly via the coded `QUEUE_DIALECT_MISMATCH` — never the old silent
+ * downgrade that reintroduced double-delivery.
  */
-export async function installSchema(db: SqlDatabase, dialect: Dialect = "sqlite"): Promise<void> {
+export async function installSchema(db: SqlDatabase, dialect?: Dialect): Promise<void> {
+  const resolved = resolveDialect(db, dialect);
+
   const idColumn =
-    dialect === "postgres"
+    resolved === "postgres"
       ? "BIGINT  PRIMARY KEY GENERATED ALWAYS AS IDENTITY"
       : "INTEGER PRIMARY KEY AUTOINCREMENT";
 
@@ -157,7 +189,7 @@ export async function installSchema(db: SqlDatabase, dialect: Dialect = "sqlite"
   // concern (a Postgres deployment is the multi-million-row one). SQLite — the
   // single-connection dev/edge engine — is well served by the full index above
   // and skips the extra write-amplification a second index costs.
-  if (dialect === "postgres") {
+  if (resolved === "postgres") {
     await db.exec(
       `CREATE INDEX IF NOT EXISTS idx_${TABLE}_ready
          ON ${TABLE} (queue, priority DESC, run_at) WHERE status = 'ready'`,
@@ -280,14 +312,20 @@ export interface QueueOptions {
   readonly maxBackoffMs?: number;
 
   /**
-   * Which SQL dialect `db` speaks. Defaults to `"sqlite"`. On `"postgres"` the
-   * atomic claim adds `FOR UPDATE SKIP LOCKED` so concurrent workers each skip a
-   * row another already locked — the row-level locking SQLite does not need
-   * (the runtime serializes every write over its one connection).
+   * Which SQL dialect `db` speaks. On `"postgres"` the atomic claim adds
+   * `FOR UPDATE SKIP LOCKED` so concurrent workers each skip a row another
+   * already locked — the row-level locking SQLite does not need (the runtime
+   * serializes every write over its one connection).
    *
-   * MUST match the dialect passed to {@link installSchema}: forgetting
-   * `"postgres"` here on a Postgres app silently drops the locking clause and
-   * reintroduces double-delivery, with no error to warn you.
+   * Usually OMIT it: a blessed driver handle carries its own stamp
+   * (`SqlDatabase.dialect`) and the queue infers from that — so a Postgres app
+   * that forgets the flag KEEPS the locking clause instead of silently
+   * reintroducing double-delivery (the old trap). Passing it on a stamped
+   * handle is a cross-check: a value that contradicts the stamp throws the
+   * coded `QUEUE_DIALECT_MISMATCH` at construction, never a silent downgrade.
+   * Only an unstamped (foreign) handle with no explicit dialect falls back to
+   * `"sqlite"`. {@link installSchema} resolves its dialect identically, so the
+   * schema and the claim can no longer quietly disagree.
    */
   readonly dialect?: Dialect;
 }
@@ -362,7 +400,11 @@ export class Queue {
     this.defaultQueue = options.defaultQueue ?? "default";
     this.baseBackoffMs = options.baseBackoffMs ?? 1000;
     this.maxBackoffMs = options.maxBackoffMs ?? 60_000;
-    this.dialect = options.dialect ?? "sqlite";
+    // Inferred from the handle's driver stamp when no option is given, and
+    // cross-checked (a contradiction throws QUEUE_DIALECT_MISMATCH) when one
+    // is — see resolveDialect. This is what keeps a forgotten `"postgres"`
+    // from silently dropping FOR UPDATE SKIP LOCKED off the atomic claim.
+    this.dialect = resolveDialect(options.db, options.dialect);
   }
 
   /** Register the handler for a job name. */

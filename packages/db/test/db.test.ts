@@ -1184,6 +1184,95 @@ describe("limit/offset injection guard (F1)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Dialect resolution from the driver's stamped marker
+//
+// Blessed adapters stamp `dialect` on the handle they mint. `createDb` must
+// INFER from that stamp when no option is given (so a Postgres handle renders
+// Postgres SQL even when the caller forgot the flag) and must REFUSE loudly
+// when an explicit option contradicts it — never silently render the wrong
+// engine's SQL. An unstamped (foreign) handle keeps the sqlite default, which
+// the F1 capture tests above already exercise.
+// ---------------------------------------------------------------------------
+
+// The same capture harness as `captureQuery`, but the HANDLE carries a dialect
+// marker (as a blessed adapter's would) while `createDb` receives whatever
+// option the test passes — so inference and cross-checking are observable.
+function markedCapture(
+  marker: Dialect,
+  options: { dialect?: Dialect } = {},
+): { db: Db; last: () => string } {
+  let capturedSql = "";
+  const handle: SqlDatabase = {
+    dialect: marker,
+    exec: async () => {},
+    prepare: (stmt) => ({
+      run: async () => {
+        capturedSql = stmt;
+
+        return { changes: 0 };
+      },
+      get: async () => {
+        capturedSql = stmt;
+
+        return undefined;
+      },
+      all: async () => {
+        capturedSql = stmt;
+
+        return [];
+      },
+    }),
+    transaction: async (fn) => fn(handle),
+  };
+
+  return { db: createDb(handle, options), last: () => capturedSql };
+}
+
+describe("createDb dialect resolution (driver marker)", () => {
+  it("infers postgres from the handle's marker with no explicit option", async () => {
+    // A pg-stamped handle and a forgotten option must STILL render Postgres SQL:
+    // offset-without-limit is the observable fork (bare OFFSET, no `LIMIT -1`).
+    const { db: cdb, last } = markedCapture("postgres");
+    await cdb.select().from(users).offset(3).all();
+
+    expect(last()).toContain("OFFSET ?");
+    expect(last()).not.toContain("LIMIT -1");
+  });
+
+  it("an explicit option that AGREES with the marker is accepted", async () => {
+    const { db: cdb, last } = markedCapture("postgres", { dialect: "postgres" });
+    await cdb.select().from(users).offset(3).all();
+
+    expect(last()).not.toContain("LIMIT -1");
+  });
+
+  it("an explicit option that CONTRADICTS the marker throws the coded DB_DIALECT_MISMATCH", () => {
+    let thrown: unknown;
+    try {
+      markedCapture("sqlite", { dialect: "postgres" });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DbError);
+    expect((thrown as DbError).code).toBe("DB_DIALECT_MISMATCH");
+    expect((thrown as DbError).details).toEqual({ option: "postgres", marker: "sqlite" });
+    expect(Object.isFrozen((thrown as DbError).details)).toBe(true);
+  });
+
+  it("a transaction's nested db keeps the marker-inferred dialect", async () => {
+    const { db: cdb, last } = markedCapture("postgres");
+
+    await cdb.transaction(async (tx) => {
+      await tx.select().from(users).offset(3).all();
+    });
+
+    expect(last()).toContain("OFFSET ?");
+    expect(last()).not.toContain("LIMIT -1");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // INSERT
 // ---------------------------------------------------------------------------
 

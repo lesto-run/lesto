@@ -211,10 +211,14 @@ export interface ListJobsOptions {
 export type Clock = () => Date;
 
 /**
- * Which SQL dialect the queue speaks. Defaults to `"sqlite"`. It selects the
- * surrogate-key DDL ({@link installSchema}) and the row-locking clause in the
- * atomic claim (`FOR UPDATE SKIP LOCKED` on Postgres). Mirrors `@lesto/db`'s
- * `Dialect`.
+ * Which SQL dialect the queue speaks. It selects the surrogate-key DDL
+ * ({@link installSchema}) and the row-locking clause in the atomic claim
+ * (`FOR UPDATE SKIP LOCKED` on Postgres). Mirrors `@lesto/db`'s `Dialect`.
+ *
+ * Resolved from the driver handle's own stamp (`SqlDatabase.dialect`) when no
+ * explicit option is given; an explicit option that contradicts the stamp is
+ * refused with the coded `QUEUE_DIALECT_MISMATCH`. Only an unstamped foreign
+ * handle with no option falls back to `"sqlite"`.
  */
 export type Dialect = "sqlite" | "postgres";
 

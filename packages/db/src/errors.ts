@@ -18,7 +18,14 @@ export type DbErrorCode =
   | "DB_EMPTY_UPDATE"
   | "DB_INVALID_BOUND"
   | "DB_UNRESOLVED_REFERENCE"
-  | "DB_DUPLICATE_JOIN_NAMESPACE";
+  | "DB_DUPLICATE_JOIN_NAMESPACE"
+  /**
+   * `createDb` was given an explicit `dialect` that contradicts the dialect the
+   * driver handle itself is stamped with (`SqlDatabase.dialect`). One of the two
+   * is wrong, and rendering the wrong engine's SQL corrupts quietly — so the
+   * contradiction is refused loudly here instead of silently picking a side.
+   */
+  | "DB_DIALECT_MISMATCH";
 
 /** Anything the query/DDL layer can refuse to do. */
 export class DbError extends LestoError<DbErrorCode> {

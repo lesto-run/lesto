@@ -164,8 +164,14 @@ describe("createWorkerSqlDatabase", () => {
     const channel = sqliteBackedChannel();
     const { db } = await createWorkerSqlDatabase(channel.clientPort, opts);
 
+    // The `dialect: "sqlite"` driver marker (inherited from @lesto/db's
+    // adaptSyncSqlite) rides the browser handle and its tx handle too, so
+    // dialect-forking consumers infer the engine on the OPFS tier as well.
+    expect(db.dialect).toBe("sqlite");
+
     await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
     await db.transaction(async (tx) => {
+      expect(tx.dialect).toBe("sqlite");
       await tx.prepare("INSERT INTO t (id) VALUES (?)").run([1]);
       await tx.prepare("INSERT INTO t (id) VALUES (?)").run([2]);
     });
