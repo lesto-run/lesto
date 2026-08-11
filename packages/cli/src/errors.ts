@@ -15,6 +15,8 @@ export type CliErrorCode =
   | "CLI_ADD_UNKNOWN_INTEGRATION"
   | "CLI_AGENTS_MARKER_MALFORMED"
   | "CLI_AGENTS_NOTHING_TO_SCAN"
+  /** The project's `lesto.app.ts` could not be loaded — the file is absent (not a project root), or importing/evaluating it threw. Every app-driven command refuses loud + coded, naming the path (`details.path`) and carrying the underlying cause (`details.cause`) — never a raw stack, and never the silent exit-0 the `bunx lesto` jiti-under-Bun path once produced (audit #12). */
+  | "CLI_APP_LOAD_FAILED"
   | "CLI_CLIENT_BUILD_FAILED"
   | "CLI_CONTENT_MISSING_ARGS"
   | "CLI_CONTENT_PACKAGES_MISSING"

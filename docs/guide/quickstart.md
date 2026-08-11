@@ -1,9 +1,11 @@
 # Quickstart — your first Lesto app
 
 This walks the first five minutes: scaffold an app, run it, see a server-rendered
-page with a live (hydrated) island, and add a route. It mirrors the CI-gated
-scaffold loop (`packages/e2e/scaffold-loop.spec.ts`), so the commands here are the
-ones that are actually exercised on every change.
+page with a live (hydrated) island, and add a route. The hosted version of this
+walkthrough is [docs.lesto.run/quickstart](https://docs.lesto.run/quickstart).
+The flow is CI-tested: `packages/e2e/scaffold-loop.spec.ts` exercises the
+scaffolded app on every change, and the nightly `scaffold-real-install.spec.ts`
+runs the published `create-lesto` against the real npm registry.
 
 ## Prerequisites
 
@@ -12,21 +14,19 @@ ones that are actually exercised on every change.
 
 ## 1. Scaffold
 
+The `@lesto/*` packages and the `create-lesto` scaffolder are live on npm:
+
 ```sh
-npm create lesto my-app
+npm create lesto@latest my-app
 # or, with Bun:  bun create lesto my-app
 cd my-app
-bun install
 ```
 
-> **Pre-publish note.** Until the first `0.x` publish (see [RELEASING.md](../../RELEASING.md)),
-> the public `@lesto/*` packages are not on npm yet. To try Lesto from a clone of this
-> repo, scaffold with the in-monorepo flag, which pins the packages at local `file:`
-> paths instead of registry ranges:
->
-> ```sh
-> bun packages/create-lesto/src/bin.ts my-app --local
-> ```
+The scaffolder installs dependencies with `bun install` and makes an initial git
+commit (`--no-install` / `--no-git` to skip either). Contributors hacking on this
+repo can instead scaffold against the local workspace packages with
+`bun packages/create-lesto/src/bin.ts my-app --local`, which pins `@lesto/*` at
+`file:` paths — the same flag the e2e scaffold loop uses.
 
 The scaffold writes a small but real app: a `posts` table (a `@lesto/db` value), a
 migration, a code-first `lesto()` app with `/`, `GET /posts`, and `POST /posts`, and

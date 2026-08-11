@@ -33,7 +33,7 @@ import {
 // the bin's loaders route through — pure helpers exported from the core (`run.ts`), imported
 // here directly (they are internal to the CLI's own wiring, not part of the package's public
 // barrel like `declaresIslandDevPeer`/`run`).
-import { isMissingSelfModule, missingModuleSpecifier } from "../src/run";
+import { isHelpRequest, isMissingSelfModule, missingModuleSpecifier } from "../src/run";
 import type { ServeTracing } from "../src/run";
 import type { BuildHook, BuildHookContext, CliDeps, DevError, ReleaseTarget } from "../src/index";
 import { createDevState } from "../src/dev-state";
@@ -4645,6 +4645,48 @@ describe("run help", () => {
 
     expect(code).toBe(0);
     expect(lines[0]).toContain("Usage: lesto <command>");
+  });
+
+  it("--help and -h as the first arg print the SAME usage bare `lesto` prints, returning 0", async () => {
+    // Audit #11: both used to hard-error as CLI_UNKNOWN_COMMAND while bare
+    // `lesto` printed perfect help. They must be byte-identical soft successes.
+    const bareCode = await run([], depsWith());
+    const bare = [...lines];
+
+    lines = [];
+    const helpCode = await run(["--help"], depsWith());
+    const helpLines = [...lines];
+
+    lines = [];
+    const shortCode = await run(["-h"], depsWith());
+    const shortLines = [...lines];
+
+    expect(bareCode).toBe(0);
+    expect(helpCode).toBe(0);
+    expect(shortCode).toBe(0);
+    expect(helpLines).toEqual(bare);
+    expect(shortLines).toEqual(bare);
+  });
+
+  it("--help after a subcommand prints usage INSTEAD of running the command", async () => {
+    // `lesto routes --help` asks about routes — it must never boot the app.
+    const loadApp = vi.fn(() => Promise.resolve(buildConfig()));
+
+    const code = await run(["routes", "--help"], depsWith({ loadApp }));
+
+    expect(code).toBe(0);
+    expect(loadApp).not.toHaveBeenCalled();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("Usage: lesto <command>");
+  });
+
+  it("isHelpRequest matches whole argv elements only", () => {
+    // The predicate the bin's exit tail shares (a `lesto dev --help` must exit,
+    // never linger on the dev sockets): whole-element equality, so a VALUE that
+    // merely contains the flag text (a title word, a path) never trips it.
+    expect(isHelpRequest(["--help"])).toBe(true);
+    expect(isHelpRequest(["dev", "-h"])).toBe(true);
+    expect(isHelpRequest(["content:new", "posts", "all about --help"])).toBe(false);
   });
 });
 

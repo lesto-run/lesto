@@ -1,6 +1,6 @@
 # Lesto
 
-**Lesto is a batteries-included, AI-native, fullstack TypeScript framework** — the best of Rails (conventions, ActiveRecord ORM, migrations, RESTful routing), Laravel (in-house batteries: queues, mail, cache, events), WordPress (content, an admin surface, and an actions/filters extensibility model that lets anyone build onto the platform), and Next.js (React, server-side rendering, DX), with one twist the others predate: it is designed to be driven by an agent. Every capability is an in-house API on **one substrate — the SQL database** (SQLite for zero-config local, Postgres for scale), so there is no zoo of external services to glue together; thin drivers live only at the irreducible edges (mail transport, object storage, OAuth). The north star: change your site's content, UI, schema, and data — and ship it — from code, the CLI, or an MCP client inside Claude or ChatGPT.
+**Lesto is a batteries-included, agent-native, full-stack TypeScript framework** — the best of Rails (conventions, ActiveRecord ORM, migrations, RESTful routing), Laravel (in-house batteries: queues, mail, cache, events), WordPress (content, an admin surface, and an actions/filters extensibility model that lets anyone build onto the platform), and Next.js (React, server-side rendering, DX), with one twist the others predate: it is designed to be driven by an agent. Every capability is an in-house API on **one substrate — the SQL database** (SQLite for zero-config local, Postgres for scale), so there is no zoo of external services to glue together; thin drivers live only at the irreducible edges (mail transport, object storage, OAuth). Operate your app — content, UI, requests, and the dev loop — from code, the CLI, or an MCP client inside Claude or ChatGPT: every `lesto dev` boots a loopback, token-gated MCP control plane (`describe_app`, dev diagnostics, request and log tails), read-only by default with writes behind an explicit, audited operator mode; schema migrations stay in code and the CLI.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the product vision and the build order, and [CONVENTIONS.md](./CONVENTIONS.md) for the engineering bar.
 
@@ -100,13 +100,13 @@ The bar, enforced per package (`packages/queue` is the reference implementation)
 Click the badge to open a ready-to-go Codespace — Bun installed, the workspace
 already built. Then run a real app: `bun run examples/blog/serve.ts` (it serves on
 port 3000, auto-forwarded). The Codespace opens a [short guide](./docs/devrel/try-in-codespaces.md)
-with the rest. This is the zero-install on-ramp until `npm create lesto` publishes;
-a Codespace (a real Linux container) runs Bun and native SQLite, which browser
-playgrounds cannot.
+with the rest. This is the zero-install on-ramp (on your own machine,
+`npm create lesto my-app` scaffolds a fresh app from npm); a Codespace (a real
+Linux container) runs Bun and native SQLite, which browser playgrounds cannot.
 
 ### Locally
 
-The runnable end-to-end example lives in [`examples/blog`](./examples/blog) — a small blog that wires the whole stack together: a `Post` ORM model, a migration that creates the `posts` table, an app-defined `@lesto/ui` registry (`Page` + `PostCard`), a `PostsController` that renders an HTML page via `renderTree` and serves a JSON API, RESTful routes via `resources("posts")`, all booted by `@lesto/kernel` over a SQLite database.
+The runnable end-to-end example lives in [`examples/blog`](./examples/blog) — a small blog that wires the whole stack together: a `posts` table declared as a `@lesto/db` schema value (`defineTable`, with its `Post` row type inferred from it), a migration that creates the table, and a `lesto()` app from `@lesto/web` whose `.page("/posts")` streams a server-rendered React page and whose `.get("/api/posts")` serves the same rows as JSON — plus one hydrated island (`defineIsland`, with a `defineDataSource` data binding, both from `@lesto/ui`) — all booted by `@lesto/kernel` over a SQLite database.
 
 ```sh
 bun install
@@ -119,14 +119,14 @@ It boots the app, runs migrations, seeds a few posts, and dispatches `GET /posts
 migrations applied: [ "001_create_posts" ]
 posts seeded: 3
 
-GET /posts -> 200 text/html
-<main><h1>The Lesto Blog</h1><section><article><h2>Hello, Lesto</h2>...</section></main>
+GET /posts -> 200 text/html; charset=utf-8
+<!DOCTYPE html><html lang="en"><head>...<title>The Lesto Blog</title>...</head><body><main><h1>The Lesto Blog</h1>...<section><article><h2>Hello, Lesto</h2>...</section></main></body></html>
 
 GET /api/posts -> 200 application/json
 {"posts":[{"id":1,"title":"Hello, Lesto",...}]}
 ```
 
-The canonical Lesto driver is **better-sqlite3** (what the kernel's own end-to-end test boots). Because Bun cannot yet load better-sqlite3's native addon, the example's adapter transparently falls back to Bun's built-in `bun:sqlite` when run with `bun run` — both satisfy the same `KernelDatabase` interface, so the app code is identical either way.
+The canonical Lesto driver is **better-sqlite3** (what the kernel's own end-to-end test boots). Because Bun cannot yet load better-sqlite3's native addon, the `openSqlite` helper from [`@lesto/runtime`](./packages/runtime) that the example boots on transparently falls back to Bun's built-in `bun:sqlite` when run with `bun run` — both satisfy the same `KernelDatabase` interface, so the app code is identical either way.
 
 ### Run the server
 

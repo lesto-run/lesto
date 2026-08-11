@@ -15,26 +15,51 @@
  * `content-*` suites — frozen Docks baselines that declare no thresholds and are
  * ratcheted up separately (see CONTENT_COVERAGE.md). `@lesto/integration` and
  * `@lesto/e2e` declare no `test:cov` and are skipped automatically; they run as
- * their own (non-gated) CI steps.
+ * their own (non-gated) CI steps. The gate PRINTS this scope at the start of
+ * every run, so the enforced-vs-exempt split is visible on every run — not only
+ * under audit (CONVENTIONS.md "Coverage scope" states the same split).
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 const packagesDir = new URL("../packages/", import.meta.url).pathname;
-const failed: string[] = [];
+
+// Classify first, so the gate can state its own scope before the first suite runs.
+const gated: { name: string; dir: string }[] = [];
+const contentExempt: string[] = [];
+const noTestCov: string[] = [];
 
 for (const dir of readdirSync(packagesDir).sort()) {
-  if (dir.startsWith("content-")) continue;
-
   let pkg: { name?: string; scripts?: Record<string, string> };
   try {
     pkg = JSON.parse(readFileSync(`${packagesDir}${dir}/package.json`, "utf8"));
   } catch {
     continue; // not a package directory
   }
-  if (!pkg.scripts?.["test:cov"]) continue;
 
   const name = pkg.name ?? dir;
+  if (dir.startsWith("content-")) {
+    contentExempt.push(name);
+    continue;
+  }
+  if (!pkg.scripts?.["test:cov"]) {
+    noTestCov.push(name);
+    continue;
+  }
+  gated.push({ name, dir });
+}
+
+console.log(`coverage gate scope: ${gated.length} packages enforced at 100% thresholds`);
+console.log(
+  `  exempt (${contentExempt.length}) content-* — frozen Docks baselines, ratcheted separately (CONTENT_COVERAGE.md): ${contentExempt.join(", ")}`,
+);
+console.log(
+  `  skipped (${noTestCov.length}) no test:cov script — run as their own non-gated CI steps: ${noTestCov.join(", ")}`,
+);
+
+const failed: string[] = [];
+
+for (const { name, dir } of gated) {
   console.log(`\n── coverage gate: ${name}`);
   const { status } = spawnSync("bun", ["run", "test:cov"], {
     cwd: `${packagesDir}${dir}`,

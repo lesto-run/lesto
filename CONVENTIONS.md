@@ -30,10 +30,19 @@ Estate is where a regression or an awkward API shows up first. Keep it real, kee
 | Lint | **oxlint** (`.oxlintrc.json`) |
 | Format | **oxfmt** — the formatter owns whitespace; never hand-fight it |
 | Tests | **vitest**; coverage via `@vitest/coverage-v8` |
-| Coverage | **100%** lines / functions / branches / statements — enforced in `vitest.config.ts` thresholds |
+| Coverage | **100%** lines / functions / branches / statements — enforced in `vitest.config.ts` thresholds (scope below: `content-*` is gate-exempt, ratcheting up) |
 
 Packages run their TypeScript **directly** (Bun + vitest); `exports` point at `./src/index.ts`.
 Module resolution is `Bundler`, so imports are extensionless.
+
+**Coverage scope.** The serial gate (`scripts/coverage-gate.ts`, run as `bun run ws:test:cov`)
+enforces the 100% thresholds on every package that declares a `test:cov` script **except** the
+folded-in `content-*` packages — frozen Docks baselines that entered the monorepo below the bar
+and are ratcheted up separately (see [CONTENT_COVERAGE.md](./CONTENT_COVERAGE.md)); new or
+changed content code is still expected to ship fully covered. A package with no `test:cov`
+script is also skipped — today `@lesto/ai` (tests, no coverage thresholds yet) plus
+`@lesto/e2e` and `@lesto/integration`, which run as their own, non-gated CI jobs. The gate
+prints this scope — enforced count, exempt and skipped names — at the start of every run.
 
 ## TypeScript settings (tsconfig.base.json)
 

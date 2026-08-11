@@ -48,7 +48,13 @@ import type { LestoMcpContext, McpAuditRecord } from "@lesto/mcp";
 import { isLestoError } from "@lesto/errors";
 
 import { createDevState } from "./dev-state";
-import { declaresIslandDevPeer, isMissingSelfModule, missingModuleSpecifier, run } from "./run";
+import {
+  declaresIslandDevPeer,
+  isHelpRequest,
+  isMissingSelfModule,
+  missingModuleSpecifier,
+  run,
+} from "./run";
 import type {
   BuildHook,
   CliDeps,
@@ -279,15 +285,48 @@ const applyDiscoveredRoutes = async (app: LestoAppConfig["app"], bust?: string):
 // Load the project's app config + auto-wire its file routes. `bust` (a dev re-load)
 // cache-busts BOTH `lesto.app.ts` and the route imports, so an edit is re-imported
 // rather than served from ESM's module cache.
+//
+// An app that CANNOT load refuses loud + coded (`CLI_APP_LOAD_FAILED`, naming the
+// path and carrying the cause) rather than letting the raw throw escape (audit #12):
+// a raw throw used to surface as a bare runtime stack at best — and, on the
+// `bunx lesto` path, as a SILENT exit 0 (see `reportCoded` for that swallow). The
+// missing-file case is probed FIRST, like `loadSites`/`loadBuildHook`: it is the
+// everyday "ran `lesto` outside a project root" miss, it deserves its own message,
+// and probing never relies on the loader throwing (the bin's jiti loader has hung
+// on a missing project-file import before, L-3f1c6bdb).
 const loadAppConfig = async (seams?: TraceSeams, bust?: string): Promise<LestoAppConfig> => {
   const appPath = join(process.cwd(), "lesto.app.ts");
-  const module = (await import(bust === undefined ? appPath : `${appPath}?t=${bust}`)) as {
-    default: AppDefault;
-  };
 
-  const exported = module.default;
+  if (!(await dirExists(appPath))) {
+    throw new CliError(
+      "CLI_APP_LOAD_FAILED",
+      `no lesto.app.ts found at ${appPath} — run \`lesto\` from your project root ` +
+        "(the directory that holds lesto.app.ts).",
+      { path: appPath },
+    );
+  }
 
-  const config = typeof exported === "function" ? await exported(seams) : exported;
+  let config: LestoAppConfig;
+
+  try {
+    const module = (await import(bust === undefined ? appPath : `${appPath}?t=${bust}`)) as {
+      default: AppDefault;
+    };
+
+    const exported = module.default;
+
+    config = typeof exported === "function" ? await exported(seams) : exported;
+  } catch (cause) {
+    // The file exists but importing it (or running its config factory) threw — a
+    // syntax error, a missing import, an init-time crash. Name the file and carry
+    // the cause: `reportCoded` prints the one-line `code: message`, and dev's
+    // reload overlay unwraps `details.cause` for the author-facing message.
+    throw new CliError(
+      "CLI_APP_LOAD_FAILED",
+      `failed to load ${appPath}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { path: appPath, cause },
+    );
+  }
 
   await applyDiscoveredRoutes(config.app, bust);
 
@@ -1141,9 +1180,19 @@ const wireGenerateUi = async (): Promise<((prompt: string) => Promise<unknown>) 
 // exit 1 — never a raw stack trace. Print the code too: CLI stderr is first-class
 // (CONVENTIONS "Logs") and agents consuming it branch on codes (ADR 0035).
 // Recognize the base via the cross-copy brand (`isLestoError`), never
-// `instanceof` — a duplicate `@lesto/errors` install breaks class identity. A
-// non-coded throw is a genuine bug: rethrow it so it surfaces loudly with its
-// stack.
+// `instanceof` — a duplicate `@lesto/errors` install breaks class identity.
+//
+// A non-coded throw is a genuine bug: surface it loudly WITH its stack — but
+// PRINTED + `process.exit(1)`, never RETHROWN. The old rethrow relied on the
+// module's top-level-await rejection reaching the runtime, which is true under
+// `bun bin.ts` and `node bin/lesto.mjs` — but NOT under `bunx lesto`/`bun run`,
+// where Bun ignores the wrapper's node shebang and jiti runs UNDER BUN: jiti
+// transpiles this module's top-level await into an async CJS wrapper, resolves
+// the entry import at the wrapper's FIRST suspension, and DROPS the detached
+// continuation's later rejection — so a rethrown error vanished with ZERO bytes
+// on either stream and the process exited 0 (audit #12's swallow point; pinned
+// by the bunx-shape e2e). `console.error` + `process.exit` are synchronous side
+// effects, so they hold even from that detached continuation.
 function reportCoded(error: unknown): never {
   if (isLestoError(error)) {
     console.error(`${error.code}: ${error.message}`);
@@ -1151,7 +1200,9 @@ function reportCoded(error: unknown): never {
     process.exit(1);
   }
 
-  throw error;
+  console.error(error instanceof Error ? (error.stack ?? String(error)) : String(error));
+
+  process.exit(1);
 }
 
 // `mcp` and `openapi` live in their own command files (operability-dx #4/#5);
@@ -1519,5 +1570,8 @@ try {
 }
 
 // Long-running commands keep the process alive on their own socket; everything
-// else has said all it has to say, so exit with the code the core returned.
-if (argv[0] !== "serve" && argv[0] !== "dev") process.exit(code);
+// else has said all it has to say, so exit with the code the core returned. A
+// help ask is one-shot even on a long-running command: `lesto dev --help` prints
+// usage and must EXIT, never linger on the reload socket the bin pre-built for
+// `dev` (without this, usage printed and the process hung on the open WS).
+if ((argv[0] !== "serve" && argv[0] !== "dev") || isHelpRequest(argv)) process.exit(code);

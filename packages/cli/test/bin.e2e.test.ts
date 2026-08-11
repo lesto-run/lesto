@@ -40,6 +40,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const here = dirname(fileURLToPath(import.meta.url));
 
 const binPath = join(here, "..", "src", "bin.ts");
+const binMjsPath = join(here, "..", "bin", "lesto.mjs");
 const fixtureDir = join(here, "fixture");
 
 interface SpawnResult {
@@ -98,6 +99,52 @@ async function mkdtempInRepo(prefix: string): Promise<string> {
   await mkdir(inRepoTmpRoot, { recursive: true });
 
   return mkdtemp(join(inRepoTmpRoot, prefix));
+}
+
+/**
+ * Spawn the bin under Bun with a hard watchdog: if the child does not close on its
+ * own within `timeoutMs` it is SIGKILLed and `timedOut` flips true — so a HANG (or
+ * a one-shot command that wrongly lingers on a dev socket) fails an assertion
+ * loudly instead of stalling the suite. `entry` picks which executable: the source
+ * `bin.ts` directly, or `bin/lesto.mjs` — the latter is the `bunx lesto` shape (Bun
+ * ignores the wrapper's node shebang, so jiti runs UNDER BUN), the path where an
+ * app-load failure once vanished into a silent exit 0 (audit #12).
+ */
+async function runBunBounded(
+  entry: string,
+  cwd: string,
+  args: readonly string[],
+  timeoutMs: number,
+): Promise<SpawnResult & { timedOut: boolean }> {
+  const child = spawn("bun", [entry, ...args], { cwd });
+
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, timeoutMs);
+
+  const result = await collect(child);
+
+  clearTimeout(timer);
+
+  return { ...result, timedOut };
+}
+
+/**
+ * A throwaway project whose `lesto.app.ts` THROWS on import — the failing-app
+ * fixture for the app-load-failure e2es. The file imports nothing, so a plain
+ * `os.tmpdir()` dir is fine (there is no bare specifier to resolve).
+ */
+async function buildThrowingAppFixture(): Promise<string> {
+  const project = await mkdtemp(join(tmpdir(), "lesto-cli-badapp-"));
+
+  await writeFile(
+    join(project, "lesto.app.ts"),
+    'throw new Error("boom: broken lesto.app.ts");\n\nexport default {};\n',
+  );
+
+  return project;
 }
 
 /**
@@ -695,4 +742,90 @@ describe("bin e2e", () => {
       await rm(fixture, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("--help and -h print the SAME usage bare `lesto` prints and exit 0 (audit #11)", async () => {
+    // Both used to hard-error as CLI_UNKNOWN_COMMAND on stderr while bare `lesto`
+    // printed perfect help; they must be byte-identical soft successes.
+    const bare = await runBin([]);
+    const help = await runBin(["--help"]);
+    const short = await runBin(["-h"]);
+
+    expect(bare.code, bare.stderr).toBe(0);
+    expect(help.code, help.stderr).toBe(0);
+    expect(short.code, short.stderr).toBe(0);
+
+    expect(bare.stdout).toContain("Usage: lesto <command>");
+    expect(help.stdout).toBe(bare.stdout);
+    expect(short.stdout).toBe(bare.stdout);
+  }, 30_000);
+
+  it("dev --help prints usage and EXITS 0 — it never boots the dev loop or lingers on its sockets", async () => {
+    // `dev` is the one command whose bin path pre-builds live sockets (the reload
+    // WS). A help ask must still be a one-shot: usage on stdout, then a real exit —
+    // the watchdog turns "it lingered" into a loud failure instead of a suite stall.
+    const result = await runBunBounded(binPath, fixtureDir, ["dev", "--help"], 25_000);
+
+    expect(result.timedOut, "dev --help lingered instead of exiting after usage").toBe(false);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Usage: lesto <command>");
+  }, 30_000);
+
+  it("routes: a lesto.app.ts that THROWS on import fails loud — non-zero exit, coded stderr naming the file and the cause (audit #12)", async () => {
+    const project = await buildThrowingAppFixture();
+
+    try {
+      const result = await collect(spawn("bun", [binPath, "routes"], { cwd: project }));
+
+      expect(result.code).not.toBe(0);
+      // The coded one-liner idiom every other refusal prints: `code: message` on
+      // stderr, naming the file it tried to load and the underlying cause.
+      expect(result.stderr).toContain("CLI_APP_LOAD_FAILED");
+      expect(result.stderr).toContain("lesto.app.ts");
+      expect(result.stderr).toContain("boom: broken lesto.app.ts");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("routes: a MISSING lesto.app.ts fails loud and coded, naming the expected path", async () => {
+    // Running `lesto routes` outside a project root is the everyday miss; it must
+    // say what it looked for and where, never a raw resolver stack.
+    const project = await mkdtemp(join(tmpdir(), "lesto-cli-noapp-"));
+
+    try {
+      const result = await collect(spawn("bun", [binPath, "routes"], { cwd: project }));
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("CLI_APP_LOAD_FAILED");
+      expect(result.stderr).toContain("lesto.app.ts");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("routes via `bun bin/lesto.mjs` (the bunx shape): an app-load failure exits non-zero with the coded error — never the silent exit-0 swallow", async () => {
+    // THE audit-#12 repro. Bun ignores the wrapper's node shebang, so jiti runs
+    // UNDER BUN and transpiles bin.ts's top-level await into an async CJS wrapper;
+    // jiti resolves the entry import at the wrapper's first suspension and DROPS
+    // the detached continuation's later rejection — so before the fix this exact
+    // spawn exited 0 with ZERO bytes on both streams. The fix routes app-load
+    // failure through the coded `reportCoded` path, whose `console.error` +
+    // `process.exit(1)` are synchronous side effects that survive the detachment.
+    const project = await buildThrowingAppFixture();
+
+    try {
+      const result = await runBunBounded(binMjsPath, project, ["routes"], 25_000);
+
+      expect(result.timedOut, "the bunx-shape bin HUNG on the broken app").toBe(false);
+      expect(
+        result.code,
+        `expected a loud non-zero exit; stdout=${JSON.stringify(result.stdout)} stderr=${JSON.stringify(result.stderr)}`,
+      ).not.toBe(0);
+      expect(result.stderr).toContain("CLI_APP_LOAD_FAILED");
+      expect(result.stderr).toContain("lesto.app.ts");
+      expect(result.stderr).toContain("boom: broken lesto.app.ts");
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

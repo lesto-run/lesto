@@ -46,7 +46,7 @@ import { DEV_INSPECT_TOOL, dispatchAiTurn } from "./ai-bridge";
 import type { AiTurn } from "./ai-bridge";
 import { assembleContext } from "./ai-context";
 import { redactContext, redactString, redactToolOutput } from "./ai-redact";
-import { parsePort, parseStringFlag } from "./flags";
+import { hasFlag, parsePort, parseStringFlag } from "./flags";
 
 /** The default port for `serve`/`dev` when no `--port` flag is given. */
 const DEFAULT_PORT = 3000;
@@ -710,8 +710,23 @@ const USAGE = [
   "  content:build     Compile markdown content into the content store (--prune drops stale rows)",
   "  content:new       Scaffold a new content entry: content:new <collection> <title>",
   "  content:delete    Delete a content entry: content:delete <collection> <slug>",
-  "  help              Show this help",
+  "  help              Show this help (so do --help and -h)",
 ].join("\n");
+
+/**
+ * Whether an invocation asks for help: `--help` or `-h` anywhere in the argv —
+ * as the whole first token (`lesto --help`) or after a subcommand
+ * (`lesto routes --help`). Matched against WHOLE argv elements (the same
+ * element-equality every flag parser here uses), so a value that merely contains
+ * the text — a content title, a path — never trips it.
+ *
+ * Exported for the bin: its exit tail must treat a help ask on a long-running
+ * command (`lesto dev --help`) as a one-shot print too — exiting instead of
+ * lingering on the dev sockets it pre-built for `dev`.
+ */
+export function isHelpRequest(argv: readonly string[]): boolean {
+  return hasFlag(argv, "help") || argv.includes("-h");
+}
 
 /** Print every route the app declares, one per line as `method\tpattern`. */
 async function runRoutes(deps: CliDeps): Promise<number> {
@@ -2719,6 +2734,16 @@ export async function run(argv: readonly string[], deps: CliDeps): Promise<numbe
   // that guard — even a mis-copied app entry or a future refactor that leaks any of those
   // onto a serve/build/deploy run is refused here, before any command runs.
   assertDevOnly(command, deps);
+
+  // A help ask — `--help`/`-h` as the first arg or after a subcommand — prints
+  // the SAME usage bare `lesto` and `lesto help` print and succeeds (audit #11:
+  // both used to hard-error as CLI_UNKNOWN_COMMAND). Checked before dispatch so
+  // `lesto routes --help` asks about routes rather than running the command.
+  if (isHelpRequest(argv)) {
+    printUsage(deps);
+
+    return 0;
+  }
 
   if (command === "routes") return runRoutes(deps);
 
