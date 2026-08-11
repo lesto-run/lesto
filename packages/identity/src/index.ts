@@ -40,9 +40,11 @@ import type { MigrationEntry } from "@lesto/migrate";
 import { grantRole, revokeRole, rolesOf, userRoles, userRolesMigration } from "./roles";
 import {
   confirmFactor,
+  deleteTotpFactor,
   findTotpFactor,
   findUnusedRecoveryCodes,
   markRecoveryCodeUsed,
+  recordTotpStep,
   recoveryCodes,
   replaceRecoveryCodes,
   totpFactors,
@@ -58,12 +60,13 @@ import {
   markEmailVerified,
   normalizeEmail,
   setPasswordHash,
+  toPublicUser,
   users,
   usersMigration,
 } from "./user";
 
 import type { RecoveryCode, TotpFactor } from "./totp";
-import type { User, UserInput } from "./user";
+import type { PublicUser, User, UserInput } from "./user";
 
 export { createIdentity, pbkdf2MigrationHasher } from "./identity";
 export type {
@@ -71,6 +74,7 @@ export type {
   IdentityEvent,
   IdentityMailer,
   IdentityOptions,
+  LoginContext,
   LoginResult,
   PasswordHasher,
   PasswordHashCost,
@@ -85,16 +89,19 @@ export {
   markEmailVerified,
   normalizeEmail,
   setPasswordHash,
+  toPublicUser,
   users,
   usersMigration,
 };
-export type { User, UserInput };
+export type { PublicUser, User, UserInput };
 
 export {
   confirmFactor,
+  deleteTotpFactor,
   findTotpFactor,
   findUnusedRecoveryCodes,
   markRecoveryCodeUsed,
+  recordTotpStep,
   recoveryCodes,
   replaceRecoveryCodes,
   totpFactors,

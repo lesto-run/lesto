@@ -43,6 +43,28 @@ export const users = defineTable("users", {
 /** A user row — the shape SELECT yields and identity passes around. */
 export type User = InferRow<typeof users>;
 
+/**
+ * The user shape the {@link Identity} service RETURNS — a {@link User} minus
+ * `passwordHash`.
+ *
+ * The service's public surface (`register`, `login`, `verifyEmail`,
+ * `resetPassword`, `currentUser`, `completeTotpChallenge`) hands back this
+ * projection, never the raw row: a handler that does the obvious
+ * `c.json(result)` must not be one forgotten field-filter away from serving
+ * the password-hash corpus to the network. Code that genuinely needs the hash
+ * (verification, rehash-on-login) reads the row internally via
+ * {@link findUserByEmail} / {@link findUserById}, which still return the full
+ * {@link User}.
+ */
+export type PublicUser = Omit<User, "passwordHash">;
+
+/** Project a row to its {@link PublicUser} view, dropping `passwordHash`. */
+export function toPublicUser(user: User): PublicUser {
+  const { passwordHash: _passwordHash, ...publicUser } = user;
+
+  return publicUser;
+}
+
 /** A camelCase view of the writable fields, the shape the service speaks. */
 export interface UserInput {
   readonly email: string;

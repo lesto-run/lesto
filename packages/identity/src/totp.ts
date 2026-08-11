@@ -32,6 +32,8 @@ import {
   dropTableSql,
   eq,
   integer,
+  lt,
+  or,
   text,
   timestamp,
   and,
@@ -120,15 +122,43 @@ export async function confirmFactor(db: Db, userId: number): Promise<void> {
 }
 
 /**
- * Persist the step counter of a just-accepted TOTP code so a replay inside the
- * live ±window is refused next time (RFC 6238 §5.2). Bumps `updatedAt`.
+ * Atomically claim the step counter of a just-accepted TOTP code: stamp
+ * `lastUsedStep` only while the stored counter is still BELOW `step`
+ * (`WHERE user_id = ? AND (last_used_step IS NULL OR last_used_step < step)`).
+ * Returns `true` iff this call won the claim — a `changes` of 0 means a
+ * concurrent verification already spent this step (or a later one), so the
+ * caller must treat the code as a replay and refuse (RFC 6238 §5.2). This is
+ * the same conditional-UPDATE discipline as {@link markRecoveryCodeUsed}: two
+ * requests racing the same code both pass the read-side `step <=
+ * lastUsedStep` check, but only one conditional UPDATE flips the row. Bumps
+ * `updatedAt` on the winning write.
  */
-export async function recordTotpStep(db: Db, userId: number, step: number): Promise<void> {
-  await db
+export async function recordTotpStep(db: Db, userId: number, step: number): Promise<boolean> {
+  const { changes } = await db
     .update(totpFactors)
     .set({ lastUsedStep: step, updatedAt: new Date() })
-    .where(eq(totpFactors.userId, userId))
+    .where(
+      and(
+        eq(totpFactors.userId, userId),
+        or(isNull(totpFactors.lastUsedStep), lt(totpFactors.lastUsedStep, step)),
+      ),
+    )
     .run();
+
+  return changes > 0;
+}
+
+/**
+ * Remove a user's TOTP factor AND their recovery codes — the storage side of
+ * {@link Identity.disableTotp}. The codes go first: a crash between the two
+ * deletes then leaves a factor with no codes (a state `confirmTotp` can already
+ * produce transiently and login handles), never orphaned recovery codes that
+ * could pass a future re-enrollment's break-glass check. Deleting when nothing
+ * is enrolled is a no-op.
+ */
+export async function deleteTotpFactor(db: Db, userId: number): Promise<void> {
+  await db.delete(recoveryCodes).where(eq(recoveryCodes.userId, userId)).run();
+  await db.delete(totpFactors).where(eq(totpFactors.userId, userId)).run();
 }
 
 /** Replace a user's recovery codes with a fresh batch of hashes. */

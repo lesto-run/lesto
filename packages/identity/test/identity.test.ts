@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installSessionSchema, sqlSessionStore } from "@lesto/auth";
+import type { Session, SessionStore } from "@lesto/auth";
 import { createDb } from "@lesto/db";
 import type { Db, SqlDatabase } from "@lesto/db";
 import { Migrator } from "@lesto/migrate";
@@ -1630,9 +1631,12 @@ describe("onEvent seam", () => {
     ]);
   });
 
-  it("emits password_reset but NOT session_revoked on a memory store (nothing was revoked)", async () => {
-    // No sessionStore override => the default MemorySessionStore, which has no
-    // deleteByUserId, so the reset revokes nothing and announces nothing.
+  it("revokes on reset over the DEFAULT memory store too, and emits session_revoked", async () => {
+    // No sessionStore override => the default MemorySessionStore. It now carries
+    // deleteByUserId, so revoke-on-reset holds on the DEFAULT store — the
+    // audit's "reset silently leaves a stolen session alive on the default
+    // wiring" hole. The stolen-session check below is the teeth: the pre-reset
+    // session must actually be dead, not merely a `session_revoked` line.
     const { mailer, sent } = captureMailer();
     const events: IdentityEvent[] = [];
     const identity = createIdentity({
@@ -1650,12 +1654,21 @@ describe("onEvent seam", () => {
 
     const { user } = await identity.register("ada@example.com", "old password 1");
     await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+    const { session: stolen } = expectAuthenticated(
+      await identity.login("ada@example.com", "old password 1"),
+    );
     await identity.requestPasswordReset("ada@example.com");
     events.length = 0;
 
     await identity.resetPassword(sent.find((e) => e.kind === "reset")!.token, "brand new password");
 
-    expect(events).toEqual([{ type: "password_reset", userId: String(user!.id), at: clock() }]);
+    const userId = String(user!.id);
+    expect(events).toEqual([
+      { type: "password_reset", userId, at: clock() },
+      { type: "session_revoked", userId, at: clock() },
+    ]);
+    // The attacker's pre-reset session no longer resolves.
+    expect(await identity.currentUser(stolen.token)).toBeUndefined();
   });
 
   it("emits session_revoked with the session's userId on logout of a live session", async () => {
@@ -1780,5 +1793,223 @@ describe("onEvent seam", () => {
       expect(blob).not.toContain(email.token);
     }
     expect(blob).not.toContain(session.token);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// the session store must be able to revoke by user (P0 audit item 3)
+//
+// resetPassword promises revoke-on-reset; a store that cannot deliver it (no
+// deleteByUserId) with no revokeUserSessions hook must refuse at CONSTRUCTION —
+// the silent alternative is a reset that leaves an attacker's session alive
+// while the docstring promises otherwise.
+// ---------------------------------------------------------------------------
+
+/** The minimal three-verb store — deliberately WITHOUT deleteByUserId. */
+function bareStore(): SessionStore {
+  const sessions = new Map<string, Session>();
+
+  return {
+    save: async (session) => {
+      sessions.set(session.token, session);
+    },
+    find: async (token) => sessions.get(token),
+    delete: async (token) => {
+      sessions.delete(token);
+    },
+  };
+}
+
+describe("non-revocable session store", () => {
+  it("refuses at construction with IDENTITY_SESSION_STORE_NOT_REVOCABLE", () => {
+    const { mailer } = captureMailer();
+
+    let thrown: unknown;
+    try {
+      createIdentity({
+        db,
+        secret: "test-secret-0123456789abcdefghij",
+        mailer,
+        verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+        resetUrl: (token) => `https://app.test/reset?token=${token}`,
+        sessionStore: bareStore(),
+        hasher: cheapHasher,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(IdentityError);
+    expect((thrown as IdentityError).code).toBe("IDENTITY_SESSION_STORE_NOT_REVOCABLE");
+  });
+
+  it("constructs when revokeUserSessions covers the store's gap, and the hook fires on reset", async () => {
+    const { mailer, sent } = captureMailer();
+    const revokedFor: string[] = [];
+
+    const identity = createIdentity({
+      db,
+      secret: "test-secret-0123456789abcdefghij",
+      mailer,
+      verificationUrl: (token) => `https://app.test/verify?token=${token}`,
+      resetUrl: (token) => `https://app.test/reset?token=${token}`,
+      sessionStore: bareStore(),
+      revokeUserSessions: (userId) => {
+        revokedFor.push(userId);
+      },
+      hasher: cheapHasher,
+      clock: () => clock(),
+    });
+
+    const { user } = await identity.register("ada@example.com", "old password 1");
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+    await identity.requestPasswordReset("ada@example.com");
+    await identity.resetPassword(sent.find((e) => e.kind === "reset")!.token, "brand new password");
+
+    expect(revokedFor).toEqual([String(user!.id)]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// login throttle keys on (client IP, email) when the transport passes its
+// resolved address (P0 audit item 6) — a remote attacker's failures drain a
+// bucket the victim never reads, closing the free targeted-lockout DoS.
+// ---------------------------------------------------------------------------
+
+describe("login throttle keyed on clientIp + email", () => {
+  const email = "ada@example.com";
+  const password = "correct horse staple";
+
+  async function registeredUser(identity: Identity): Promise<void> {
+    await identity.register(email, password);
+  }
+
+  it("an attacker's drained (ip, email) bucket does not lock out the victim's own IP", async () => {
+    const { identity, sent } = buildIdentity();
+
+    await registeredUser(identity);
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+
+    // The attacker hammers the account from THEIR address until that bucket drains.
+    for (let i = 0; i < 5; i++) {
+      await expect(
+        identity.login(email, "wrong password", { clientIp: "198.51.100.9" }),
+      ).rejects.toMatchObject({ code: "IDENTITY_INVALID_CREDENTIALS" });
+    }
+    await expect(
+      identity.login(email, "wrong password", { clientIp: "198.51.100.9" }),
+    ).rejects.toMatchObject({ code: "IDENTITY_LOGIN_THROTTLED" });
+
+    // Even the CORRECT password is refused from the attacker's address (the gate
+    // sits before verification) …
+    await expect(
+      identity.login(email, password, { clientIp: "198.51.100.9" }),
+    ).rejects.toMatchObject({ code: "IDENTITY_LOGIN_THROTTLED" });
+
+    // … but the victim, on their own address, signs straight in: their
+    // `login:<ip>:<email>` bucket is untouched by the attacker's flood. Under
+    // email-only keying this login was REFUSED — the targeted-lockout DoS.
+    await expect(
+      identity.login(email, password, { clientIp: "203.0.113.7" }),
+    ).resolves.toMatchObject({ status: "authenticated" });
+  });
+
+  it("failures from one IP still throttle THAT (ip, email) pair — the cap is real", async () => {
+    const { identity, sent } = buildIdentity();
+
+    await registeredUser(identity);
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+
+    for (let i = 0; i < 5; i++) {
+      await expect(
+        identity.login(email, "wrong password", { clientIp: "203.0.113.7" }),
+      ).rejects.toMatchObject({ code: "IDENTITY_INVALID_CREDENTIALS" });
+    }
+
+    const throttled = await identity
+      .login(email, password, { clientIp: "203.0.113.7" })
+      .catch((e: unknown) => e);
+    expect((throttled as IdentityError).code).toBe("IDENTITY_LOGIN_THROTTLED");
+    expect((throttled as IdentityError).details?.["retryAfterMs"]).toBeGreaterThan(0);
+  });
+
+  it("context without a clientIp falls back to the email-only key", async () => {
+    const { identity, sent } = buildIdentity();
+
+    await registeredUser(identity);
+    await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+
+    // An empty context is the no-IP shape: failures land on `login:<email>` …
+    for (let i = 0; i < 5; i++) {
+      await expect(identity.login(email, "wrong password", {})).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_CREDENTIALS",
+      });
+    }
+
+    // … so a context-less attempt reads the SAME drained bucket.
+    await expect(identity.login(email, password)).rejects.toMatchObject({
+      code: "IDENTITY_LOGIN_THROTTLED",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// the service returns the PublicUser projection — passwordHash never rides a
+// return value (P0 audit item 7): one `c.json(result)` must not leak the corpus
+// ---------------------------------------------------------------------------
+
+// The EXACT public shape. Asserting full key sets (not `not.toHaveProperty`)
+// keeps the projection tests non-vacuous: if passwordHash — or any new secret
+// column — rides a return, the sorted key list changes and they go red.
+const PUBLIC_KEYS = ["createdAt", "email", "emailVerifiedAt", "id", "updatedAt"];
+
+const keysOf = (value: object): string[] => Object.keys(value).sort();
+
+describe("PublicUser projection", () => {
+  it("register, verifyEmail, login, currentUser, and resetPassword all return hash-free users", async () => {
+    const { identity, sent } = buildIdentity();
+
+    const { user: registered } = await identity.register("ada@example.com", "correct horse staple");
+    expect(keysOf(registered!)).toEqual(PUBLIC_KEYS);
+
+    const verified = await identity.verifyEmail(sent.find((e) => e.kind === "verify")!.token);
+    expect(keysOf(verified)).toEqual(PUBLIC_KEYS);
+    // The idempotent re-verify (the other return arm) is projected too.
+    expect(keysOf(await identity.verifyEmail(sent[0]!.token))).toEqual(PUBLIC_KEYS);
+
+    const login = expectAuthenticated(
+      await identity.login("ada@example.com", "correct horse staple"),
+    );
+    expect(keysOf(login.user)).toEqual(PUBLIC_KEYS);
+
+    const current = await identity.currentUser(login.session.token);
+    expect(keysOf(current!)).toEqual(PUBLIC_KEYS);
+
+    await identity.requestPasswordReset("ada@example.com");
+    const reset = await identity.resetPassword(
+      sent.find((e) => e.kind === "reset")!.token,
+      "brand new password",
+    );
+    expect(keysOf(reset)).toEqual(PUBLIC_KEYS);
+  });
+
+  it("toPublicUser drops exactly passwordHash and keeps every other column", () => {
+    const projected = userRepo.toPublicUser({
+      id: 7,
+      email: "ada@example.com",
+      passwordHash: "scrypt$…",
+      emailVerifiedAt: null,
+      createdAt: "2026-06-09T00:00:00.000Z",
+      updatedAt: "2026-06-09T00:00:00.000Z",
+    });
+
+    expect(projected).toEqual({
+      id: 7,
+      email: "ada@example.com",
+      emailVerifiedAt: null,
+      createdAt: "2026-06-09T00:00:00.000Z",
+      updatedAt: "2026-06-09T00:00:00.000Z",
+    });
+    expect(keysOf(projected)).toEqual(PUBLIC_KEYS);
   });
 });

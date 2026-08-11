@@ -373,6 +373,26 @@ describe("Sessions", () => {
     expect(session.expiresAt).toBeGreaterThanOrEqual(before + 60_000);
     expect(await sessions.verify(session.token)).toEqual(session);
   });
+
+  it("deleteByUserId removes every session for THAT user and reports the count", async () => {
+    const { clock } = stoppedClock(1_000);
+    const store = new MemorySessionStore();
+    const sessions = new Sessions({ store, clock });
+
+    // Two sessions for user_1 (two devices), one for user_2.
+    const first = await sessions.create("user_1", 60_000);
+    const second = await sessions.create("user_1", 60_000);
+    const other = await sessions.create("user_2", 60_000);
+
+    // Revoke-by-user (the reset flow): both of user_1's sessions die at once…
+    expect(await store.deleteByUserId("user_1")).toBe(2);
+    expect(await sessions.verify(first.token)).toBeUndefined();
+    expect(await sessions.verify(second.token)).toBeUndefined();
+
+    // …while user_2's survives untouched, and a re-sweep finds nothing left.
+    expect(await sessions.verify(other.token)).toEqual(other);
+    expect(await store.deleteByUserId("user_1")).toBe(0);
+  });
 });
 
 describe("AuthError", () => {

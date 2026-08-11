@@ -16,7 +16,7 @@
  * routes/layouts/data but not its client-module config.
  */
 
-import { lesto } from "@lesto/web";
+import { currentContext, lesto } from "@lesto/web";
 import type { Context, Lesto } from "@lesto/web";
 import type { PrincipalResolverOptions } from "@lesto/authz";
 
@@ -57,6 +57,19 @@ function formField(body: unknown, field: string): string | undefined {
   if (typeof body !== "string") return undefined;
 
   return new URLSearchParams(body).get(field) ?? undefined;
+}
+
+/**
+ * HTTP status for a step-up-gated TOTP endpoint (enroll / disable): a missing
+ * session is 401, a drained step-up throttle is 429, a wrong password is 401,
+ * and every other coded refusal (already-enrolled, not-enrolled) is a 409
+ * conflict.
+ */
+function enrollStatus(code: string): number {
+  if (code === "IDENTITY_NOT_AUTHENTICATED" || code === "IDENTITY_INVALID_CREDENTIALS") return 401;
+  if (code === "IDENTITY_LOGIN_THROTTLED") return 429;
+
+  return 409;
 }
 
 /**
@@ -216,7 +229,13 @@ export function buildEstateRoutes(
         const password = formField(c.req.body, "password") ?? "";
 
         try {
-          const result = await identity.login(email, password);
+          // Key the per-account login throttle on the (client IP, email) pair —
+          // the transport-resolved address rides the ambient request context (the
+          // same value the IP rate-limit middleware keys on), so a remote attacker
+          // hammering one email drains THEIR bucket, never the victim's.
+          const result = await identity.login(email, password, {
+            ...(currentContext()?.ip !== undefined ? { clientIp: currentContext()!.ip } : {}),
+          });
 
           // A confirmed second factor withholds the session: the password proved
           // out, but "signed in" now means 2FA-complete. Carry the signed
@@ -280,17 +299,18 @@ export function buildEstateRoutes(
        */
       .post("/mls/api/totp/enroll", async (c) => {
         const token = readSessionToken(c.header("cookie"));
+        // Step-up: binding a second factor re-verifies the current password on top
+        // of the session, so a stolen cookie alone cannot enroll an attacker's
+        // authenticator. A wrong password is a 401; a drained step-up bucket a 429.
+        const password = formField(c.req.body, "password") ?? "";
 
         try {
-          const { secret, keyUri } = await identity.enrollTotp(token);
+          const { secret, keyUri } = await identity.enrollTotp(token, password);
 
           return c.json({ secret, keyUri });
         } catch (error) {
           if (error instanceof IdentityError) {
-            return c.json(
-              { error: error.code },
-              error.code === "IDENTITY_NOT_AUTHENTICATED" ? 401 : 409,
-            );
+            return c.json({ error: error.code }, enrollStatus(error.code));
           }
 
           throw error;
@@ -314,6 +334,28 @@ export function buildEstateRoutes(
               { error: error.code },
               error.code === "IDENTITY_NOT_AUTHENTICATED" ? 401 : 400,
             );
+          }
+
+          throw error;
+        }
+      })
+      /**
+       * Remove the signed-in user's authenticator — the only way out of 2FA (a
+       * password reset deliberately does NOT touch the factor). Same step-up as
+       * enroll: the current password re-verifies, so a stolen cookie can neither
+       * strip the victim's second factor nor brute-force the password here.
+       */
+      .post("/mls/api/totp/disable", async (c) => {
+        const token = readSessionToken(c.header("cookie"));
+        const password = formField(c.req.body, "password") ?? "";
+
+        try {
+          await identity.disableTotp(token, password);
+
+          return c.json({ status: "disabled" });
+        } catch (error) {
+          if (error instanceof IdentityError) {
+            return c.json({ error: error.code }, enrollStatus(error.code));
           }
 
           throw error;

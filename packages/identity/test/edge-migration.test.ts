@@ -3,7 +3,7 @@ import { randomBytes, scryptSync } from "node:crypto";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AuthError } from "@lesto/auth";
+import { AuthError, MemorySessionStore } from "@lesto/auth";
 import { createDb } from "@lesto/db";
 import type { Db, SqlDatabase } from "@lesto/db";
 import { Migrator } from "@lesto/migrate";
@@ -20,6 +20,7 @@ import {
 import * as totpRepo from "../src/totp";
 
 import { expectAuthenticated } from "./authed";
+import { cheapHasher } from "./cheap-hasher";
 
 import type { IdentityEvent, IdentityMailer, IdentityOptions, PasswordHasher } from "../src/index";
 
@@ -241,6 +242,73 @@ describe("login — an unverifiable (scrypt-on-edge) hash", () => {
     const identity = createIdentity(build({ hasher }));
 
     await expect(identity.login("boom@edge.test", "password12345")).rejects.toThrow(
+      "transient KDF fault",
+    );
+  });
+});
+
+describe("enrollTotp/disableTotp step-up — an unverifiable (scrypt-on-edge) hash", () => {
+  /**
+   * A session minted on a Node-shaped identity (which CAN verify the scrypt row),
+   * then presented to an edge-shaped identity whose hasher refuses scrypt — the
+   * migrated-corpus shape: the user signed in on the Node tier, and their session
+   * reaches an edge isolate that cannot re-verify their stored hash for step-up.
+   */
+  async function edgeSessionFor(
+    email: string,
+    password: string,
+    rejection: unknown,
+    opts: Partial<IdentityOptions> = {},
+  ): Promise<{ token: string; identity: ReturnType<typeof createIdentity> }> {
+    const sessionStore = new MemorySessionStore();
+    await seedVerifiedUser(email, cheapScryptHash(password));
+
+    // The Node tier verifies the cheap scrypt row with the REAL verifier but pins
+    // `needsRehash` false, so this login spends no full-cost production re-mint.
+    const nodeIdentity = createIdentity(build({ sessionStore, hasher: cheapHasher }));
+    const { session } = expectAuthenticated(await nodeIdentity.login(email, password));
+
+    const { hasher } = edgeRefusingHasher(rejection);
+    const identity = createIdentity(build({ sessionStore, hasher, ...opts }));
+
+    return { token: session.token, identity };
+  }
+
+  it("fails CLOSED with IDENTITY_INVALID_CREDENTIALS on the default posture", async () => {
+    const { token, identity } = await edgeSessionFor(
+      "edge2fa@edge.test",
+      "password12345",
+      kdfUnavailable(),
+    );
+
+    // The step-up cannot verify the password on this runtime — it must refuse
+    // (never enroll on the session alone), under the enumeration-default code.
+    await expect(identity.enrollTotp(token, "password12345")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_CREDENTIALS",
+    });
+  });
+
+  it("surfaces IDENTITY_PASSWORD_RESET_REQUIRED under require_reset", async () => {
+    const { token, identity } = await edgeSessionFor(
+      "edge2fa-reset@edge.test",
+      "password12345",
+      kdfUnavailable(),
+      { onUnverifiableHash: "require_reset" },
+    );
+
+    await expect(identity.disableTotp(token, "password12345")).rejects.toMatchObject({
+      code: "IDENTITY_PASSWORD_RESET_REQUIRED",
+    });
+  });
+
+  it("propagates a non-KDF hasher fault (not swallowed as a credential failure)", async () => {
+    const { token, identity } = await edgeSessionFor(
+      "edge2fa-boom@edge.test",
+      "password12345",
+      new Error("transient KDF fault"),
+    );
+
+    await expect(identity.enrollTotp(token, "password12345")).rejects.toThrow(
       "transient KDF fault",
     );
   });

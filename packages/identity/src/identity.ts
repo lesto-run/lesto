@@ -95,7 +95,7 @@ import * as totpRepo from "./totp";
 // parallel one and hits the UNIQUE constraint). With a plain named import,
 // the binding is frozen and the spy never reaches the call site.
 import * as userRepo from "./user";
-import type { User } from "./user";
+import type { PublicUser, User } from "./user";
 
 /**
  * Email validation, in two layers.
@@ -291,11 +291,14 @@ const invalidToken = (kind: "verification" | "reset"): IdentityError =>
   new IdentityError("IDENTITY_INVALID_TOKEN", `The ${kind} link is invalid or has expired.`);
 
 /**
- * A store that can revoke *every* session for one user in a single statement —
- * the `deleteByUserId` affordance `sqlSessionStore` adds over the core three-verb
- * {@link SessionStore} (ADR 0013). Identity feature-detects this so revoke-on-
- * reset is automatic on a SQL store, with no extra wiring, while a bare memory
- * store (which has no `user_id` index) is left untouched.
+ * A store that can revoke *every* session for one user — the `deleteByUserId`
+ * affordance both built-in stores expose over the core three-verb
+ * {@link SessionStore} (ADR 0013): `sqlSessionStore` as one indexed statement,
+ * {@link MemorySessionStore} as a Map sweep. Identity feature-detects this so
+ * revoke-on-reset is automatic; a custom store WITHOUT it must wire
+ * {@link IdentityOptions.revokeUserSessions} or construction refuses
+ * (`IDENTITY_SESSION_STORE_NOT_REVOCABLE`) — reset must never silently skip
+ * revocation.
  */
 interface UserRevocableStore extends SessionStore {
   deleteByUserId(userId: string): Promise<number>;
@@ -441,7 +444,17 @@ export interface IdentityOptions {
    */
   readonly totpChallengeTtlMs?: number;
 
-  /** Where sessions live. Defaults to an in-memory store (single-process apps). */
+  /**
+   * Where sessions live. Defaults to an in-memory store (single-process apps).
+   *
+   * The store must be able to revoke a user's sessions — expose
+   * `deleteByUserId(userId)` (both built-ins do) — or the caller must wire
+   * {@link revokeUserSessions}; otherwise `createIdentity` refuses with
+   * `IDENTITY_SESSION_STORE_NOT_REVOCABLE`. `resetPassword` promises
+   * revoke-on-reset, and a store that cannot deliver it must fail at
+   * construction, not silently leave an attacker's stolen session alive after
+   * the victim resets.
+   */
   readonly sessionStore?: SessionStore;
 
   /**
@@ -463,22 +476,31 @@ export interface IdentityOptions {
    * SQL-backed limiter for a durable, fleet-wide cap in production (see
    * {@link defaultRateLimiter}).
    *
-   * `login` checks the resolved limiter under the key `login:<normalizedEmail>`
-   * before it answers, and burns one token on each *failed* attempt; once the
-   * bucket is empty it refuses with a coded `IDENTITY_LOGIN_THROTTLED` (a
-   * successful login spends nothing, so a real user is never locked out by their
-   * own sign-in).
+   * `login` checks the resolved limiter under the key
+   * `login:<clientIp>:<normalizedEmail>` — or `login:<normalizedEmail>` when the
+   * caller passes no {@link LoginContext.clientIp} — before it answers, and burns
+   * one token on each *failed* attempt; once the bucket is empty it refuses with
+   * a coded `IDENTITY_LOGIN_THROTTLED` (a successful login spends nothing, so a
+   * real user is never locked out by their own sign-in).
    *
-   * This is the credential-stuffing defense: it bounds guesses against *one
-   * account* no matter how many IPs an attacker spreads them over. The IP-keyed
-   * limiter on the `secureStack` (the request-context client IP) is the OUTER
-   * layer — it caps a single client's request rate, but a botnet rotating IPs
-   * sails through it, which is exactly the gap this account-keyed limiter
-   * closes. Keep both; this one is the defense, the IP limiter is the moat.
+   * **Pass the client IP.** Keying on the (IP, email) PAIR is what stops
+   * email-only keying's two failure modes: any host on the internet could
+   * previously drain `login:<victim@email>` with garbage passwords and lock the
+   * victim out of their own account for free (a targeted-lockout DoS), and a
+   * sprayer got one account-keyed bucket per email with nothing bounding its
+   * total guesses per host. With the pair key, an attacker's failures drain a
+   * bucket the victim never reads, and per-host volume is bounded by the OUTER
+   * IP-keyed limiter on `secureStack` (the request-context client IP) — keep
+   * both layers. The honest trade: a botnet rotating N addresses now gets
+   * `capacity` guesses per address against one account, where email-only keying
+   * capped the account globally — that global cap and the lockout DoS are the
+   * SAME mechanism, and the lockout is the worse default. `stepup:<userId>` (the
+   * enroll/disable-TOTP password re-check) stays account-keyed: it sits behind a
+   * live session, which a remote flooder does not hold.
    *
-   * Enumeration-safe: the key is `login:<email>` for *every* email, existing or
+   * Enumeration-safe in both modes: the key covers *every* email, existing or
    * not, so the throttle reveals nothing about whether an account exists — the
-   * same posture `login` keeps elsewhere (one KDF derive on every failure path,
+   * same posture `login` keeps everywhere (one KDF derive on every failure path,
    * `IDENTITY_INVALID_CREDENTIALS` for both unknown-email and wrong-password).
    */
   readonly loginRateLimiter?: RateLimiter | false;
@@ -511,15 +533,18 @@ export interface IdentityOptions {
    * Optional hook called on a successful password reset, *in addition to* the
    * built-in revoke-on-reset.
    *
-   * Revoke-on-reset is now the **default**: when the configured `sessionStore`
-   * is SQL-backed (it exposes `deleteByUserId`, per ADR 0013), `resetPassword`
-   * already deletes every one of the user's sessions — so a victim resetting
-   * their password ends an attacker's stolen session with no extra wiring. This
-   * hook is the escape hatch for the cases that default cannot cover: a store
-   * with no `deleteByUserId` (a bare {@link MemorySessionStore}, or a custom
-   * one), or a *second* tier to invalidate — e.g. an edge `SignedSessions`
-   * revocation list (ADR 0013 §8) the SQL `deleteByUserId` cannot reach. It runs
-   * on every successful reset, store-backed revocation or not.
+   * Revoke-on-reset is the **default and is enforced**: both built-in stores
+   * ({@link MemorySessionStore} and `sqlSessionStore`, per ADR 0013) expose
+   * `deleteByUserId`, and `resetPassword` deletes every one of the user's
+   * sessions through it — a victim resetting their password ends an attacker's
+   * stolen session with no extra wiring. A custom store WITHOUT
+   * `deleteByUserId` must wire this hook or `createIdentity` refuses at
+   * construction (`IDENTITY_SESSION_STORE_NOT_REVOCABLE`) — the one store that
+   * genuinely cannot revoke server-side is a stateless signed-token tier, and
+   * there this hook IS the revocation (e.g. an edge `SignedSessions` revocation
+   * list, ADR 0013 §8). It runs on every successful reset, store-backed
+   * revocation or not — it can also be a *second* tier on top of a revocable
+   * store.
    */
   readonly revokeUserSessions?: (userId: string) => void | Promise<void>;
 
@@ -609,10 +634,28 @@ export interface IdentityOptions {
  * the `challenge` field only on the second-factor arm, so the type system forces
  * the caller to handle the 2FA path rather than silently reading a session that
  * is not there.
+ *
+ * Both arms carry the {@link PublicUser} projection, never the raw row — a
+ * handler that `c.json(result)`s a login can no longer serve `passwordHash`.
  */
 export type LoginResult =
-  | { readonly status: "authenticated"; readonly user: User; readonly session: Session }
-  | { readonly status: "totp_required"; readonly user: User; readonly challenge: string };
+  | { readonly status: "authenticated"; readonly user: PublicUser; readonly session: Session }
+  | { readonly status: "totp_required"; readonly user: PublicUser; readonly challenge: string };
+
+/**
+ * Optional per-request context for {@link Identity.login}.
+ *
+ * `clientIp` is the transport-resolved client address — in a `@lesto/web` app,
+ * `currentContext()?.ip` (the same resolved value the `rateLimit` middleware
+ * keys on), NEVER a raw `X-Forwarded-For` you have not validated (an attacker
+ * who controls the keyed IP string mints himself fresh throttle buckets at
+ * will). When present, the per-account login throttle keys on
+ * `login:<ip>:<email>` instead of `login:<email>` — see
+ * {@link IdentityOptions.loginRateLimiter} for the exact trade.
+ */
+export interface LoginContext {
+  readonly clientIp?: string;
+}
 
 /**
  * The identity service — an object of functions, all closing over the
@@ -627,8 +670,8 @@ export interface Identity {
   register(
     email: string,
     password: string,
-  ): Promise<{ status: "verification_sent"; user: User | undefined }>;
-  verifyEmail(token: string): Promise<User>;
+  ): Promise<{ status: "verification_sent"; user: PublicUser | undefined }>;
+  verifyEmail(token: string): Promise<PublicUser>;
   /**
    * Verify credentials and either mint a session or — when the account has a
    * confirmed second factor — withhold it and return a challenge to complete via
@@ -649,8 +692,14 @@ export interface Identity {
    * `IDENTITY_INVALID_CREDENTIALS`, `IDENTITY_EMAIL_NOT_VERIFIED`,
    * `IDENTITY_LOGIN_THROTTLED`, and (when {@link IdentityOptions.onUnverifiableHash}
    * is `"require_reset"`) `IDENTITY_PASSWORD_RESET_REQUIRED`.
+   *
+   * Pass {@link LoginContext.clientIp} (the transport-resolved client address)
+   * so the per-account throttle keys on `login:<ip>:<email>` — a remote
+   * attacker's failures then drain THEIR bucket, not the victim's, closing the
+   * free targeted-lockout email-only keying allows. Omitted, the key falls back
+   * to `login:<email>` exactly as before.
    */
-  login(email: string, password: string): Promise<LoginResult>;
+  login(email: string, password: string, context?: LoginContext): Promise<LoginResult>;
 
   /**
    * Complete a `"totp_required"` login (ADR 0020): exchange the signed
@@ -671,14 +720,25 @@ export interface Identity {
     challenge: string,
     code: string,
     options?: { recovery?: boolean },
-  ): Promise<{ user: User; session: Session }>;
+  ): Promise<{ user: PublicUser; session: Session }>;
   requestPasswordReset(email: string): Promise<{ status: "reset_sent" }>;
-  resetPassword(token: string, newPassword: string): Promise<User>;
+  resetPassword(token: string, newPassword: string): Promise<PublicUser>;
   logout(token: string | undefined): Promise<void>;
-  currentUser(token: string | undefined): Promise<User | undefined>;
+  currentUser(token: string | undefined): Promise<PublicUser | undefined>;
 
   /**
    * Begin TOTP enrollment for the signed-in user (ADR 0020, Increment 1).
+   *
+   * Requires a **step-up**: the caller's current `password` re-verifies here, on
+   * top of the live session. A session cookie alone must not be enough to bind a
+   * second factor — otherwise a stolen cookie enrolls the ATTACKER'S
+   * authenticator, permanently upgrading a transient session theft into
+   * durable account control (the victim can then never pass the 2FA gate the
+   * attacker installed). A wrong password refuses with
+   * `IDENTITY_INVALID_CREDENTIALS` and burns the same `stepup:<userId>` throttle
+   * bucket {@link Identity.disableTotp} spends, so a cookie-holder cannot
+   * brute-force the password through this door either
+   * (`IDENTITY_LOGIN_THROTTLED` once drained).
    *
    * Generates a fresh secret, stores it *unconfirmed*, and returns the secret +
    * the `otpauth://` provisioning URI the app renders as a QR code. The secret is
@@ -686,16 +746,39 @@ export interface Identity {
    * onboarding. Throws `IDENTITY_NOT_AUTHENTICATED` without a live session, or
    * `IDENTITY_TOTP_ALREADY_ENROLLED` when a confirmed factor already exists.
    */
-  enrollTotp(token: string | undefined): Promise<{ secret: string; keyUri: string }>;
+  enrollTotp(
+    token: string | undefined,
+    password: string,
+  ): Promise<{ secret: string; keyUri: string }>;
+
+  /**
+   * Remove the signed-in user's TOTP factor and every recovery code — the ONLY
+   * way out of 2FA. A password reset deliberately does NOT touch the factor
+   * (reset is email-controlled, and email compromise must not bypass the second
+   * factor), so without this method a factor is permanent.
+   *
+   * Requires the same **step-up** as {@link Identity.enrollTotp}: the current
+   * `password` on top of the live session, behind the shared `stepup:<userId>`
+   * throttle — a stolen cookie can neither remove the victim's authenticator nor
+   * brute-force the password here. Works on a confirmed OR still-unconfirmed
+   * factor (abandoning a half-finished enrollment is fine). Throws
+   * `IDENTITY_NOT_AUTHENTICATED` without a live session,
+   * `IDENTITY_INVALID_CREDENTIALS` / `IDENTITY_LOGIN_THROTTLED` on a failed or
+   * drained step-up, and `IDENTITY_TOTP_NOT_ENROLLED` when there is nothing to
+   * remove.
+   */
+  disableTotp(token: string | undefined, password: string): Promise<void>;
 
   /**
    * Confirm enrollment with the first code from the authenticator, returning the
-   * one-time-visible recovery codes. On success: mints + persists fresh
-   * KDF-hashed recovery codes FIRST (the plaintext is returned once, never
-   * stored), then stamps the factor confirmed LAST — so a crash between the two
-   * leaves the factor unconfirmed and re-confirmable rather than stranding a
-   * confirmed factor with no recovery codes. Throws `IDENTITY_INVALID_TOTP` on a
-   * wrong code (or a replay of an already-accepted step),
+   * one-time-visible recovery codes. On success: atomically claims the accepted
+   * step FIRST (the conditional write that refuses a concurrent duplicate
+   * confirm), then mints + persists fresh KDF-hashed recovery codes (the
+   * plaintext is returned once, never stored), and stamps the factor confirmed
+   * LAST — a crash anywhere between leaves the factor unconfirmed and
+   * re-confirmable (with the next code) rather than stranding a confirmed
+   * factor with no recovery codes. Throws `IDENTITY_INVALID_TOTP` on a wrong
+   * code (or a replay of an already-accepted step),
    * `IDENTITY_TOTP_NOT_ENROLLED` with no pending factor, or
    * `IDENTITY_TOTP_ALREADY_ENROLLED` if it was already confirmed.
    */
@@ -749,6 +832,20 @@ export function createIdentity(options: IdentityOptions): Identity {
   const challengeTokens = totpChallengeSigner(options.secret, options.clock);
 
   const sessionStore = options.sessionStore ?? new MemorySessionStore();
+
+  // `resetPassword` promises revoke-on-reset. A store that cannot revoke by
+  // user, with no `revokeUserSessions` hook to do it instead, would keep an
+  // attacker's stolen session alive through the victim's reset while the
+  // docstring promises otherwise — the worst failure shape is that SILENT one,
+  // so it is refused here at construction, where the wiring mistake is made.
+  if (!canRevokeByUser(sessionStore) && options.revokeUserSessions === undefined) {
+    throw new IdentityError(
+      "IDENTITY_SESSION_STORE_NOT_REVOCABLE",
+      "The session store has no deleteByUserId(userId), so resetPassword could not revoke a " +
+        "user's sessions. Add deleteByUserId to the store, or wire revokeUserSessions to " +
+        "invalidate sessions yourself (e.g. a signed-token revocation list).",
+    );
+  }
 
   // Brute-force protection is ON BY DEFAULT (F8). An unset limiter resolves to
   // the in-memory `defaultRateLimiter` (a per-process floor — no external store
@@ -830,6 +927,61 @@ export function createIdentity(options: IdentityOptions): Identity {
     }
 
     throw new IdentityError("IDENTITY_NOT_AUTHENTICATED", "Sign in to manage your authenticator.");
+  };
+
+  // The step-up gate on the TOTP enroll/disable surface: re-verify the caller's
+  // CURRENT password on top of their live session. A session cookie alone must
+  // not bind or remove a second factor — a stolen cookie could otherwise enroll
+  // the attacker's authenticator (turning transient session theft into durable
+  // account control) or strip the victim's. The password check is itself a
+  // guessing oracle for a cookie-holder, so it stands behind its own
+  // `stepup:<userId>` bucket on the LOGIN limiter (it is a password guess) —
+  // account-keyed on purpose: unlike `login:<ip>:<email>`, this door requires a
+  // live session, so a remote flooder cannot reach it to lock anyone out. An
+  // unverifiable-on-this-runtime hash (scrypt row on the edge) fails CLOSED
+  // through the same `onUnverifiableHash` posture `login` uses.
+  const assertStepUp = async (user: User, password: string): Promise<void> => {
+    const stepUpKey = `stepup:${user.id}`;
+
+    if (loginRateLimiter !== undefined) {
+      const peek = await loginRateLimiter.check(stepUpKey, 0);
+
+      if (peek.remaining < 1) {
+        const denied = await loginRateLimiter.check(stepUpKey, 1);
+
+        throw new IdentityError(
+          "IDENTITY_LOGIN_THROTTLED",
+          "Too many failed password checks. Try again later.",
+          { retryAfterMs: denied.retryAfterMs },
+        );
+      }
+    }
+
+    // Burn one token from the step-up bucket on a FAILED check only — a
+    // successful step-up spends nothing, so a real user never throttles
+    // themselves managing their own authenticator.
+    const penalizeStepUp = async (): Promise<void> => {
+      if (loginRateLimiter !== undefined) {
+        await loginRateLimiter.check(stepUpKey, 1);
+      }
+    };
+
+    let passwordOk: boolean;
+    try {
+      passwordOk = await hasher.verifyPassword(password, user.passwordHash);
+    } catch (error) {
+      if (!hasCode(error, "AUTH_KDF_UNAVAILABLE")) throw error;
+
+      await penalizeStepUp();
+
+      throw unverifiableHashError();
+    }
+
+    if (!passwordOk) {
+      await penalizeStepUp();
+
+      throw new IdentityError("IDENTITY_INVALID_CREDENTIALS", "That password is incorrect.");
+    }
   };
 
   // Refuse a second-factor attempt once the per-account `totp:<userId>` bucket is
@@ -924,9 +1076,19 @@ export function createIdentity(options: IdentityOptions): Identity {
       throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
     }
 
-    // Accepted: persist the step so the same code cannot be replayed. A success
-    // spends no throttle token — a real user never locks themselves out.
-    await totpRepo.recordTotpStep(db, userId, step);
+    // Accepted — IF this call also wins the conditional claim on the step
+    // counter. The read-side `step <= lastUsedStep` check above cannot see a
+    // concurrent request that read the same stale row, so the WRITE is the
+    // arbiter: `recordTotpStep` stamps the counter only while it is still below
+    // `step` and reports whether it did. The loser of that race is a REPLAY —
+    // the same code was just spent — and is refused exactly like any other bad
+    // code (penalized, enumeration-quiet), mirroring `markRecoveryCodeUsed`. A
+    // success spends no throttle token — a real user never locks themselves out.
+    if (!(await totpRepo.recordTotpStep(db, userId, step))) {
+      await penalizeTotp(userId);
+
+      throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
+    }
   };
 
   // Spend a single-use recovery code for a user — the break-glass second step,
@@ -1051,7 +1213,7 @@ export function createIdentity(options: IdentityOptions): Identity {
         token,
       });
 
-      return { status: "verification_sent", user };
+      return { status: "verification_sent", user: userRepo.toPublicUser(user) };
     },
 
     /**
@@ -1079,10 +1241,10 @@ export function createIdentity(options: IdentityOptions): Identity {
         // no-op and must not re-announce an event that already happened.
         await emit({ type: "email_verified", userId: String(user.id), at: eventClock() });
 
-        return { ...user, emailVerifiedAt: now };
+        return userRepo.toPublicUser({ ...user, emailVerifiedAt: now });
       }
 
-      return user;
+      return userRepo.toPublicUser(user);
     },
 
     /**
@@ -1117,14 +1279,23 @@ export function createIdentity(options: IdentityOptions): Identity {
      * so it never adds work an attacker can trigger, and never on the
      * timing-decoy or wrong-password branches.
      */
-    async login(email, password) {
+    async login(email, password, context) {
       const normalized = userRepo.normalizeEmail(email);
 
-      // Per-account throttle (the inner defense). The key is `login:<email>` for
-      // EVERY email — existing or not — so the throttle leaks nothing about
-      // whether an account exists. We peek with cost 0 (which never spends), and
-      // refuse before touching the DB or the KDF once the bucket is empty.
-      const throttleKey = `login:${normalized}`;
+      // Per-account throttle (the inner defense), keyed on the (client IP,
+      // email) PAIR when the transport passed its resolved address — so a
+      // remote attacker's failures drain a bucket the victim never reads
+      // (email-only keying let any host lock any account for free), while
+      // per-host volume stays bounded by the outer IP limiter. Without an IP
+      // the key falls back to `login:<email>` — see the option docstring for
+      // the full trade. Either way the key exists for EVERY email — existing
+      // or not — so the throttle leaks nothing about whether an account
+      // exists. We peek with cost 0 (which never spends), and refuse before
+      // touching the DB or the KDF once the bucket is empty.
+      const throttleKey =
+        context?.clientIp !== undefined
+          ? `login:${context.clientIp}:${normalized}`
+          : `login:${normalized}`;
 
       if (loginRateLimiter !== undefined) {
         // Cost 0 never spends — it just reports how many tokens remain. An empty
@@ -1296,7 +1467,7 @@ export function createIdentity(options: IdentityOptions): Identity {
         // No `login_succeeded` here: the login is not complete until the second
         // factor lands (that event rides `completeTotpChallenge`). Emitting now
         // would over-count and mislead a monitor into reading "signed in".
-        return { status: "totp_required", user, challenge };
+        return { status: "totp_required", user: userRepo.toPublicUser(user), challenge };
       }
 
       const session = await sessions.create(String(user.id), sessionTtlMs);
@@ -1305,7 +1476,7 @@ export function createIdentity(options: IdentityOptions): Identity {
       // in the event — only the subject's id, which a trace correlates on.
       await emit({ type: "login_succeeded", userId: String(user.id), at: eventClock() });
 
-      return { status: "authenticated", user, session };
+      return { status: "authenticated", user: userRepo.toPublicUser(user), session };
     },
 
     /**
@@ -1351,14 +1522,16 @@ export function createIdentity(options: IdentityOptions): Identity {
      * token's HMAC no longer verifies. A leaked or replayed link cannot
      * reset the password a second time, and cannot undo a legitimate reset.
      *
-     * **Revoke-on-reset is the default.** When the session store is SQL-backed
-     * (it exposes `deleteByUserId`), every one of the user's live sessions is
-     * deleted as part of the reset — so the compromised-account flow (an
-     * attacker holding a stolen session, the victim resetting their password)
-     * ends the attacker's session. A bare memory store has no `deleteByUserId`
-     * and is left untouched; wire {@link IdentityOptions.revokeUserSessions} to
-     * cover that case (or to invalidate a second tier, e.g. edge tokens). The
-     * optional hook always runs too, after the store-backed revocation.
+     * **Revoke-on-reset is the default, and construction enforces it.** Both
+     * built-in stores expose `deleteByUserId`, so every one of the user's live
+     * sessions is deleted as part of the reset — the compromised-account flow
+     * (an attacker holding a stolen session, the victim resetting their
+     * password) ends the attacker's session. A custom store without
+     * `deleteByUserId` only gets here with
+     * {@link IdentityOptions.revokeUserSessions} wired (else `createIdentity`
+     * refused with `IDENTITY_SESSION_STORE_NOT_REVOCABLE`) — there, the hook is
+     * the revocation. The hook always runs too, after any store-backed
+     * revocation (e.g. to invalidate a second tier such as edge tokens).
      */
     async resetPassword(token, newPassword) {
       assertValidPassword(newPassword);
@@ -1404,13 +1577,13 @@ export function createIdentity(options: IdentityOptions): Identity {
         await emit({ type: "session_revoked", userId, at: eventClock() });
       }
 
-      // The hook still runs (on every store), for a memory store that cannot
-      // revoke by user, or a second tier the SQL delete cannot reach.
+      // The hook still runs (on every store), for the rare store that cannot
+      // revoke by user, or a second tier the store's delete cannot reach.
       if (options.revokeUserSessions) {
         await options.revokeUserSessions(userId);
       }
 
-      return { ...user, passwordHash: newHash };
+      return userRepo.toPublicUser(user);
     },
 
     async logout(token) {
@@ -1438,11 +1611,19 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       if (session === undefined) return undefined;
 
-      return await userRepo.findUserById(db, Number(session.userId));
+      const user = await userRepo.findUserById(db, Number(session.userId));
+
+      return user === undefined ? undefined : userRepo.toPublicUser(user);
     },
 
-    async enrollTotp(token) {
+    async enrollTotp(token, password) {
       const user = await requireUser(token);
+
+      // Step-up BEFORE anything else: binding a second factor on a session
+      // cookie alone would let a stolen cookie enroll the ATTACKER'S
+      // authenticator. The current password must re-verify (throttled — see
+      // `assertStepUp`), so session theft cannot escalate into 2FA ownership.
+      await assertStepUp(user, password);
 
       // A confirmed factor is final — re-enrolling would silently invalidate the
       // user's working authenticator. An *unconfirmed* one is fine to replace
@@ -1460,6 +1641,29 @@ export function createIdentity(options: IdentityOptions): Identity {
       await totpRepo.upsertUnconfirmedFactor(db, user.id, secret);
 
       return { secret, keyUri: totpKeyUri({ secret, issuer: appName, account: user.email }) };
+    },
+
+    async disableTotp(token, password) {
+      const user = await requireUser(token);
+
+      // The same step-up enrollment demands: removing the second factor is
+      // exactly what an attacker holding only a stolen cookie wants, so the
+      // session alone must not be enough. (A password reset deliberately does
+      // NOT remove the factor — reset is email-controlled, and email compromise
+      // must not bypass 2FA — which is why this explicit, step-up-gated method
+      // is the only way out.)
+      await assertStepUp(user, password);
+
+      const factor = await totpRepo.findTotpFactor(db, user.id);
+
+      if (factor === undefined) {
+        throw new IdentityError("IDENTITY_TOTP_NOT_ENROLLED", "No authenticator is enrolled.");
+      }
+
+      // Confirmed or mid-enrollment both wipe: abandoning a half-finished
+      // setup with a proven password is legitimate cleanup. Codes are deleted
+      // before the factor (see `deleteTotpFactor` for the crash ordering).
+      await totpRepo.deleteTotpFactor(db, user.id);
     },
 
     async confirmTotp(token, code) {
@@ -1493,11 +1697,21 @@ export function createIdentity(options: IdentityOptions): Identity {
         throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
       }
 
-      // Mint + persist the backup codes FIRST, then stamp the factor confirmed
-      // LAST. A crash between the two now leaves the factor *unconfirmed* — so it
-      // is re-confirmable and never strands the user with a confirmed factor but no
-      // recovery codes (a lockout). The plaintext codes are returned for one-time
-      // display; only the KDF hashes are persisted (ADR 0020).
+      // Claim the accepted step FIRST — the conditional write is the arbiter
+      // against a concurrent confirm racing the same (or an older) code: the
+      // loser stops HERE, before it can rotate the winner's just-persisted
+      // recovery codes out from under the plaintext the winner already returned.
+      // A crash after this claim leaves the factor unconfirmed with the step
+      // spent — re-confirmable with the authenticator's next code.
+      if (!(await totpRepo.recordTotpStep(db, user.id, step))) {
+        throw new IdentityError("IDENTITY_INVALID_TOTP", "That code is invalid or expired.");
+      }
+
+      // Then mint + persist the backup codes, and stamp the factor confirmed
+      // LAST. A crash between the two still leaves the factor *unconfirmed* — so
+      // it is re-confirmable and never strands the user with a confirmed factor
+      // but no recovery codes (a lockout). The plaintext codes are returned for
+      // one-time display; only the KDF hashes are persisted (ADR 0020).
       const recoveryCodes = generateRecoveryCodes();
       await totpRepo.replaceRecoveryCodes(
         db,
@@ -1505,8 +1719,6 @@ export function createIdentity(options: IdentityOptions): Identity {
         await hasher.hashRecoveryCodes(recoveryCodes),
       );
 
-      // Record the accepted step so this code can never be replayed, then confirm.
-      await totpRepo.recordTotpStep(db, user.id, step);
       await totpRepo.confirmFactor(db, user.id);
 
       return { recoveryCodes };
@@ -1570,7 +1782,7 @@ export function createIdentity(options: IdentityOptions): Identity {
 
       await emit({ type: "login_succeeded", userId: String(user.id), at: eventClock() });
 
-      return { user, session };
+      return { user: userRepo.toPublicUser(user), session };
     },
   };
 }

@@ -18,6 +18,28 @@ export class MemorySessionStore implements SessionStore {
   async delete(token: string): Promise<void> {
     this.sessions.delete(token);
   }
+
+  /**
+   * Delete every session belonging to `userId`, returning how many were removed —
+   * the same revoke-by-user affordance `sqlSessionStore` exposes (ADR 0013), so
+   * revoke-on-reset works on the DEFAULT store too, not only the SQL one. A Map
+   * has no user index, so this is a full scan — fine at the store's scale (a
+   * single-process dev/test session set), and correctness beats an index here: a
+   * password reset that silently leaves an attacker's session alive is the worst
+   * outcome, a linear sweep the cheapest insurance.
+   */
+  async deleteByUserId(userId: string): Promise<number> {
+    let removed = 0;
+
+    for (const [token, session] of this.sessions) {
+      if (session.userId === userId) {
+        this.sessions.delete(token);
+        removed += 1;
+      }
+    }
+
+    return removed;
+  }
 }
 
 export interface SessionsOptions {

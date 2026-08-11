@@ -61,7 +61,12 @@ const identity = createIdentity({
 secret-strength guard rejects anything under 32 bytes at construction, so a
 misconfigured deployment fails closed at startup rather than signing tokens with
 a guessable key. Without an explicit `sessionStore`, identity defaults to an
-in-memory store suited to a single process.
+in-memory store suited to a single process — one that still supports
+revoke-by-user, so revoke-on-reset (below) holds on the default wiring too. A
+custom store that cannot revoke a user's sessions (no `deleteByUserId`) and no
+`revokeUserSessions` hook is refused at construction with
+`IDENTITY_SESSION_STORE_NOT_REVOCABLE`, rather than silently letting a reset
+leave a stolen session alive.
 
 ## Register, verify, login
 
@@ -91,11 +96,21 @@ if (result.status === "authenticated") {
 attacker cannot probe which emails are registered. `login` returns
 `IDENTITY_INVALID_CREDENTIALS` for both an unknown email and a wrong password,
 and always spends one KDF derive so the two paths are timing-equal. To bound
-credential stuffing, wire a `loginRateLimiter`: each failed attempt burns a
-token from a per-account `login:<email>` bucket, and a drained bucket refuses
+credential stuffing, the `loginRateLimiter` is ON by default: each failed
+attempt burns a token from a per-account bucket, and a drained bucket refuses
 with `IDENTITY_LOGIN_THROTTLED` before the database or the KDF is touched. A
 successful login spends nothing, so a real user is never locked out by their
-own sign-in.
+own sign-in. Pass the transport-resolved client address as
+`login(email, password, { clientIp })` — in a `@lesto/web` app,
+`currentContext()?.ip` — so the bucket keys on the `(IP, email)` pair: a remote
+attacker's failures then drain a bucket the victim never reads, closing the
+free targeted-lockout the email-only key allowed. Omit it and the key falls
+back to `login:<email>`.
+
+Every user the service returns — from `register`, `login`, `verifyEmail`,
+`resetPassword`, `currentUser`, and `completeTotpChallenge` — is a `PublicUser`:
+the row minus `passwordHash`, so a handler that does the obvious
+`c.json(result)` cannot leak the hash corpus to the network.
 
 To set the cookie from a handler, use the cookie helpers `@lesto/identity` ships.
 Set the session cookie ONLY on the `authenticated` arm — the `totp_required` arm
@@ -126,9 +141,13 @@ await identity.requestPasswordReset("ada@example.com");
 await identity.resetPassword(tokenFromLink, "a brand new passphrase");
 ```
 
-When the session store is SQL-backed, `resetPassword` also revokes every one of
-the user's live sessions — so a victim's reset ends an attacker's stolen
-session, with no extra wiring.
+`resetPassword` also revokes every one of the user's live sessions — so a
+victim's reset ends an attacker's stolen session, with no extra wiring. Both
+built-in stores (`sqlSessionStore` and the default in-memory one) support this;
+a custom store without `deleteByUserId` must supply a `revokeUserSessions` hook,
+which `createIdentity` requires up front. The reset deliberately leaves any
+enrolled TOTP factor in place — reset is email-controlled, and email compromise
+must not strip a second factor.
 
 ## Two-factor: TOTP and recovery codes
 
@@ -136,12 +155,22 @@ Enrollment is two steps. `enrollTotp` mints a secret and the `otpauth://`
 provisioning URI you render as a QR code; `confirmTotp` confirms it with the
 first authenticator code and returns the one-time-visible recovery codes.
 
+`enrollTotp` (and `disableTotp`, the only way back out of 2FA) require a
+**step-up**: the user's current password, re-verified on top of the live
+session. A session cookie alone must not bind or remove a second factor —
+otherwise a stolen cookie could enroll the attacker's own authenticator and lock
+the real owner out. The password check is throttled through the same
+`loginRateLimiter`, so a cookie holder cannot brute-force it either.
+
 ```ts
-// Both methods take the session token — they act on the signed-in user.
-const { secret, keyUri } = await identity.enrollTotp(sessionToken);
+// Enroll/disable take the session token AND the current password (step-up).
+const { secret, keyUri } = await identity.enrollTotp(sessionToken, password);
 // ...user scans keyUri, types the first code...
 const { recoveryCodes } = await identity.confirmTotp(sessionToken, code);
 // Show recoveryCodes once — only their KDF hashes are stored.
+
+// Later, to turn 2FA off (also step-up-gated) — removes the factor + codes:
+await identity.disableTotp(sessionToken, password);
 ```
 
 When a user has a confirmed factor, `login` returns `{ status: "totp_required",
@@ -177,26 +206,30 @@ before the secret is touched.
 
 ## Identity methods
 
+Every user returned below is a `PublicUser` (a `User` without `passwordHash`).
+
 | Method | Signature | Returns |
 | --- | --- | --- |
 | `register` | `(email, password)` | `{ status: "verification_sent", user }` |
-| `verifyEmail` | `(token)` | `User` (idempotent) |
-| `login` | `(email, password)` | `{ user, session }` |
+| `verifyEmail` | `(token)` | `PublicUser` (idempotent) |
+| `login` | `(email, password, context?)` | `{ status, user, session }` \| `{ status, user, challenge }` |
 | `requestPasswordReset` | `(email)` | `{ status: "reset_sent" }` |
-| `resetPassword` | `(token, newPassword)` | `User` |
+| `resetPassword` | `(token, newPassword)` | `PublicUser` |
 | `logout` | `(token)` | `void` |
-| `currentUser` | `(token)` | `User \| undefined` |
-| `enrollTotp` | `(token)` | `{ secret, keyUri }` |
+| `currentUser` | `(token)` | `PublicUser \| undefined` |
+| `enrollTotp` | `(token, password)` | `{ secret, keyUri }` |
 | `confirmTotp` | `(token, code)` | `{ recoveryCodes }` |
+| `disableTotp` | `(token, password)` | `void` |
+| `completeTotpChallenge` | `(challenge, code, options?)` | `{ user, session }` |
 | `hasTotp` | `(userId)` | `boolean` |
 | `verifyTotpChallenge` | `(userId, code)` | `void` |
 | `verifyRecoveryCode` | `(userId, code)` | `void` |
 
 Every failure throws an `IdentityError` carrying a stable `code` (e.g.
 `IDENTITY_INVALID_CREDENTIALS`, `IDENTITY_EMAIL_NOT_VERIFIED`,
-`IDENTITY_WEAK_SECRET`). Branch on the code, never the message. The lower-level
-primitives throw `AuthError` (`AUTH_INVALID_HASH`, `AUTH_WEAK_SECRET`,
-`AUTH_KDF_UNAVAILABLE`) the same way.
+`IDENTITY_WEAK_SECRET`, `IDENTITY_SESSION_STORE_NOT_REVOCABLE`). Branch on the
+code, never the message. The lower-level primitives throw `AuthError`
+(`AUTH_INVALID_HASH`, `AUTH_WEAK_SECRET`, `AUTH_KDF_UNAVAILABLE`) the same way.
 
 ## Sessions on both tiers
 

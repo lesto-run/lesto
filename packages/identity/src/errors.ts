@@ -38,6 +38,17 @@ export type IdentityErrorCode =
    * which re-mints the hash as edge-safe PBKDF2.
    */
   | "IDENTITY_PASSWORD_RESET_REQUIRED"
+  /**
+   * The configured `sessionStore` cannot revoke a user's sessions (it has no
+   * `deleteByUserId`) and no {@link IdentityOptions.revokeUserSessions} hook was
+   * wired — so `resetPassword`'s revoke-on-reset promise would silently not hold
+   * and a victim's reset would leave an attacker's stolen session alive. Refused
+   * at construction, not at reset time: give the store a
+   * `deleteByUserId(userId)` (both built-ins — `MemorySessionStore` and
+   * `sqlSessionStore` — have one), or wire `revokeUserSessions` for a store that
+   * genuinely cannot (e.g. a stateless signed-token tier, ADR 0013 §8).
+   */
+  | "IDENTITY_SESSION_STORE_NOT_REVOCABLE"
   // --- second factor (TOTP, ADR 0020) ---
   /** No live session backed the call that must be made by a signed-in user. */
   | "IDENTITY_NOT_AUTHENTICATED"

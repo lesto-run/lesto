@@ -93,11 +93,14 @@ function buildIdentity(opts: Partial<IdentityOptions> = {}): Identity {
   });
 }
 
+/** The suite's default account password — enroll/disable step-ups re-present it. */
+const PASSWORD = "correct horse staple";
+
 /** Register + log in a fresh user, returning their id and a live session token. */
 async function signedInUser(
   identity: Identity,
   email = "ada@example.com",
-  password = "correct horse staple",
+  password = PASSWORD,
 ): Promise<{ userId: number; token: string }> {
   const { user } = await identity.register(email, password);
 
@@ -153,7 +156,7 @@ describe("TOTP journey", () => {
 
     // 1. Enroll: returns the secret + an otpauth:// provisioning URI, stores an
     //    UNCONFIRMED factor — so `hasTotp` is still false.
-    const { secret, keyUri } = await identity.enrollTotp(token);
+    const { secret, keyUri } = await identity.enrollTotp(token, PASSWORD);
 
     expect(secret).toMatch(/^[A-Z2-7]+$/);
     expect(keyUri).toContain("otpauth://totp/Lesto%20Test:ada%40example.com");
@@ -194,7 +197,7 @@ describe("TOTP journey", () => {
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
 
     const factor = await db.select().from(totpFactors).where(eq(totpFactors.userId, userId)).get();
@@ -208,7 +211,7 @@ describe("TOTP journey", () => {
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     const { recoveryCodes } = await identity.confirmTotp(token, codeFor(secret));
 
     const [code] = recoveryCodes as [string, ...string[]];
@@ -234,7 +237,7 @@ describe("enrollTotp", () => {
   it("refuses without a live session (IDENTITY_NOT_AUTHENTICATED)", async () => {
     const identity = buildIdentity();
 
-    await expect(identity.enrollTotp(undefined)).rejects.toMatchObject({
+    await expect(identity.enrollTotp(undefined, PASSWORD)).rejects.toMatchObject({
       code: "IDENTITY_NOT_AUTHENTICATED",
     });
   });
@@ -247,7 +250,7 @@ describe("enrollTotp", () => {
     // resolves to no row.
     raw.prepare("DELETE FROM users").run();
 
-    await expect(identity.enrollTotp(token)).rejects.toMatchObject({
+    await expect(identity.enrollTotp(token, PASSWORD)).rejects.toMatchObject({
       code: "IDENTITY_NOT_AUTHENTICATED",
     });
   });
@@ -255,7 +258,7 @@ describe("enrollTotp", () => {
   it("refuses a forged/garbage session token", async () => {
     const identity = buildIdentity();
 
-    await expect(identity.enrollTotp("not-a-real-token")).rejects.toMatchObject({
+    await expect(identity.enrollTotp("not-a-real-token", PASSWORD)).rejects.toMatchObject({
       code: "IDENTITY_NOT_AUTHENTICATED",
     });
   });
@@ -264,8 +267,8 @@ describe("enrollTotp", () => {
     const identity = buildIdentity();
     const { token } = await signedInUser(identity);
 
-    const first = await identity.enrollTotp(token);
-    const second = await identity.enrollTotp(token);
+    const first = await identity.enrollTotp(token, PASSWORD);
+    const second = await identity.enrollTotp(token, PASSWORD);
 
     expect(second.secret).not.toBe(first.secret);
     // The old (unconfirmed) code no longer verifies; the new one does.
@@ -281,10 +284,10 @@ describe("enrollTotp", () => {
     const identity = buildIdentity();
     const { token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
 
-    await expect(identity.enrollTotp(token)).rejects.toMatchObject({
+    await expect(identity.enrollTotp(token, PASSWORD)).rejects.toMatchObject({
       code: "IDENTITY_TOTP_ALREADY_ENROLLED",
     });
   });
@@ -305,7 +308,7 @@ describe("enrollTotp", () => {
     });
     const { token } = await signedInUser(identity);
 
-    const { keyUri } = await identity.enrollTotp(token);
+    const { keyUri } = await identity.enrollTotp(token, PASSWORD);
 
     expect(keyUri).toContain("otpauth://totp/Lesto:");
   });
@@ -337,7 +340,7 @@ describe("confirmTotp", () => {
     const identity = buildIdentity();
     const { token } = await signedInUser(identity);
 
-    await identity.enrollTotp(token);
+    await identity.enrollTotp(token, PASSWORD);
 
     await expect(identity.confirmTotp(token, "000000")).rejects.toMatchObject({
       code: "IDENTITY_INVALID_TOTP",
@@ -348,7 +351,7 @@ describe("confirmTotp", () => {
     const identity = buildIdentity();
     const { token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
 
     await expect(identity.confirmTotp(token, codeFor(secret))).rejects.toMatchObject({
@@ -375,7 +378,7 @@ describe("verifyTotpChallenge", () => {
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity);
 
-    await identity.enrollTotp(token); // enrolled but not confirmed
+    await identity.enrollTotp(token, PASSWORD); // enrolled but not confirmed
 
     await expect(identity.verifyTotpChallenge(userId, "000000")).rejects.toMatchObject({
       code: "IDENTITY_INVALID_TOTP",
@@ -386,7 +389,7 @@ describe("verifyTotpChallenge", () => {
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
 
     // A code from far outside the drift window.
@@ -417,7 +420,7 @@ describe("verifyRecoveryCode", () => {
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
 
     await expect(identity.verifyRecoveryCode(userId, "zzzz-zzzz-zz")).rejects.toMatchObject({
@@ -448,7 +451,7 @@ describe("TOTP live-window replay guard", () => {
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
 
     // Move one step past the confirm code so the first challenge is itself valid.
@@ -478,7 +481,7 @@ describe("TOTP live-window replay guard", () => {
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     const code = codeFor(secret);
 
     // Confirm with `code` — its step is now recorded as last_used_step.
@@ -500,7 +503,7 @@ describe("recovery-code atomic claim", () => {
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     const { recoveryCodes } = await identity.confirmTotp(token, codeFor(secret));
 
     // Grab the stored row id for the first code, then mark it used out-of-band —
@@ -532,7 +535,7 @@ describe("recovery-code atomic claim", () => {
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     const { recoveryCodes } = await identity.confirmTotp(token, codeFor(secret));
 
     // The code is still unused (so it surfaces in `findUnusedRecoveryCodes` and the
@@ -558,7 +561,7 @@ describe("second-factor throttle", () => {
     const identity = buildIdentity({ totpRateLimiter: totpLimiter(3) });
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
     now += 30 * 1000;
 
@@ -585,7 +588,7 @@ describe("second-factor throttle", () => {
     const identity = buildIdentity({ totpRateLimiter: totpLimiter(2) });
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
 
     // Many successful challenges spend nothing — step forward each time so the
@@ -600,7 +603,7 @@ describe("second-factor throttle", () => {
     const identity = buildIdentity({ totpRateLimiter: totpLimiter(2) });
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     const { recoveryCodes } = await identity.confirmTotp(token, codeFor(secret));
 
     // Two wrong recovery codes drain the 2-token bucket.
@@ -621,7 +624,7 @@ describe("second-factor throttle", () => {
     const identity = buildIdentity({ totpRateLimiter: totpLimiter(2) });
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
     now += 30 * 1000;
 
@@ -655,7 +658,7 @@ describe("default second-factor throttle (secure by default, opt-out not opt-in)
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
     now += 30 * 1000;
 
@@ -683,7 +686,7 @@ describe("default second-factor throttle (secure by default, opt-out not opt-in)
     const identity = buildIdentity();
     const { token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
     now += 30 * 1000;
 
@@ -710,7 +713,7 @@ describe("default second-factor throttle (secure by default, opt-out not opt-in)
     const identity = buildIdentity({ totpRateLimiter: false });
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
     now += 30 * 1000;
 
@@ -732,7 +735,7 @@ describe("confirmTotp crash-ordering", () => {
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity);
 
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
 
     // Make the recovery-code INSERT fail — drop the table so the persist throws
     // AFTER the code verifies but BEFORE the factor is stamped confirmed.
@@ -785,7 +788,7 @@ describe("login withholds the session until the second factor (F2)", () => {
   /** Register, sign in once (pre-2FA), enroll + confirm TOTP. Returns the secret + userId. */
   async function enrolled(identity: Identity): Promise<{ userId: number; secret: string }> {
     const { userId, token } = await signedInUser(identity, email, password);
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     await identity.confirmTotp(token, codeFor(secret));
 
     return { userId, secret };
@@ -857,7 +860,7 @@ describe("login withholds the session until the second factor (F2)", () => {
     const { token } = await signedInUser(identity, email, password);
 
     // Enroll but never confirm — not a real second factor yet.
-    await identity.enrollTotp(token);
+    await identity.enrollTotp(token, PASSWORD);
 
     const result = await identity.login(email, password);
 
@@ -867,7 +870,7 @@ describe("login withholds the session until the second factor (F2)", () => {
   it("completes the login with a single-use recovery code, then refuses its replay", async () => {
     const identity = buildIdentity();
     const { userId, token } = await signedInUser(identity, email, password);
-    const { secret } = await identity.enrollTotp(token);
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
     const { recoveryCodes } = await identity.confirmTotp(token, codeFor(secret));
 
     const first = await identity.login(email, password);
@@ -939,5 +942,296 @@ describe("login withholds the session until the second factor (F2)", () => {
     await expect(
       identity.completeTotpChallenge(result.challenge, codeFor(secret)),
     ).rejects.toMatchObject({ code: "IDENTITY_INVALID_CHALLENGE" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TOTP step replay guard is a compare-and-swap (P0 audit item 1)
+//
+// The read-side `step <= lastUsedStep` check cannot see a CONCURRENT request
+// that read the same stale row, so the WRITE must be the arbiter: recordTotpStep
+// stamps the counter only while it is still below the accepted step and reports
+// whether it won — exactly the markRecoveryCodeUsed discipline forty lines up.
+// ---------------------------------------------------------------------------
+
+describe("TOTP step compare-and-swap", () => {
+  it("recordTotpStep wins on a fresh factor, then refuses the same or an older step", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+    await identity.enrollTotp(token, PASSWORD);
+
+    // Fresh factor (last_used_step NULL): the claim wins.
+    expect(await totpRepo.recordTotpStep(db, userId, 100)).toBe(true);
+
+    // The SAME step again — a replay — loses (0 rows changed)…
+    expect(await totpRepo.recordTotpStep(db, userId, 100)).toBe(false);
+    // …as does an OLDER step (a delayed duplicate from the previous window).
+    expect(await totpRepo.recordTotpStep(db, userId, 99)).toBe(false);
+
+    // A LATER step advances the counter normally.
+    expect(await totpRepo.recordTotpStep(db, userId, 101)).toBe(true);
+
+    const factor = await db.select().from(totpFactors).where(eq(totpFactors.userId, userId)).get();
+    expect(factor?.lastUsedStep).toBe(101);
+  });
+
+  it("refuses a challenge whose write loses the step race (stale read, enumeration-quiet)", async () => {
+    const identity = buildIdentity({ totpRateLimiter: totpLimiter(1) });
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
+    await identity.confirmTotp(token, codeFor(secret));
+
+    now += 30 * 1000;
+    const code = codeFor(secret);
+
+    // First use spends the step for real.
+    await expect(identity.verifyTotpChallenge(userId, code)).resolves.toBeUndefined();
+
+    // The concurrent duplicate: it read the factor BEFORE the winner's write
+    // landed, so its read-side replay check passes — the conditional UPDATE is
+    // all that stands between it and accepting the same code twice.
+    const factor = (await totpRepo.findTotpFactor(db, userId))!;
+    const spy = vi
+      .spyOn(totpRepo, "findTotpFactor")
+      .mockResolvedValueOnce({ ...factor, lastUsedStep: null });
+
+    await expect(identity.verifyTotpChallenge(userId, code)).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_TOTP",
+    });
+    spy.mockRestore();
+
+    // The lost race counted as a FAILED attempt: the 1-token bucket is drained,
+    // so the next attempt is throttled — proving the loser was penalized, not
+    // silently retried.
+    await expect(identity.verifyTotpChallenge(userId, codeFor(secret))).rejects.toMatchObject({
+      code: "IDENTITY_TOTP_THROTTLED",
+    });
+  });
+
+  it("a duplicate confirm that loses the step race cannot rotate the winner's recovery codes", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
+    const code = codeFor(secret);
+
+    // Read the still-unconfirmed factor — the stale row the racing duplicate saw.
+    const unconfirmed = (await totpRepo.findTotpFactor(db, userId))!;
+
+    // The winner confirms: recovery codes minted + factor confirmed.
+    await identity.confirmTotp(token, code);
+    const winners = await db
+      .select()
+      .from(recoveryCodesTable)
+      .where(eq(recoveryCodesTable.userId, userId))
+      .all();
+
+    // The duplicate raced the same code off the same stale (unconfirmed,
+    // step-unspent) read. It must stop at the step claim — BEFORE rotating the
+    // recovery codes out from under the plaintext the winner already returned.
+    const spy = vi.spyOn(totpRepo, "findTotpFactor").mockResolvedValueOnce(unconfirmed);
+
+    await expect(identity.confirmTotp(token, code)).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_TOTP",
+    });
+    spy.mockRestore();
+
+    const after = await db
+      .select()
+      .from(recoveryCodesTable)
+      .where(eq(recoveryCodesTable.userId, userId))
+      .all();
+
+    expect(after.map((row) => row.codeHash)).toEqual(winners.map((row) => row.codeHash));
+    expect(await identity.hasTotp(userId)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// enroll/disable step-up (P0 audit item 2) — a session cookie alone must not
+// bind or remove a second factor; the current password re-verifies, throttled.
+// ---------------------------------------------------------------------------
+
+describe("enrollTotp step-up", () => {
+  it("refuses a wrong password (IDENTITY_INVALID_CREDENTIALS) and stores no factor", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+
+    await expect(identity.enrollTotp(token, "not the password")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_CREDENTIALS",
+    });
+
+    const factor = await db.select().from(totpFactors).where(eq(totpFactors.userId, userId)).get();
+    expect(factor).toBeUndefined();
+  });
+
+  it("throttles the step-up after the default 5 failures — even with the RIGHT password", async () => {
+    const identity = buildIdentity();
+    const { token } = await signedInUser(identity);
+
+    for (let i = 0; i < 5; i++) {
+      await expect(identity.enrollTotp(token, "not the password")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_CREDENTIALS",
+      });
+    }
+
+    // The bucket is drained: the gate now refuses BEFORE verifying, so even the
+    // correct password cannot enroll until it refills — a stolen cookie gets
+    // five password guesses through this door, not an unbounded oracle.
+    const throttled = await identity.enrollTotp(token, PASSWORD).catch((e: unknown) => e);
+    expect((throttled as IdentityError).code).toBe("IDENTITY_LOGIN_THROTTLED");
+    expect((throttled as IdentityError).details?.["retryAfterMs"]).toBeGreaterThan(0);
+  });
+
+  it("successful step-ups spend nothing, and step-up failures do not drain the login bucket", async () => {
+    const identity = buildIdentity();
+    const { token } = await signedInUser(identity);
+
+    // Re-enrolling (unconfirmed) with the right password over and over stays open —
+    // past the bucket capacity, so a success provably spends no token.
+    for (let i = 0; i < 6; i++) {
+      await expect(identity.enrollTotp(token, PASSWORD)).resolves.toMatchObject({
+        secret: expect.any(String),
+      });
+    }
+
+    // Drain the step-up bucket with wrong passwords…
+    for (let i = 0; i < 5; i++) {
+      await expect(identity.enrollTotp(token, "not the password")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_CREDENTIALS",
+      });
+    }
+
+    // …and the LOGIN path is untouched: `stepup:<userId>` and `login:<email>`
+    // are separate buckets, so an attacker with a stolen cookie cannot lock the
+    // victim out of signing in by hammering the enroll door.
+    await expect(identity.login("ada@example.com", PASSWORD)).resolves.toMatchObject({
+      status: "authenticated",
+    });
+  });
+
+  it("`loginRateLimiter: false` disables the step-up throttle (deliberate opt-out)", async () => {
+    const identity = buildIdentity({ loginRateLimiter: false });
+    const { token } = await signedInUser(identity);
+
+    // Far past the default cap: every wrong password stays INVALID_CREDENTIALS.
+    for (let i = 0; i < 8; i++) {
+      await expect(identity.enrollTotp(token, "not the password")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_CREDENTIALS",
+      });
+    }
+
+    await expect(identity.enrollTotp(token, PASSWORD)).resolves.toMatchObject({
+      secret: expect.any(String),
+    });
+  });
+});
+
+describe("disableTotp", () => {
+  it("removes the factor AND the recovery codes, then the account logs in without 2FA", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
+    const { recoveryCodes } = await identity.confirmTotp(token, codeFor(secret));
+    expect(await identity.hasTotp(userId)).toBe(true);
+
+    await expect(identity.disableTotp(token, PASSWORD)).resolves.toBeUndefined();
+
+    expect(await identity.hasTotp(userId)).toBe(false);
+    // Both tables are swept — no orphaned codes that could pass a future
+    // re-enrollment's break-glass check.
+    const factor = await db.select().from(totpFactors).where(eq(totpFactors.userId, userId)).get();
+    expect(factor).toBeUndefined();
+    const codes = await db
+      .select()
+      .from(recoveryCodesTable)
+      .where(eq(recoveryCodesTable.userId, userId))
+      .all();
+    expect(codes).toHaveLength(0);
+    await expect(identity.verifyRecoveryCode(userId, recoveryCodes[0]!)).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_TOTP",
+    });
+
+    // Login is a plain authenticated login again — no withheld session.
+    await expect(identity.login("ada@example.com", PASSWORD)).resolves.toMatchObject({
+      status: "authenticated",
+    });
+
+    // And re-enrolling from scratch works.
+    now += 30 * 1000;
+    const again = await identity.enrollTotp(token, PASSWORD);
+    await expect(identity.confirmTotp(token, codeFor(again.secret))).resolves.toMatchObject({
+      recoveryCodes: expect.any(Array),
+    });
+  });
+
+  it("wipes a still-unconfirmed (mid-enrollment) factor too", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+
+    await identity.enrollTotp(token, PASSWORD);
+    await expect(identity.disableTotp(token, PASSWORD)).resolves.toBeUndefined();
+
+    const factor = await db.select().from(totpFactors).where(eq(totpFactors.userId, userId)).get();
+    expect(factor).toBeUndefined();
+  });
+
+  it("refuses a wrong password and leaves the factor in place", async () => {
+    const identity = buildIdentity();
+    const { userId, token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
+    await identity.confirmTotp(token, codeFor(secret));
+
+    await expect(identity.disableTotp(token, "not the password")).rejects.toMatchObject({
+      code: "IDENTITY_INVALID_CREDENTIALS",
+    });
+
+    expect(await identity.hasTotp(userId)).toBe(true);
+  });
+
+  it("shares the step-up bucket with enrollTotp (one guessing oracle, one cap)", async () => {
+    const identity = buildIdentity();
+    const { token } = await signedInUser(identity);
+
+    const { secret } = await identity.enrollTotp(token, PASSWORD);
+    await identity.confirmTotp(token, codeFor(secret));
+
+    // Three wrong guesses at the disable door + two at the enroll door drain the
+    // SAME `stepup:<userId>` bucket…
+    for (let i = 0; i < 3; i++) {
+      await expect(identity.disableTotp(token, "not the password")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_CREDENTIALS",
+      });
+    }
+    for (let i = 0; i < 2; i++) {
+      await expect(identity.enrollTotp(token, "not the password")).rejects.toMatchObject({
+        code: "IDENTITY_INVALID_CREDENTIALS",
+      });
+    }
+
+    // …so the sixth guess is throttled on EITHER door.
+    await expect(identity.disableTotp(token, "not the password")).rejects.toMatchObject({
+      code: "IDENTITY_LOGIN_THROTTLED",
+    });
+  });
+
+  it("refuses when nothing is enrolled (IDENTITY_TOTP_NOT_ENROLLED)", async () => {
+    const identity = buildIdentity();
+    const { token } = await signedInUser(identity);
+
+    await expect(identity.disableTotp(token, PASSWORD)).rejects.toMatchObject({
+      code: "IDENTITY_TOTP_NOT_ENROLLED",
+    });
+  });
+
+  it("refuses without a live session (IDENTITY_NOT_AUTHENTICATED)", async () => {
+    const identity = buildIdentity();
+
+    await expect(identity.disableTotp(undefined, PASSWORD)).rejects.toMatchObject({
+      code: "IDENTITY_NOT_AUTHENTICATED",
+    });
   });
 });
