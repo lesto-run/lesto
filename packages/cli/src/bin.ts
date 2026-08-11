@@ -16,6 +16,8 @@ import { createServer as createNetServer } from "node:net";
 import type { AddressInfo, Server as NetServer } from "node:net";
 import { dirname, join } from "node:path";
 
+import { createJiti } from "jiti";
+
 import {
   DEFAULT_FORCE_EXIT_TIMEOUT_MS,
   nodeStaticReader,
@@ -25,7 +27,7 @@ import {
 import type { LestoAppConfig } from "@lesto/kernel";
 import { compileFileRoutes, scanRoutes } from "@lesto/router";
 import { applyFileRoutes, generateRouteManifest, loadFileRoutes } from "@lesto/web";
-import type { UiDialect } from "@lesto/web";
+import type { LoadedRouteModule, UiDialect } from "@lesto/web";
 import type { TraceSeams } from "@lesto/observability";
 
 import type { EngineConfig, RuntimeEntry } from "@lesto/content-core";
@@ -48,6 +50,7 @@ import type { LestoMcpContext, McpAuditRecord } from "@lesto/mcp";
 import { isLestoError } from "@lesto/errors";
 
 import { createDevState } from "./dev-state";
+import { createProjectModuleLoader } from "./project-module";
 import {
   declaresIslandDevPeer,
   isHelpRequest,
@@ -237,6 +240,24 @@ const pathExists = async (path: string): Promise<boolean> => {
   }
 };
 
+// Every dynamic `import()` of a PROJECT file below — `lesto.app.ts`, each `app/routes/*`
+// module, `env.client.ts`, `lesto.sites.ts`, `lesto.build.ts`, `lesto.content.ts`,
+// `lesto.evals.ts` — goes through `importProjectModule`, never a bare `import()`. WHY (and
+// what breaks in a published install without it) is documented on
+// `createProjectModuleLoader`; this is only the real wiring it decides between.
+//
+// The jsx config mirrors `bin/lesto.mjs` and `@lesto/assets`' island loader, so a project's
+// `.tsx` resolves the same automatic `react/jsx-runtime`.
+const projectJiti = createJiti(import.meta.url, {
+  jsx: { runtime: "automatic", importSource: "react" },
+});
+
+const importProjectModule = createProjectModuleLoader({
+  runtimeIsBun: (globalThis as { Bun?: unknown }).Bun !== undefined,
+  nativeImport: (specifier) => import(specifier),
+  jitiImport: (specifier) => projectJiti.import(specifier),
+});
+
 // Scan `app/routes/` with the real `fs.readdir`, yielding the flat DiscoveredFile
 // list the pure compiler/codegen take. The one impure seam shared by the route
 // applier (below) and the edge-manifest codegen (`regenerateRoutes`).
@@ -250,17 +271,20 @@ const scanRoutesDir = () =>
     routesDir,
   );
 
-// Auto-wire file-based routes onto the loaded app: scan `app/routes/`, `import()`
-// each page/layout, and register them via `@lesto/web`'s applier. The scan and
-// the per-file import are the impure seams the covered core (`scanRoutes`,
+// Auto-wire file-based routes onto the loaded app: scan `app/routes/`, load each
+// page/layout, and register them via `@lesto/web`'s applier. The scan and the
+// per-file import are the impure seams the covered core (`scanRoutes`,
 // `loadFileRoutes`, `applyFileRoutes`) takes as inputs; this composes them with
-// the real `fs.readdir` + `import()`. Node-only by design — it runs under
-// `dev`/`serve`/`build`/`routes`; the static-import map a dynamic-edge Worker
-// needs is the SEPARATE edge concern `regenerateRoutes` owns (`routes.gen.ts`).
+// the real `fs.readdir` + `importProjectModule` (these are the user's `.tsx`, so
+// they load through the project seam, never a bare `import()`). Node-only by
+// design — it runs under `dev`/`serve`/`build`/`routes`; the static-import map a
+// dynamic-edge Worker needs is the SEPARATE edge concern `regenerateRoutes` owns
+// (`routes.gen.ts`).
 //
-// `bust` cache-busts the per-file `import()` (a `?t=<now>` suffix) so a dev
-// re-load picks up a NEW or EDITED route file rather than ESM's cached module —
-// the Node re-scan half of Workstream 3. A normal boot omits it (one clean import).
+// `bust` asks for a dev re-load, so a NEW or EDITED route file is picked up rather
+// than the runtime's cached module — the Node re-scan half of Workstream 3. A normal
+// boot omits it (one clean import). See `importProjectModule` for what `bust` can
+// and cannot do per runtime.
 const applyDiscoveredRoutes = async (app: LestoAppConfig["app"], bust?: string): Promise<void> => {
   if (!(await pathExists(routesDir))) return;
 
@@ -269,7 +293,7 @@ const applyDiscoveredRoutes = async (app: LestoAppConfig["app"], bust?: string):
   const modules = await loadFileRoutes(files, (kind, segments) => {
     const specifier = join(routesDir, ...segments, kind);
 
-    return import(bust === undefined ? specifier : `${specifier}?t=${bust}`);
+    return importProjectModule(specifier, bust) as Promise<LoadedRouteModule>;
   });
 
   applyFileRoutes(app, files, modules);
@@ -283,9 +307,10 @@ const applyDiscoveredRoutes = async (app: LestoAppConfig["app"], bust?: string):
   }
 };
 
-// Load the project's app config + auto-wire its file routes. `bust` (a dev re-load)
-// cache-busts BOTH `lesto.app.ts` and the route imports, so an edit is re-imported
-// rather than served from ESM's module cache.
+// Load the project's app config + auto-wire its file routes, both through the
+// `importProjectModule` seam. `bust` (a dev re-load) asks BOTH `lesto.app.ts` and the
+// route imports for a re-read, so an edit is picked up rather than served from the
+// runtime's module cache.
 //
 // An app that CANNOT load refuses loud + coded (`CLI_APP_LOAD_FAILED`, naming the
 // path and carrying the cause) rather than letting the raw throw escape (audit #12):
@@ -310,7 +335,7 @@ const loadAppConfig = async (seams?: TraceSeams, bust?: string): Promise<LestoAp
   let config: LestoAppConfig;
 
   try {
-    const module = (await import(bust === undefined ? appPath : `${appPath}?t=${bust}`)) as {
+    const module = (await importProjectModule(appPath, bust)) as {
       default: AppDefault;
     };
 
@@ -543,7 +568,7 @@ export const clientDefineFromModule = (module: { clientEnv?: ClientSchema }): Pu
 export const resolvePublicEnvDefine = async (): Promise<PublicEnvDefine | undefined> => {
   if (!(await pathExists(ENV_CLIENT_PATH))) return undefined;
 
-  const module = (await import(ENV_CLIENT_PATH)) as { clientEnv?: ClientSchema };
+  const module = (await importProjectModule(ENV_CLIENT_PATH)) as { clientEnv?: ClientSchema };
 
   return clientDefineFromModule(module);
 };
@@ -1019,7 +1044,9 @@ const readContentConfig = async (): Promise<{ entries: readonly RuntimeEntry[] }
   // `pathExists` is a bare existence probe (works for a file too): no config → no content.
   if (!(await pathExists(CONTENT_CONFIG_PATH))) return { entries: [] };
 
-  const { default: config } = (await import(CONTENT_CONFIG_PATH)) as { default: EngineConfig };
+  const { default: config } = (await importProjectModule(CONTENT_CONFIG_PATH)) as {
+    default: EngineConfig;
+  };
   const { runPipeline } = await loadContentCore();
 
   return runPipeline({ cwd: projectRoot, config, skipWrite: true });
@@ -1065,7 +1092,7 @@ const loadSites = async (): Promise<readonly Site[]> => {
   if (!(await pathExists(SITES_PATH))) return [];
 
   try {
-    const module = (await import(SITES_PATH)) as { default: readonly Site[] };
+    const module = (await importProjectModule(SITES_PATH)) as { default: readonly Site[] };
 
     return defineSites(module.default);
   } catch (error) {
@@ -1095,7 +1122,7 @@ const loadBuildHook = async (): Promise<BuildHook | undefined> => {
   if (!(await pathExists(BUILD_HOOK_PATH))) return undefined;
 
   try {
-    const module = (await import(BUILD_HOOK_PATH)) as { default: BuildHook };
+    const module = (await importProjectModule(BUILD_HOOK_PATH)) as { default: BuildHook };
 
     return module.default;
   } catch (error) {
@@ -1266,7 +1293,7 @@ if (command === "eval") {
   const loadEvals = async (): Promise<readonly DeclaredEval[]> => {
     if (!(await pathExists(evalsPath))) return [];
 
-    const module = (await import(evalsPath)) as { default: readonly DeclaredEval[] };
+    const module = (await importProjectModule(evalsPath)) as { default: readonly DeclaredEval[] };
 
     return module.default;
   };
