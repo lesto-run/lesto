@@ -365,6 +365,52 @@ describe("run serve / dev", () => {
     expect(lines).toEqual(["listening on http://127.0.0.1:3000"]);
   });
 
+  it("threads the app's own logRequest sink into serve, so a project can redact its access log", async () => {
+    // `serve` has always taken a `logRequest` seam, but `runServe` never passed one, so every
+    // served deploy fell to `defaultLogRequest` — which logs `path` VERBATIM and therefore
+    // leaks a credential carried in a URL path (a signed feed/capability link). A project now
+    // declares its sink in `lesto.app.ts` and it reaches the server. Asserting the wired
+    // function is INVOKED (not merely present) is what proves the whole seam, not the spread.
+    const seen: string[] = [];
+    const logRequest = (accessEntry: { path: string }): void => {
+      seen.push(accessEntry.path);
+    };
+
+    const serve = fakeServe(3000);
+
+    await run(
+      ["serve"],
+      depsWith({ serve, loadApp: () => Promise.resolve({ ...buildConfig(), logRequest }) }),
+    );
+
+    const [, options] = serve.mock.calls[0]!;
+
+    expect(options?.logRequest).toBe(logRequest);
+
+    options?.logRequest?.({
+      method: "GET",
+      path: "/feed/s3cr3t-token.ics",
+      status: 200,
+      ms: 1,
+      requestId: "req-1",
+    });
+
+    expect(seen).toEqual(["/feed/s3cr3t-token.ics"]);
+  });
+
+  it("omits logRequest entirely when the app declares none, so serve keeps its default sink", async () => {
+    // The key must be ABSENT, not present-and-undefined: `serve` picks its default with
+    // `options.logRequest ?? defaultLogRequest`, and the option bag stays honest under
+    // `exactOptionalPropertyTypes`. `toBeUndefined()` alone would pass for either shape.
+    const serve = fakeServe(3000);
+
+    await run(["serve"], depsWith({ serve }));
+
+    const [, options] = serve.mock.calls[0]!;
+
+    expect(options !== undefined && "logRequest" in options).toBe(false);
+  });
+
   it("wires no tracer on serve when LESTO_OTLP_URL is unset", async () => {
     const serve = fakeServe(3000);
 

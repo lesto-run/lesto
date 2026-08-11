@@ -1012,6 +1012,19 @@ async function runServe(args: readonly string[], deps: CliDeps): Promise<number>
     // default holds for every omitted one (and when no var is set at all).
     ...serveLimitsFromEnv(deps.env ?? {}),
     ...(tracing === undefined ? {} : tracing.serveOptions),
+    // The app's own access-log sink, when its `lesto.app.ts` declares one. `serve` has
+    // always taken this seam, but nothing here passed it, so EVERY served deploy fell to
+    // `defaultLogRequest` — which logs the pathname VERBATIM, leaking any credential
+    // carried in a URL path (a signed feed/capability link) into stdout. Threading the
+    // config through makes a redacting sink a one-field app decision.
+    //
+    // Spread conditionally rather than assigned: under `exactOptionalPropertyTypes` an
+    // explicit `logRequest: undefined` is NOT the same as an absent key, and `serve`
+    // reads the key's presence to choose its default (`options.logRequest ??
+    // defaultLogRequest`). Passing the key with `undefined` would still land on the
+    // default here, but the conditional keeps the option bag honest — an unset field is
+    // simply not there, as with `tracing` above.
+    ...(config.logRequest === undefined ? {} : { logRequest: config.logRequest }),
   });
 
   // On graceful shutdown: drain the server (its `onDrain` flushes the final

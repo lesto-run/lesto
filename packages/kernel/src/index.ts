@@ -26,7 +26,7 @@
  */
 
 export { createApp, KERNEL_DEFAULT_RATE_LIMIT } from "./kernel";
-export type { App, LestoAppConfig, KernelDatabase } from "./kernel";
+export type { AccessLogEntry, App, LestoAppConfig, KernelDatabase } from "./kernel";
 
 export {
   durableStores,

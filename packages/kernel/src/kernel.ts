@@ -112,6 +112,34 @@ function resolveSecure(config: LestoAppConfig): readonly Middleware[] {
 export type KernelDatabase = SqlDatabase;
 
 /**
+ * One served request's access record, as handed to {@link LestoAppConfig.logRequest}.
+ *
+ * A STRUCTURAL MIRROR of `@lesto/runtime`'s `AccessEntry`, not an import: `@lesto/runtime`
+ * depends on this package, so importing it here would close a dependency cycle. The two are
+ * kept honest by the compiler rather than by discipline — `@lesto/cli`'s `runServe` assigns a
+ * config's `logRequest` straight into `serve`'s option, which imports the REAL `AccessEntry`,
+ * so a field that drifts out of this mirror fails that assignment's typecheck.
+ */
+export interface AccessLogEntry {
+  readonly method: string;
+
+  readonly path: string;
+
+  readonly status: number;
+
+  readonly ms: number;
+
+  /** The per-request id, shared with the request context and the request span. */
+  readonly requestId: string;
+
+  /** Present (`true`) only when the response body tore down mid-stream. */
+  readonly truncated?: boolean;
+
+  /** The concurrent held-stream gauge, present only on a long-lived-stream line (ADR 0040). */
+  readonly activeStreams?: number;
+}
+
+/**
  * Everything needed to assemble an app: a composed `lesto()` app, its database,
  * and migrations.
  *
@@ -165,6 +193,28 @@ export interface LestoAppConfig {
    * there so its classes are not missed.
    */
   ui?: { dialect: UiDialect; css?: string; cssScanRoot?: string };
+
+  /**
+   * Where a one-line access record goes for each served request — the app's own sink,
+   * REPLACING `@lesto/runtime`'s `defaultLogRequest`. Absent keeps that default (a
+   * structured JSON line per request), so an app that sets nothing is unchanged.
+   *
+   * `serve` has always taken this seam; what it lacked was a way for an APP to reach it.
+   * `lesto serve` builds its serve options itself, so a project had no hook and every
+   * deploy got the default sink — which logs `path` VERBATIM. That is a real leak for a
+   * URL that carries a credential in the path (a signed calendar/feed URL, a
+   * capability link): the secret lands in stdout and then in whatever ships logs
+   * onward. Setting this to a redacting sink turns the "known gap" ADR 0009 documents
+   * into a live control, configured where the rest of the app is configured.
+   *
+   * Read by `@lesto/cli` when it stands the server up; the kernel itself never calls it
+   * (it wires no server), the same way it carries `ui.css` for the CLI to read.
+   *
+   * A custom sink REPLACES the default wholesale rather than layering on it, so a sink
+   * that only forwards to a collector also silences the console line — call
+   * `defaultLogRequest` from inside it when you want both.
+   */
+  logRequest?: (entry: AccessLogEntry) => void;
 
   /**
    * Install the durable-store schemas (sessions + rate limits, ADR 0013) on the
