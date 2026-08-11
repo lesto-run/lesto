@@ -124,7 +124,9 @@ Increment 2 lands FKs; the column is a plain `integer("user_id")` today, exactly
 
 The three flows, each a coded, fail-closed `Identity` method:
 
-- **enroll** (`enrollTotp(token)`): authenticated by the caller's session. Generates a
+- **enroll** (`enrollTotp(token, password)`): authenticated by the caller's session,
+  plus a password **step-up** re-verified on top of it (added post-ADR to stop a stolen
+  cookie from binding an attacker's authenticator — see the auth guide). Generates a
   fresh secret, upserts an **unconfirmed** `totp_factors` row, and returns
   `{ secret, keyUri }` so the app can render the QR. Enrolling again before
   confirmation re-issues a new secret (the old unconfirmed one is discarded).

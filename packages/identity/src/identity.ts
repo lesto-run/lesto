@@ -1263,9 +1263,10 @@ export function createIdentity(options: IdentityOptions): Identity {
      *
      * **Per-account throttle (ON by default).** {@link IdentityOptions.loginRateLimiter}
      * defaults to an in-memory limiter, so each *failed* attempt burns a token from
-     * a `login:<email>` bucket out of the box; once it empties, `login` refuses with
-     * `IDENTITY_LOGIN_THROTTLED` before it touches the DB or the KDF. The bucket is
-     * keyed by email regardless of whether the account exists, so it never leaks
+     * a `login:<ip>:<email>` bucket (or `login:<email>` when no `context.clientIp`
+     * is passed) out of the box; once it empties, `login` refuses with
+     * `IDENTITY_LOGIN_THROTTLED` before it touches the DB or the KDF. The key covers
+     * every email regardless of whether the account exists, so it never leaks
      * existence, and a successful login spends nothing — a real user is never
      * throttled by their own sign-in. Override it with a `sqlRateLimitStore`-backed
      * limiter for a durable, fleet-correct cap, or pass `false` to disable it. See
@@ -1564,16 +1565,16 @@ export function createIdentity(options: IdentityOptions): Identity {
       // the password-hash binding) is already dead by now and never travels here.
       await emit({ type: "password_reset", userId, at: eventClock() });
 
-      // Revoke-on-reset by default: a SQL-backed store can drop every session
-      // for this user in one statement (ADR 0013), so a victim's reset ends an
-      // attacker's stolen session without any caller wiring.
+      // Revoke-on-reset by default: any revocable store drops every session for
+      // this user in one call (ADR 0013) — both built-ins qualify — so a victim's
+      // reset ends an attacker's stolen session without any caller wiring.
       if (canRevokeByUser(sessionStore)) {
         await sessionStore.deleteByUserId(userId);
 
-        // Announce the revocation only when the store actually performed it — a
-        // bare memory store has no `deleteByUserId` and revokes nothing, so it
-        // emits nothing here (the `revokeUserSessions` hook, if wired, is the
-        // caller's own second tier and is not the framework's to announce).
+        // Announce the revocation only when the store actually performed it. A
+        // custom store that cannot revoke by user reaches here only WITH a
+        // `revokeUserSessions` hook (construction refuses it otherwise); that hook
+        // is the caller's own tier and runs below, not the framework's to announce.
         await emit({ type: "session_revoked", userId, at: eventClock() });
       }
 

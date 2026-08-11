@@ -225,8 +225,9 @@ type AppDefault =
 const ROUTES_DIR = "app/routes";
 const routesDir = join(projectRoot, ROUTES_DIR);
 
-// Whether a directory exists (the convention marker for islands/routes).
-const dirExists = async (path: string): Promise<boolean> => {
+// Whether a filesystem path exists — a directory (the convention marker for
+// islands/routes) or a file (e.g. the `lesto.app.ts` entry probe).
+const pathExists = async (path: string): Promise<boolean> => {
   try {
     await access(path);
 
@@ -261,7 +262,7 @@ const scanRoutesDir = () =>
 // re-load picks up a NEW or EDITED route file rather than ESM's cached module —
 // the Node re-scan half of Workstream 3. A normal boot omits it (one clean import).
 const applyDiscoveredRoutes = async (app: LestoAppConfig["app"], bust?: string): Promise<void> => {
-  if (!(await dirExists(routesDir))) return;
+  if (!(await pathExists(routesDir))) return;
 
   const files = await scanRoutesDir();
 
@@ -297,7 +298,7 @@ const applyDiscoveredRoutes = async (app: LestoAppConfig["app"], bust?: string):
 const loadAppConfig = async (seams?: TraceSeams, bust?: string): Promise<LestoAppConfig> => {
   const appPath = join(process.cwd(), "lesto.app.ts");
 
-  if (!(await dirExists(appPath))) {
+  if (!(await pathExists(appPath))) {
     throw new CliError(
       "CLI_APP_LOAD_FAILED",
       `no lesto.app.ts found at ${appPath} — run \`lesto\` from your project root ` +
@@ -350,7 +351,7 @@ const ROUTES_IMPORT_BASE = "../app/routes";
 // or `undefined` when the project has no `app/routes/` (nothing to generate). This
 // is the edge static-import map — kept separate from the Node re-scan above.
 const regenerateRoutes = async (): Promise<{ path: string; count: number } | undefined> => {
-  if (!(await dirExists(routesDir))) return undefined;
+  if (!(await pathExists(routesDir))) return undefined;
 
   const files = await scanRoutesDir();
   const source = generateRouteManifest(files, { importBase: ROUTES_IMPORT_BASE });
@@ -368,7 +369,7 @@ const regenerateRoutes = async (): Promise<{ path: string; count: number } | und
 // `import()` — the artifacts list only each route's kind and URL, never its module —
 // so the scan stays fast and side-effect-free. Absent `app/routes/` → no routes.
 const readAgentRoutes = async (): Promise<readonly RouteDescriptor[]> => {
-  if (!(await dirExists(routesDir))) return [];
+  if (!(await pathExists(routesDir))) return [];
 
   return compileFileRoutes(await scanRoutesDir()).map((route) => ({
     kind: route.kind,
@@ -499,7 +500,7 @@ const ENV_CLIENT_PATH = join(projectRoot, "env.client.ts");
 // returned `undefined` in that case, silently skipping inlining, so the island
 // shipped unreplaced `PUBLIC_*` reads that only blew up (or read `{}`) at hydration:
 // a runtime mystery far from its cause. An ABSENT file is a different, valid case (an
-// app with no public config) — handled by the `dirExists` guard in the resolver, not
+// app with no public config) — handled by the `pathExists` guard in the resolver, not
 // here, so it stays `undefined`.
 //
 // Kept a PURE, synchronous helper over the loaded module (no fs, no `import()`) so the
@@ -540,7 +541,7 @@ export const clientDefineFromModule = (module: { clientEnv?: ClientSchema }): Pu
 // loud way; splitting it would only push a build-time `process.env` read down into the
 // core and cost testability, for no gain. Do not "fix" this into two seams.
 export const resolvePublicEnvDefine = async (): Promise<PublicEnvDefine | undefined> => {
-  if (!(await dirExists(ENV_CLIENT_PATH))) return undefined;
+  if (!(await pathExists(ENV_CLIENT_PATH))) return undefined;
 
   const module = (await import(ENV_CLIENT_PATH)) as { clientEnv?: ClientSchema };
 
@@ -630,7 +631,7 @@ const findIslandDevPorts = (): Promise<IslandDevPorts> =>
 // `@lesto/styles` precedent). The dialect rides in from the CLI core (config-derived);
 // the PUBLIC_* inject map is resolved here, the same one the Bun build inlines.
 const buildIslandDev = async (dialect: UiDialect): Promise<IslandDevServer | undefined> => {
-  if (!(await dirExists(islandsDir))) return undefined;
+  if (!(await pathExists(islandsDir))) return undefined;
 
   // The opt-in gate: the app's OWN package.json must declare `@lesto/island-dev`. Mere
   // resolvability is not enough — inside this monorepo (and the scaffold-loop e2e, which
@@ -725,7 +726,7 @@ const loadIslandDevPeer = async () => {
 // resolves it against the project root and probes the real filesystem. Absent → the
 // CSS build is skipped (Tailwind stays opt-in), exactly as a missing `app/islands/`
 // skips the client build.
-const cssEntryExists = (entry: string): Promise<boolean> => dirExists(join(projectRoot, entry));
+const cssEntryExists = (entry: string): Promise<boolean> => pathExists(join(projectRoot, entry));
 
 // Build the Tailwind v4 stylesheet with @lesto/styles. The native engine
 // (`@tailwindcss/node` + `@tailwindcss/oxide`) is heavy and OFFICIALLY internal, so
@@ -1015,8 +1016,8 @@ const buildContent = async (): Promise<readonly RuntimeEntry[]> =>
 const CONTENT_CONFIG_PATH = join(projectRoot, "lesto.content.ts");
 
 const readContentConfig = async (): Promise<{ entries: readonly RuntimeEntry[] }> => {
-  // `dirExists` is a bare existence probe (works for a file too): no config → no content.
-  if (!(await dirExists(CONTENT_CONFIG_PATH))) return { entries: [] };
+  // `pathExists` is a bare existence probe (works for a file too): no config → no content.
+  if (!(await pathExists(CONTENT_CONFIG_PATH))) return { entries: [] };
 
   const { default: config } = (await import(CONTENT_CONFIG_PATH)) as { default: EngineConfig };
   const { runPipeline } = await loadContentCore();
@@ -1059,9 +1060,9 @@ const loadSites = async (): Promise<readonly Site[]> => {
   // file: under the bin's jiti loader a missing-module import HANGS (never resolves,
   // never throws) instead of raising ERR_MODULE_NOT_FOUND, so the prior throw-and-catch
   // shape blocked `lesto dev`/`serve`/`build` FOREVER when the (documented-optional)
-  // file was absent. `dirExists` is a bare existence probe (works for a file too) — the
+  // file was absent. `pathExists` is a bare existence probe (works for a file too) — the
   // same probe-first shape `readContentConfig` already uses for `lesto.content.ts`.
-  if (!(await dirExists(SITES_PATH))) return [];
+  if (!(await pathExists(SITES_PATH))) return [];
 
   try {
     const module = (await import(SITES_PATH)) as { default: readonly Site[] };
@@ -1091,7 +1092,7 @@ const loadBuildHook = async (): Promise<BuildHook | undefined> => {
   // Same probe-first guard as `loadSites`: `lesto.build.ts` is OPTIONAL, and the bin's
   // jiti loader HANGS on a missing-module `import()` rather than throwing — so an absent
   // hook would block `lesto build` forever. Probe before importing.
-  if (!(await dirExists(BUILD_HOOK_PATH))) return undefined;
+  if (!(await pathExists(BUILD_HOOK_PATH))) return undefined;
 
   try {
     const module = (await import(BUILD_HOOK_PATH)) as { default: BuildHook };
@@ -1263,7 +1264,7 @@ if (command === "eval") {
   const evalsPath = join(projectRoot, "lesto.evals.ts");
 
   const loadEvals = async (): Promise<readonly DeclaredEval[]> => {
-    if (!(await dirExists(evalsPath))) return [];
+    if (!(await pathExists(evalsPath))) return [];
 
     const module = (await import(evalsPath)) as { default: readonly DeclaredEval[] };
 

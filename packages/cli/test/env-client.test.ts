@@ -97,7 +97,7 @@ describe("env.client.ts resolution seam", () => {
 
   it("resolvePublicEnvDefine yields undefined when the project has no env.client.ts", async () => {
     // The absent-file path is the still-valid "app with no public config" case: the
-    // `dirExists` guard short-circuits before any import. The CLI package root (the
+    // `pathExists` guard short-circuits before any import. The CLI package root (the
     // test's cwd) declares no `env.client.ts`, so the real resolver returns undefined.
     await expect(resolvePublicEnvDefine()).resolves.toBeUndefined();
   });

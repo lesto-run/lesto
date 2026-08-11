@@ -65,7 +65,7 @@ function formField(body: unknown, field: string): string | undefined {
  * and every other coded refusal (already-enrolled, not-enrolled) is a 409
  * conflict.
  */
-function enrollStatus(code: string): number {
+function stepUpStatus(code: string): number {
   if (code === "IDENTITY_NOT_AUTHENTICATED" || code === "IDENTITY_INVALID_CREDENTIALS") return 401;
   if (code === "IDENTITY_LOGIN_THROTTLED") return 429;
 
@@ -233,9 +233,12 @@ export function buildEstateRoutes(
           // the transport-resolved address rides the ambient request context (the
           // same value the IP rate-limit middleware keys on), so a remote attacker
           // hammering one email drains THEIR bucket, never the victim's.
-          const result = await identity.login(email, password, {
-            ...(currentContext()?.ip !== undefined ? { clientIp: currentContext()!.ip } : {}),
-          });
+          const clientIp = currentContext()?.ip;
+          const result = await identity.login(
+            email,
+            password,
+            clientIp === undefined ? undefined : { clientIp },
+          );
 
           // A confirmed second factor withholds the session: the password proved
           // out, but "signed in" now means 2FA-complete. Carry the signed
@@ -310,7 +313,7 @@ export function buildEstateRoutes(
           return c.json({ secret, keyUri });
         } catch (error) {
           if (error instanceof IdentityError) {
-            return c.json({ error: error.code }, enrollStatus(error.code));
+            return c.json({ error: error.code }, stepUpStatus(error.code));
           }
 
           throw error;
@@ -355,7 +358,7 @@ export function buildEstateRoutes(
           return c.json({ status: "disabled" });
         } catch (error) {
           if (error instanceof IdentityError) {
-            return c.json({ error: error.code }, enrollStatus(error.code));
+            return c.json({ error: error.code }, stepUpStatus(error.code));
           }
 
           throw error;

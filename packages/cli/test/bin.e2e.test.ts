@@ -664,7 +664,7 @@ describe("bin e2e", () => {
       await cp(fixtureDir, project, { recursive: true });
 
       // (a) NO `lesto.sites.ts` at all → the build runs to a clean exit, siteless (the
-      // dirExists probe short-circuits; the import is never attempted — no hang, no crash).
+      // pathExists probe short-circuits; the import is never attempted — no hang, no crash).
       await rm(join(project, "lesto.sites.ts"));
 
       const siteless = await runBinIn(project, ["build", "--out", "out"]);

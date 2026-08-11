@@ -218,12 +218,13 @@ export async function buildIdentity(
     // `identity.<type>` span — the observability seam wired to the tracer.
     ...(seams === undefined ? {} : { onEvent: seams.onEvent }),
     sessionStore: sqlSessionStore(sql),
-    // The INNER, per-account login throttle (auth-security item 4): five failed
-    // attempts per ~15 minutes for one account, fleet-correct over the shared SQL
-    // store. This is the credential-stuffing defense — it bounds guesses against
-    // ONE account no matter how many IPs they come from. The IP-keyed limiter on
-    // `secureStack({ rateLimit })` is the OUTER moat (per-client request rate); a
-    // botnet rotating IPs slips that, which is exactly what this layer closes.
+    // The INNER login throttle (auth-security item 4): five failed attempts per
+    // ~15 minutes, fleet-correct over the shared SQL store. The controller passes
+    // the request's client IP, so this keys on the (IP, account) pair — a remote
+    // attacker's failures drain a bucket the victim never reads, closing the
+    // targeted-lockout an account-only key would allow. Per-host volume is bounded
+    // by the OUTER IP-keyed moat on `secureStack({ rateLimit })` (per-client
+    // request rate); keep both layers.
     loginRateLimiter: new RateLimiter({
       store: sqlRateLimitStore(sql),
       capacity: 5,
