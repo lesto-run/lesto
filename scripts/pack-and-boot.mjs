@@ -19,7 +19,7 @@
 // needs no database, server, or bun bundler.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,15 +47,24 @@ function runCapture(cmd, args, opts = {}) {
 }
 
 /**
- * Assert `output` carries every one of `expected`, throwing with the full output when it does
- * not. An exit code alone is a weak oracle: this proof once passed VACUOUSLY for exactly that
- * reason — `lesto routes` swallowed app-load failures and exited 0, so the scaffolded app had
- * never actually booted under node and nobody knew until the swallow was fixed (c82b9cd) and
- * the long-standing breakage surfaced. Assert on real output, so "it booted" is checked, not
- * assumed. (AGENTS.md's first trap: an assertion that cannot fire is decorative.)
+ * Assert `output` carries every one of `expected` as a WHOLE LINE, throwing with the full
+ * output when it does not. An exit code alone is a weak oracle: this proof once passed
+ * VACUOUSLY for exactly that reason — `lesto routes` swallowed app-load failures and exited 0,
+ * so the scaffolded app had never actually booted under node and nobody knew until the swallow
+ * was fixed (c82b9cd) and the long-standing breakage surfaced. Assert on real output, so "it
+ * booted" is checked, not assumed. (AGENTS.md's first trap: an assertion that cannot fire is
+ * decorative.)
+ *
+ * WHOLE-LINE, not substring, because these expectations are PREFIXES OF EACH OTHER: `GET\t/`
+ * is a substring of `GET\t/posts`, so a substring check for the file-routed `/` passed on
+ * output where that route was missing entirely — the one expectation whose job is to prove the
+ * per-file route import ran could never fire. Matching whole lines is what makes each
+ * expectation independent. (The first cut of this helper shipped that bug; do not "simplify"
+ * it back to `output.includes(line)`.)
  */
 function expectOutput(step, output, expected) {
-  const missing = expected.filter((line) => !output.includes(line));
+  const lines = output.split("\n").map((line) => line.replace(/\r$/, ""));
+  const missing = expected.filter((line) => !lines.includes(line));
 
   if (missing.length > 0) {
     throw new Error(
@@ -205,8 +214,21 @@ expectOutput("`lesto routes`", routes, ["GET\t/posts", "POST\t/posts", "GET\t/"]
 //    refuses JSX with ERR_UNKNOWN_FILE_EXTENSION, wrapped as CLI_CLIENT_BUILD_FAILED. `readIsland`
 //    now routes it through jiti. This step is the standing guard (L-c2ef4bec) — `pack-and-boot`
 //    force-runs under node and previously stopped at `routes`, so the build path shipped unproven.
+//
+//    Like step 6, the EXIT CODE is not the oracle: `buildClientIfPresent` returns early when the
+//    project has no `app/islands/`, so if the scaffold ever stopped shipping one, `lesto build`
+//    would exit 0 having never touched `readIsland` and this whole guard would evaporate in
+//    silence. Assert the island bundle actually landed, so "the .tsx built" is checked.
 console.log("[pack-and-boot] building client assets (`lesto build`, island .tsx) under node…");
 run("node", [join(appDir, "node_modules", ".bin", "lesto"), "build"], { cwd: appDir });
+
+const clientBundle = join(appDir, "out", "client.js");
+if (!existsSync(clientBundle)) {
+  throw new Error(
+    `\`lesto build\` exited 0 but emitted no island bundle at out/client.js — the island path ` +
+      `(the L-c2ef4bec guard) did not run. Does the scaffold still ship app/islands/?`,
+  );
+}
 
 console.log(
   `\n[pack-and-boot] OK — ${publicDirs.length} packages packed, scaffolded, installed, booted, and BUILT under node.`,
