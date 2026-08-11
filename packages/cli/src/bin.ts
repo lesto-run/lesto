@@ -256,6 +256,9 @@ const importProjectModule = createProjectModuleLoader({
   runtimeIsBun: (globalThis as { Bun?: unknown }).Bun !== undefined,
   nativeImport: (specifier) => import(specifier),
   jitiImport: (specifier) => projectJiti.import(specifier),
+  // stderr, like every other operator note the CLI emits — never stdout, which `routes`
+  // and `openapi` reserve for machine-readable output.
+  warn: (message) => console.error(message),
 });
 
 // Scan `app/routes/` with the real `fs.readdir`, yielding the flat DiscoveredFile

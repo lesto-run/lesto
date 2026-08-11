@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createProjectModuleLoader } from "../src/project-module";
+import { createProjectModuleLoader, NODE_RELOAD_INERT_NOTICE } from "../src/project-module";
 import type { ModuleImporter } from "../src/project-module";
 
 /**
@@ -46,6 +46,7 @@ describe("createProjectModuleLoader", () => {
       runtimeIsBun: false,
       nativeImport: forbiddenImporter("native"),
       jitiImport: jiti.importer,
+      warn: () => undefined,
     });
 
     await expect(load("/app/lesto.app.ts")).resolves.toEqual({ loadedBy: "jiti" });
@@ -63,6 +64,7 @@ describe("createProjectModuleLoader", () => {
       runtimeIsBun: false,
       nativeImport: forbiddenImporter("native"),
       jitiImport: jiti.importer,
+      warn: () => undefined,
     });
 
     await load("/app/lesto.app.ts", "1731000000000");
@@ -80,6 +82,7 @@ describe("createProjectModuleLoader", () => {
       runtimeIsBun: true,
       nativeImport: native.importer,
       jitiImport: forbiddenImporter("jiti"),
+      warn: () => undefined,
     });
 
     await expect(load("/app/lesto.app.ts")).resolves.toEqual({ loadedBy: "native" });
@@ -95,10 +98,59 @@ describe("createProjectModuleLoader", () => {
       runtimeIsBun: true,
       nativeImport: native.importer,
       jitiImport: forbiddenImporter("jiti"),
+      warn: () => undefined,
     });
 
     await load("/app/app/routes/page.tsx", "1731000000000");
 
     expect(native.seen).toEqual(["/app/app/routes/page.tsx?t=1731000000000"]);
+  });
+
+  it("under node: says ONCE that a re-load is inert, rather than silently serving a stale module", async () => {
+    // `lesto dev` under plain node used to die outright in a published install, so this path is
+    // newly reachable — and the watcher happily prints "reloaded" while the server keeps serving
+    // the OLD module. Silently-stale is the worst outcome; the notice makes it visible. Once,
+    // because the watcher fires on every save.
+    const jiti = recordingImporter("jiti");
+    const warnings: string[] = [];
+
+    const load = createProjectModuleLoader({
+      runtimeIsBun: false,
+      nativeImport: forbiddenImporter("native"),
+      jitiImport: jiti.importer,
+      warn: (message) => warnings.push(message),
+    });
+
+    // A normal boot carries no `bust` and must stay quiet — a warning on every plain `lesto
+    // routes`/`serve` would be noise on a path where nothing is wrong.
+    await load("/app/lesto.app.ts");
+    expect(warnings).toEqual([]);
+
+    // Three re-loads (a burst of saves) → exactly one notice, naming the runtime and the way out.
+    await load("/app/lesto.app.ts", "1");
+    await load("/app/app/routes/page.tsx", "2");
+    await load("/app/lesto.app.ts", "3");
+
+    expect(warnings).toEqual([NODE_RELOAD_INERT_NOTICE]);
+    expect(warnings[0]).toContain("hot reload is inactive under node");
+
+    // ...and the loads themselves still happened, un-busted.
+    expect(jiti.seen).toHaveLength(4);
+  });
+
+  it("under Bun: never warns — the `?t=` re-load genuinely works there", async () => {
+    const native = recordingImporter("native");
+    const warnings: string[] = [];
+
+    const load = createProjectModuleLoader({
+      runtimeIsBun: true,
+      nativeImport: native.importer,
+      jitiImport: forbiddenImporter("jiti"),
+      warn: (message) => warnings.push(message),
+    });
+
+    await load("/app/lesto.app.ts", "1");
+
+    expect(warnings).toEqual([]);
   });
 });

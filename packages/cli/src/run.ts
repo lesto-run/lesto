@@ -40,7 +40,7 @@ import type { ReleaseStore, ShipDeps } from "@lesto/deploy";
 import type { DevState, DevStateReader } from "./dev-state";
 import { CliError } from "./errors";
 import { timingSafeEqual } from "node:crypto";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 import { DEV_INSPECT_TOOL, dispatchAiTurn } from "./ai-bridge";
 import type { AiTurn } from "./ai-bridge";
@@ -1819,11 +1819,22 @@ export function missingModuleSpecifier(error: unknown): string | undefined {
  * `lesto.sites.ts` / `lesto.build.ts` (e.g. `import "./nested/lesto.sites.ts"`) must
  * NOT be mistaken for the self file and false-swallowed as "no sites / no hook". Only
  * the self file resolves to `filename` itself. Shared by `loadSites` + `loadBuildHook`.
+ *
+ * The reported specifier must ALSO be absolute, which is what makes that equality mean
+ * what it says. The two loaders report different shapes: node's ESM loader (and Bun's
+ * `ResolveMessage`) name the RESOLVED ABSOLUTE path, but jiti's CJS resolver reports the
+ * RAW specifier as written. `resolve()` on a raw relative specifier is CWD-relative, and
+ * both `SITES_PATH` and `BUILD_HOOK_PATH` are `join(process.cwd(), …)` — so a PRESENT
+ * `lesto.sites.ts` whose transitive fails on `import "./lesto.sites.ts"` resolved equal
+ * to the self file and was swallowed as "no sites", losing a real error. Only the
+ * genuinely-absent self module is ever reported as an absolute path (the loader resolved
+ * it before failing to find it), so requiring absoluteness rejects the raw-relative
+ * transitive without touching the tolerated case.
  */
 export function isMissingSelfModule(error: unknown, filename: string): boolean {
   const missing = missingModuleSpecifier(error);
 
-  return missing !== undefined && resolve(missing) === resolve(filename);
+  return missing !== undefined && isAbsolute(missing) && resolve(missing) === resolve(filename);
 }
 
 /**

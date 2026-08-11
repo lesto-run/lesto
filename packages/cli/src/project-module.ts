@@ -52,7 +52,18 @@ export interface ProjectModuleLoaderOptions {
 
   /** A jiti instance's `import` — the only loader that resolves the project graph under node. */
   readonly jitiImport: ModuleImporter;
+
+  /**
+   * Where the one-time "hot reload is inert under node" notice goes (real impl:
+   * `console.error`). Injected so the warn-once decision is testable without a console spy.
+   */
+  readonly warn: (message: string) => void;
 }
+
+/** The one-time notice a `lesto dev` re-load emits under plain node (see the warn-once below). */
+export const NODE_RELOAD_INERT_NOTICE =
+  "lesto: hot reload is inactive under node — the module cache cannot be busted here. " +
+  "Restart `lesto dev` to pick up changes, or run it under bun for live reload.";
 
 /**
  * Build the loader every project-module import in the bin goes through.
@@ -61,17 +72,34 @@ export interface ProjectModuleLoaderOptions {
  * one (Bun treats the query as a distinct module, so the edited file is re-read).
  *
  * Node → jiti, always with the BARE specifier: jiti resolves a `?t=` query to the same
- * cached module, so appending one would buy nothing and only obscure the path in an
- * error message. A `bust` is therefore accepted but inert under node — the same as it
- * already was on the in-repo node path, where jiti owned the rewritten import.
+ * cached module, so appending one would buy nothing and only obscure the path in an error
+ * message. A `bust` is therefore accepted but INERT under node.
+ *
+ * Inert, so it says so — ONCE, on the first re-load that asks. `lesto dev` under plain node
+ * used to die outright in a published install (it could not even load `lesto.app.ts`), so
+ * this path is newly reachable, and a dev whose watcher prints "reloaded" while the server
+ * keeps serving the old module has no way to tell. Warning beats silently-stale; the notice
+ * is once-per-process because the watcher fires on every save. (Genuinely re-reading under
+ * node needs a fresh no-cache jiti per reload, which re-transpiles the whole user graph —
+ * a bigger change than this fix, and tracked separately.)
  */
 export function createProjectModuleLoader(
   options: ProjectModuleLoaderOptions,
 ): ProjectModuleLoader {
-  const { runtimeIsBun, nativeImport, jitiImport } = options;
+  const { runtimeIsBun, nativeImport, jitiImport, warn } = options;
 
-  return (specifier, bust) =>
-    runtimeIsBun
-      ? nativeImport(bust === undefined ? specifier : `${specifier}?t=${bust}`)
-      : jitiImport(specifier);
+  let warned = false;
+
+  return (specifier, bust) => {
+    if (runtimeIsBun) {
+      return nativeImport(bust === undefined ? specifier : `${specifier}?t=${bust}`);
+    }
+
+    if (bust !== undefined && !warned) {
+      warned = true;
+      warn(NODE_RELOAD_INERT_NOTICE);
+    }
+
+    return jitiImport(specifier);
+  };
 }

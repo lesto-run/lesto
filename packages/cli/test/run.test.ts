@@ -10,10 +10,10 @@ import { AssetsError, verifyPublicEnvDefine } from "@lesto/assets";
 
 import { createDb, createTableSql, defineTable, dropTableSql, integer, text } from "@lesto/db";
 import { currentContext, currentRequestSpan, lesto, runWithContext } from "@lesto/web";
-import type { App, LestoAppConfig, KernelDatabase } from "@lesto/kernel";
+import type { AccessLogEntry, App, LestoAppConfig, KernelDatabase } from "@lesto/kernel";
 import type { MigrationEntry } from "@lesto/migrate";
 import type { RuntimeEntry } from "@lesto/content-core";
-import type { Server, ServeOptions } from "@lesto/runtime";
+import type { AccessEntry, Server, ServeOptions } from "@lesto/runtime";
 import { parseTraceparent } from "@lesto/observability";
 import type { TraceSeams } from "@lesto/observability";
 
@@ -369,12 +369,10 @@ describe("run serve / dev", () => {
     // `serve` has always taken a `logRequest` seam, but `runServe` never passed one, so every
     // served deploy fell to `defaultLogRequest` — which logs `path` VERBATIM and therefore
     // leaks a credential carried in a URL path (a signed feed/capability link). A project now
-    // declares its sink in `lesto.app.ts` and it reaches the server. Asserting the wired
-    // function is INVOKED (not merely present) is what proves the whole seam, not the spread.
-    const seen: string[] = [];
-    const logRequest = (accessEntry: { path: string }): void => {
-      seen.push(accessEntry.path);
-    };
+    // declares its sink in `lesto.app.ts` and it reaches the server. Identity equality is the
+    // whole assertion: `fakeServe` never calls the sink, so invoking it here would only run
+    // this test's own closure through a reference already pinned — decorative, not proof.
+    const logRequest = vi.fn<(entry: AccessLogEntry) => void>();
 
     const serve = fakeServe(3000);
 
@@ -386,16 +384,6 @@ describe("run serve / dev", () => {
     const [, options] = serve.mock.calls[0]!;
 
     expect(options?.logRequest).toBe(logRequest);
-
-    options?.logRequest?.({
-      method: "GET",
-      path: "/feed/s3cr3t-token.ics",
-      status: 200,
-      ms: 1,
-      requestId: "req-1",
-    });
-
-    expect(seen).toEqual(["/feed/s3cr3t-token.ics"]);
   });
 
   it("omits logRequest entirely when the app declares none, so serve keeps its default sink", async () => {
@@ -408,7 +396,11 @@ describe("run serve / dev", () => {
 
     const [, options] = serve.mock.calls[0]!;
 
-    expect(options !== undefined && "logRequest" in options).toBe(false);
+    // Assert the bag EXISTS first: a combined `options !== undefined && "logRequest" in options`
+    // reads false — i.e. passes — when `serve` is called with no options at all, conflating
+    // "no sink" with "no options bag" (the vacuous-negative shape this repo keeps getting bitten by).
+    expect(options).toBeDefined();
+    expect("logRequest" in options!).toBe(false);
   });
 
   it("wires no tracer on serve when LESTO_OTLP_URL is unset", async () => {
@@ -5290,5 +5282,39 @@ describe("isMissingSelfModule — absolute-path equality (not a bare suffix)", (
 
   it("is false when the error is not a missing-module error at all", () => {
     expect(isMissingSelfModule({ code: "ERR_SYNTAX", message: "bad token" }, SELF)).toBe(false);
+  });
+
+  it("is FALSE for jiti's RAW RELATIVE specifier, even when it resolves to the self file from cwd", () => {
+    // The shape every node install now reports. node's ESM loader (and Bun's ResolveMessage)
+    // name the RESOLVED ABSOLUTE path, but jiti's CJS resolver reports the specifier AS
+    // WRITTEN — and `SITES_PATH`/`BUILD_HOOK_PATH` are `join(process.cwd(), …)`, so a
+    // PRESENT `lesto.sites.ts` whose transitive fails on `import "./lesto.sites.ts"` resolved
+    // equal to the self file and was swallowed as "no sites", losing a real error. Every
+    // other case here uses an absolute specifier, so nothing pinned this shape.
+    const error = { code: "MODULE_NOT_FOUND", message: "Cannot find module './lesto.sites.ts'" };
+
+    expect(isMissingSelfModule(error, join(process.cwd(), "lesto.sites.ts"))).toBe(false);
+  });
+});
+
+// The kernel mirrors `@lesto/runtime`'s `AccessEntry` as `AccessLogEntry` because
+// `@lesto/runtime` DEPENDS ON `@lesto/kernel` — a real import would close a package cycle.
+// `@lesto/cli` is the one package that sees BOTH types, so the drift guard lives here.
+describe("AccessLogEntry mirrors runtime's AccessEntry", () => {
+  it("has exactly the same keys in BOTH directions (a compile-time assertion)", () => {
+    // The `runServe` assignment alone is only HALF a guard: a callback parameter is
+    // CONTRAVARIANT under `strictFunctionTypes`, so it rejects a field REMOVED from
+    // `AccessEntry` or RETYPED, but a field ADDED to it compiles clean and silently never
+    // reaches an app's sink. Addition is the likely direction — both `truncated` and
+    // `activeStreams` arrived that way. This assertion is symmetric, so it catches both.
+    //
+    // The type error IS the test; the runtime expect only keeps vitest reporting it.
+    type Drift =
+      | Exclude<keyof AccessEntry, keyof AccessLogEntry>
+      | Exclude<keyof AccessLogEntry, keyof AccessEntry>;
+
+    const noDrift: [Drift] extends [never] ? true : { mirrorDrifted: Drift } = true;
+
+    expect(noDrift).toBe(true);
   });
 });
