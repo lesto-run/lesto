@@ -34,6 +34,38 @@ function run(cmd, args, opts = {}) {
   execFileSync(cmd, args, { stdio: "inherit", ...opts });
 }
 
+/**
+ * Like {@link run}, but CAPTURES stdout (stderr still streams through) and returns it, so a
+ * step can assert on what the command actually printed rather than only on its exit code.
+ */
+function runCapture(cmd, args, opts = {}) {
+  return execFileSync(cmd, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "inherit"],
+    ...opts,
+  });
+}
+
+/**
+ * Assert `output` carries every one of `expected`, throwing with the full output when it does
+ * not. An exit code alone is a weak oracle: this proof once passed VACUOUSLY for exactly that
+ * reason — `lesto routes` swallowed app-load failures and exited 0, so the scaffolded app had
+ * never actually booted under node and nobody knew until the swallow was fixed (c82b9cd) and
+ * the long-standing breakage surfaced. Assert on real output, so "it booted" is checked, not
+ * assumed. (AGENTS.md's first trap: an assertion that cannot fire is decorative.)
+ */
+function expectOutput(step, output, expected) {
+  const missing = expected.filter((line) => !output.includes(line));
+
+  if (missing.length > 0) {
+    throw new Error(
+      `${step} did not produce the expected output.\n` +
+        `  missing: ${missing.map((line) => JSON.stringify(line)).join(", ")}\n` +
+        `  got:\n${output.replace(/^/gm, "    ")}`,
+    );
+  }
+}
+
 // 1. Every public package: the de-privatized closure plus `create-lesto`. Version-agnostic
 //    (each package's own version is the source of truth) so a coordinated bump needs no edit
 //    here. This is the SHARED filter (`scripts/lib/pack-public.mjs`) that `scripts/publish.mjs`
@@ -149,8 +181,21 @@ console.log("[pack-and-boot] npm install (node) against the tarballs…");
 run("npm", ["install", "--no-audit", "--no-fund", "--loglevel", "error"], { cwd: appDir });
 
 // 6. Boot the INSTALLED `lesto` bin under node — loads lesto.app.ts + the @lesto graph.
+//
+// The printed routes are the ACTUAL assertion, not the exit code. Each expected line can only
+// appear if a distinct part of the boot really happened, so this cannot pass for the wrong
+// reason: `GET /posts` + `POST /posts` are the scaffold's code-first handlers, so they prove
+// `lesto.app.ts` itself loaded — including its `import { env } from "./env"`, the extensionless
+// specifier a published install once died on; `GET /` is the file route at `app/routes/page.tsx`,
+// so it proves the SEPARATE per-file route import ran too. A future regression in either seam
+// drops its line here instead of sailing through on a silent exit 0.
 console.log("[pack-and-boot] booting `lesto routes` under node…");
-run("node", [join(appDir, "node_modules", ".bin", "lesto"), "routes"], { cwd: appDir });
+const routes = runCapture("node", [join(appDir, "node_modules", ".bin", "lesto"), "routes"], {
+  cwd: appDir,
+});
+
+process.stdout.write(routes);
+expectOutput("`lesto routes`", routes, ["GET\t/posts", "POST\t/posts", "GET\t/"]);
 
 // 7. Build the client assets UNDER NODE — the island-bundle path `lesto routes` never exercises.
 //    The scaffold ships `app/islands/counter.tsx`, so `lesto build` drives `@lesto/assets`'
