@@ -63,36 +63,58 @@ export interface ProjectModuleLoaderOptions {
   readonly evictProjectModules: () => void;
 }
 
+/** What one {@link evictProjectModules} sweep did — and, crucially, what it failed to do. */
+export interface EvictionResult {
+  /** Project-owned modules actually dropped, so the next import re-reads them. */
+  readonly evicted: number;
+
+  /**
+   * Project-owned modules that were targeted but were STILL PRESENT after the delete — a
+   * non-evictable cache. Non-zero means hot reload has silently degraded to serving stale
+   * code, which is exactly what the caller must say out loud rather than swallow.
+   */
+  readonly survived: number;
+}
+
 /**
- * Drop every PROJECT-OWNED module from a jiti module cache, returning how many were dropped.
- * The one thing that makes `lesto dev` hot reload work under plain node.
+ * Drop every PROJECT-OWNED module from a module cache. The one thing that makes `lesto dev`
+ * hot reload re-read a file the developer actually edited.
  *
- * jiti serves a cached module for a repeated import and IGNORES a `?t=` query (unlike node's
- * ESM loader and Bun, which treat the query as a new module) — so once the CLI routes project
- * files through jiti, the re-import a file-change triggers hands back the OLD module and the
- * server keeps serving stale code while the watcher cheerfully reports a reload. Evicting the
- * cache entry first is what turns the re-import into a genuine re-read.
+ * Both runtimes need this, for the same reason by two different routes:
+ *   - **node** loads project files through jiti, which serves a cached module on a repeated
+ *     import and IGNORES a `?t=` query outright.
+ *   - **Bun** loads them natively and DOES honour `?t=` — but only for the module named in the
+ *     import. That entry's own static imports still resolve to their already-cached modules,
+ *     so editing `env.ts` or a component changed nothing while the watcher reported a reload.
+ *
+ * Evicting first is what turns the re-import into a genuine, TRANSITIVE re-read on both.
  *
  * Only the project's own files are dropped — never anything under a `node_modules`. That
  * distinction is the whole design:
- *   - The user's `lesto.app.ts`, `env.ts`, and `app/routes/*` MUST be re-read; they are what
- *     changed. Dropping the entry re-reads the file's transitive project imports too, so
- *     editing `env.ts` is picked up, not just the entry.
+ *   - The user's `lesto.app.ts`, `env.ts`, `app/routes/*` and everything they import MUST be
+ *     re-read; they are what changed.
  *   - The framework graph MUST NOT be, and not merely for speed: re-evaluating `@lesto/*`
  *     would mint a SECOND copy of every module-level singleton (the request-context
  *     `AsyncLocalStorage` among them), so the reloaded app and the running server would
  *     disagree about live state. Keeping installed deps cached is what makes this safe where
- *     a blunt `moduleCache: false` instance would not be.
+ *     a blunt `moduleCache: false` instance (or `bun --hot`, which re-runs node_modules too)
+ *     would not be.
  *
  * `projectRoots` is normally one path (the project root) but takes several so a root reached
- * through a symlink can pass both its literal and real paths — jiti keys the cache by REAL
- * path, and a missed prefix would silently mean "no reload" again.
+ * through a symlink can pass both its literal and real paths — a cache may key by REAL path,
+ * and a missed prefix would silently mean "no reload" again.
+ *
+ * The delete is VERIFIED rather than assumed: Bun's ESM registry is reached through the
+ * Node-compat `require.cache`, whose ESM-evictability is undocumented and could change under a
+ * future Bun. A key that survives its delete is counted, so the caller can warn instead of
+ * quietly serving stale code — the failure this whole function exists to prevent.
  */
 export function evictProjectModules(
   cache: Record<string, unknown>,
   projectRoots: readonly string[],
-): number {
+): EvictionResult {
   let evicted = 0;
+  let survived = 0;
 
   for (const key of Object.keys(cache)) {
     // An installed dependency, even one nested under the project root: keep it.
@@ -100,34 +122,36 @@ export function evictProjectModules(
 
     if (projectRoots.some((root) => key.startsWith(`${root}${sep}`))) {
       delete cache[key];
-      evicted += 1;
+
+      if (key in cache) survived += 1;
+      else evicted += 1;
     }
   }
 
-  return evicted;
+  return { evicted, survived };
 }
 
 /**
  * Build the loader every project-module import in the bin goes through.
  *
- * Bun → the native import, with the `?t=<now>` suffix appended when a re-load asks for one
- * (Bun treats the query as a distinct module, so the edited file is re-read).
+ * A re-load EVICTS the project's own modules first, on BOTH runtimes — that single step is
+ * what makes an edit to an imported file (`env.ts`, a component, a helper) actually re-read,
+ * rather than only the entry named in the import. See {@link evictProjectModules}.
  *
- * KNOWN LIMIT on that Bun path: `?t=` re-reads the named ENTRY only — its static imports still
- * resolve to their already-cached modules. So `lesto dev` under Bun picks up an edit to
- * `lesto.app.ts` or to a route file, but NOT to a helper/component/`env.ts` those import; that
- * stays stale until restart. The node path below has no such hole (evicting drops the whole
- * project subtree). It is tempting to "fix" Bun by routing its re-loads through jiti too —
- * DON'T: jiti-under-Bun mangles a top-level-await rejection into `Cannot access 'default'
- * before initialization`, and the scaffold's `lesto.app.ts` opens its database with TLA, so
- * every failed reload would report that instead of the real error. Bun exposes no userland ESM
- * cache to evict, so closing this properly needs the reload to run through a real module graph
- * (the Vite dev-server direction `@lesto/island-dev` already takes for islands), not a
- * different loader here.
+ * Which loader then runs differs, and only that:
+ *   - **Bun** → the native import. Bun resolves `.ts` and extensionless specifiers itself, and
+ *     a TLA rejection surfaces verbatim. The `?t=` suffix is KEPT on a re-load even though the
+ *     eviction has already done the real work: it is the floor. If a future Bun stopped
+ *     exposing an evictable module registry, behaviour degrades to exactly what it was before
+ *     (the entry alone re-reads) instead of to nothing — and the survivor count makes that
+ *     degradation loud rather than silent.
+ *   - **node** → jiti, always with the BARE specifier: jiti ignores a `?t=` query entirely, so
+ *     appending one would buy nothing and only obscure the path in a resolver error.
  *
- * Node → jiti, always with the BARE specifier, since jiti ignores a `?t=` query. A re-load
- * instead EVICTS the project's own modules from jiti's cache first ({@link
- * evictProjectModules}), which is what actually makes the next import re-read from disk.
+ * It is tempting to also route Bun's re-loads through jiti for symmetry — DON'T: jiti-under-Bun
+ * mangles a top-level-await rejection into `Cannot access 'default' before initialization`, and
+ * the scaffold's `lesto.app.ts` opens its database with TLA, so every failed reload would
+ * report that instead of the real cause.
  */
 export function createProjectModuleLoader(
   options: ProjectModuleLoaderOptions,
@@ -135,11 +159,11 @@ export function createProjectModuleLoader(
   const { runtimeIsBun, nativeImport, jitiImport, evictProjectModules: evict } = options;
 
   return (specifier, bust) => {
+    if (bust !== undefined) evict();
+
     if (runtimeIsBun) {
       return nativeImport(bust === undefined ? specifier : `${specifier}?t=${bust}`);
     }
-
-    if (bust !== undefined) evict();
 
     return jitiImport(specifier);
   };

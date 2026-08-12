@@ -14,6 +14,7 @@ import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promise
 import { realpathSync, watch } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import type { AddressInfo, Server as NetServer } from "node:net";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 import { createJiti } from "jiti";
@@ -268,12 +269,42 @@ const projectRootAliases = [
   })(),
 ];
 
+const runtimeIsBun = (globalThis as { Bun?: unknown }).Bun !== undefined;
+
+// WHICH cache a dev re-load must sweep is decided by which loader owns the project graph, and
+// sweeping the wrong one is not merely useless:
+//   - Under BUN the graph is Bun's own ESM registry, reached through the Node-compat
+//     `require.cache` (deleting a key there evicts an ESM module — measured on Bun 1.3.5, and
+//     verified per-sweep by the survivor count below, since that behaviour is undocumented).
+//   - Under NODE the graph is jiti's (`Jiti extends NodeRequire`, so `.cache` is the same
+//     shape). A `createRequire` here would hand back JITI's wrapper rather than node's real
+//     cache, because this module is itself jiti-transpiled on that path.
+const projectModuleCache = (): Record<string, unknown> =>
+  runtimeIsBun
+    ? (createRequire(import.meta.url).cache as unknown as Record<string, unknown>)
+    : (projectJiti.cache as unknown as Record<string, unknown>);
+
+// Warn ONCE if a sweep cannot actually drop the project's modules — a future runtime whose
+// cache is no longer evictable would otherwise put us straight back to the silent-stale bug
+// this exists to fix, with the watcher still cheerfully reporting a reload.
+let reportedInertEviction = false;
+
 const importProjectModule = createProjectModuleLoader({
-  runtimeIsBun: (globalThis as { Bun?: unknown }).Bun !== undefined,
+  runtimeIsBun,
   nativeImport: (specifier) => import(specifier),
   jitiImport: (specifier) => projectJiti.import(specifier),
-  // `Jiti extends NodeRequire`, so its module cache is the standard `require.cache` shape.
-  evictProjectModules: () => evictProjectModules(projectJiti.cache, projectRootAliases),
+  evictProjectModules: () => {
+    const { survived } = evictProjectModules(projectModuleCache(), projectRootAliases);
+
+    if (survived > 0 && !reportedInertEviction) {
+      reportedInertEviction = true;
+
+      console.error(
+        `lesto: could not clear ${survived} cached project module(s), so an edit to an ` +
+          "imported file may keep serving the old code — restart `lesto dev` to pick it up.",
+      );
+    }
+  },
 });
 
 // Scan `app/routes/` with the real `fs.readdir`, yielding the flat DiscoveredFile

@@ -134,7 +134,12 @@ describe("createProjectModuleLoader", () => {
     expect(evictions).toBe(2);
   });
 
-  it("under Bun: never evicts — the `?t=` re-load already re-reads there", async () => {
+  it("under Bun: ALSO evicts on a re-load, and still sends the `?t=` as the floor", async () => {
+    // Bun honours `?t=` — but only for the module NAMED in the import; that entry's own static
+    // imports keep resolving to their cached modules, so editing `env.ts` or a component
+    // changed nothing while the watcher reported a reload. Evicting is what makes the re-read
+    // transitive. The `?t=` stays so that if a future Bun stops exposing an evictable registry,
+    // behaviour degrades to the old entry-only reload rather than to nothing at all.
     const native = recordingImporter("native");
     let evictions = 0;
 
@@ -147,9 +152,14 @@ describe("createProjectModuleLoader", () => {
       },
     });
 
-    await load("/app/lesto.app.ts", "1");
-
+    // A plain boot still must NOT evict.
+    await load("/app/lesto.app.ts");
     expect(evictions).toBe(0);
+
+    await load("/app/app/routes/page.tsx", "1731000000000");
+
+    expect(evictions).toBe(1);
+    expect(native.seen).toEqual(["/app/lesto.app.ts", "/app/app/routes/page.tsx?t=1731000000000"]);
   });
 });
 
@@ -169,7 +179,7 @@ describe("evictProjectModules", () => {
       "/other/elsewhere.ts",
     );
 
-    expect(evictProjectModules(cache, [ROOT])).toBe(3);
+    expect(evictProjectModules(cache, [ROOT])).toEqual({ evicted: 3, survived: 0 });
     expect(Object.keys(cache)).toEqual(["/other/elsewhere.ts"]);
   });
 
@@ -184,7 +194,7 @@ describe("evictProjectModules", () => {
       "/proj/node_modules/.bun/jiti/dist/jiti.cjs",
     );
 
-    expect(evictProjectModules(cache, [ROOT])).toBe(1);
+    expect(evictProjectModules(cache, [ROOT])).toEqual({ evicted: 1, survived: 0 });
     expect(Object.keys(cache)).toEqual([
       "/proj/node_modules/@lesto/web/dist/index.js",
       "/proj/node_modules/.bun/jiti/dist/jiti.cjs",
@@ -196,7 +206,10 @@ describe("evictProjectModules", () => {
     // a bare `process.cwd()` prefix, and its hot reload would silently do nothing.
     const cache = cacheOf("/real/volume/app/lesto.app.ts", "/elsewhere/x.ts");
 
-    expect(evictProjectModules(cache, ["/home/me/app", "/real/volume/app"])).toBe(1);
+    expect(evictProjectModules(cache, ["/home/me/app", "/real/volume/app"])).toEqual({
+      evicted: 1,
+      survived: 0,
+    });
     expect(Object.keys(cache)).toEqual(["/elsewhere/x.ts"]);
   });
 
@@ -205,11 +218,24 @@ describe("evictProjectModules", () => {
     // is genuinely inside the project.
     const cache = cacheOf("/proj-backup/x.ts", "/proj/keep-me.ts");
 
-    expect(evictProjectModules(cache, [ROOT])).toBe(1);
+    expect(evictProjectModules(cache, [ROOT])).toEqual({ evicted: 1, survived: 0 });
     expect(Object.keys(cache)).toEqual(["/proj-backup/x.ts"]);
   });
 
   it("is a no-op on an empty cache", () => {
-    expect(evictProjectModules({}, [ROOT])).toBe(0);
+    expect(evictProjectModules({}, [ROOT])).toEqual({ evicted: 0, survived: 0 });
+  });
+
+  it("COUNTS a key that survives its delete, so a non-evictable cache can be reported", () => {
+    // Bun's ESM registry is reached through the Node-compat `require.cache`, and its
+    // ESM-evictability is undocumented — a future runtime could stop honouring the delete. That
+    // would put us straight back to serving stale code with the watcher reporting success, so
+    // the delete is verified rather than assumed and the caller warns on a survivor.
+    const stubborn = new Proxy(
+      { "/proj/lesto.app.ts": {}, "/proj/env.ts": {} },
+      { deleteProperty: () => true }, // reports success, keeps the entry
+    ) as Record<string, unknown>;
+
+    expect(evictProjectModules(stubborn, [ROOT])).toEqual({ evicted: 0, survived: 2 });
   });
 });
