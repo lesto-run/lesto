@@ -43,12 +43,14 @@ test.describe.configure({ mode: "serial" });
 let workspace: string;
 let appDir: string;
 let pageFile: string;
+let helperFile: string;
 let dev: ChildProcess | undefined;
 
 test.beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "lesto-page-swap-bun-"));
   appDir = join(workspace, "bun-app");
   pageFile = join(appDir, "app", "routes", "page.tsx");
+  helperFile = join(appDir, "app", "greeting.ts");
 
   // Copy the fixture SOURCE (no node_modules / build output), reconstruct the workspace
   // node_modules the publish-equivalent way (externals + the rebuilt `@lesto/*` scope, since
@@ -128,4 +130,53 @@ test("editing a route file swaps the page in place on the Bun dev path — new m
     () => (window as unknown as Record<string, unknown>)["lestoPageSwapProbe"],
   );
   expect(marker).toBe("alive");
+});
+
+test("editing a file the page IMPORTS also re-renders — the module cache is evicted, not just the entry", async ({
+  page,
+}) => {
+  // THE GUARD ON THE EVICTION. Bun honours a `?t=` cache-bust only for the module NAMED in
+  // the import, so before the loader evicted the project's modules an edit to a file the page
+  // imported changed NOTHING while the watcher happily reported a reload. The sibling test
+  // above edits the ROUTE file, which is imported directly and therefore was already covered
+  // by `?t=` alone — only a TRANSITIVE edit can fail if the eviction regresses.
+  //
+  // This is also the tripwire for the runtime itself: the eviction relies on Bun exposing its
+  // ESM registry through the Node-compat `require.cache`, which is undocumented. If a future
+  // Bun stops honouring that delete, this test goes red — no unit test can see it, because the
+  // behaviour under test belongs to the runtime.
+  await writeFile(helperFile, 'export const greeting = "IMPORTED-ORIGINAL";\n');
+
+  // Re-point the page's heading at the helper. Written out in full rather than patched, so
+  // the test does not silently stop testing anything if the fixture's markup changes.
+  await writeFile(
+    pageFile,
+    [
+      'import type { PageDef, PageProps } from "@lesto/web";',
+      'import type { ReactNode } from "react";',
+      "",
+      'import { greeting } from "../greeting";',
+      "",
+      "const load = (): { start: number } => ({ start: 0 });",
+      "",
+      'const page: PageDef<"/", PageProps<typeof load>> = {',
+      "  load,",
+      "",
+      "  component: (): ReactNode => <h1>{greeting}</h1>,",
+      "",
+      "  metadata: () => ({ title: greeting }),",
+      "};",
+      "",
+      "export default page;",
+      "",
+    ].join("\n"),
+  );
+
+  await page.goto(`${BASE_URL}/`);
+  await expect(page.locator("h1")).toHaveText("IMPORTED-ORIGINAL", { timeout: 15_000 });
+
+  // Edit ONLY the imported helper — the route file itself is untouched from here on.
+  await writeFile(helperFile, 'export const greeting = "IMPORTED-EDITED";\n');
+
+  await expect(page.locator("h1")).toHaveText("IMPORTED-EDITED", { timeout: 15_000 });
 });
