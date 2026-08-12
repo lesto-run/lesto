@@ -501,14 +501,14 @@ export interface CliDeps {
   watchStyleSources?: (onChange: () => void) => () => void;
 
   /**
-   * Watch `app/routes/` and call `onChange` (debounced) when a page / layout /
-   * boundary file changes, returning a stop handle. The bin wires a debounced
-   * `fs.watch` over the convention dir; `dev` registers a closure that re-loads the
-   * app (so a NEW route appears without a server restart), refreshes the edge
-   * manifest (so `routes.gen.ts` stays current), and triggers a browser reload.
-   * Absent → no route watching (Workstream 3 is opt-in; tests provide it). This is
-   * the NODE re-scan path; it is distinct from the edge manifest below — the watcher
-   * does both but they are separate concerns (the plan keeps them apart).
+   * Watch the project's SERVER SOURCES and call `onChange` (debounced) when one changes,
+   * returning a stop handle. The bin wires `fs.watch` over `app/` and `src/` (recursive) plus
+   * the project root (non-recursive), filtering with `isReloadTriggerPath`; `dev` registers a
+   * closure that re-loads the app (so an edited route, helper, or `env.ts` is live without a
+   * server restart), refreshes the edge manifest (so `routes.gen.ts` stays current), and
+   * swaps/reloads the browser. Absent → no watching (Workstream 3 is opt-in; tests provide
+   * it). This is the NODE re-scan path; it is distinct from the edge manifest below — the
+   * watcher does both but they are separate concerns (the plan keeps them apart).
    */
   watchRoutes?: (onChange: () => void) => () => void;
 
@@ -1747,25 +1747,35 @@ function listsIslandDevPeer(deps: unknown): boolean {
 }
 
 /** Server-source extensions whose edit changes what the app SERVES (so a re-load is warranted). */
-const RELOAD_TRIGGER_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts"];
+const RELOAD_TRIGGER_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+
+/** The generated edge route manifest a re-load WRITES — watching it would self-trigger forever. */
+const GENERATED_ROUTE_MANIFEST = "src/routes.gen.ts";
 
 /**
  * Whether a changed project file should trigger a `lesto dev` re-load, given its path
  * RELATIVE to the project root (POSIX or Windows separators; the watcher hands either).
  *
  * `lesto dev` used to watch ONLY `app/routes/`, so editing `env.ts`, `lesto.app.ts`, or a
- * component under `app/` changed nothing until the server was restarted — the loader could
- * re-read correctly and it still would not matter, because no re-load was ever requested.
- * This is the widened trigger, kept a pure predicate so every exclusion below is pinned by a
- * test rather than by the shape of a watcher callback.
+ * component changed nothing until the server was restarted — the loader could re-read
+ * perfectly and it still would not matter, because no re-load was ever requested. This is the
+ * widened trigger, kept a pure predicate so every exclusion below is pinned by a test rather
+ * than by the shape of a watcher callback.
  *
  * The exclusions are each load-bearing:
- *   - **`src/`** — `regenerateRoutes` WRITES `src/routes.gen.ts` as part of a re-load, so
- *     watching it would make every re-load trigger the next one, forever.
+ *   - **the generated route manifest** — `regenerateRoutes` writes `src/routes.gen.ts` as PART
+ *     of a re-load, so treating it as a trigger would make every re-load start the next one,
+ *     forever. Only that one generated file is excluded: `src/` at large is where the
+ *     framework's own apps (`site/`, `www/`, `examples/estate`) keep their server source, so
+ *     excluding the whole directory would leave every first-party app without hot reload.
+ *   - **dot-prefixed paths** — these are never a developer's source. `@lesto/assets` stages
+ *     `.lesto-client-entry.tsx` IN THE PROJECT ROOT on every island bundle and deletes it
+ *     again, so counting it would make each island save trigger a full app re-load and page
+ *     swap — fighting the island pipeline and discarding exactly the component state the
+ *     `app/islands/` rule below protects. Editors drop the same shape mid-keystroke
+ *     (`.#page.tsx`, `.file.swp`), which would reload the app while a line is half-typed.
  *   - **`app/islands/`** — islands belong to the island pipeline (Vite Fast Refresh when the
- *     optional peer is installed, else the Bun island rebuild watcher). Reloading the server
- *     and swapping the page on an island edit would fight Fast Refresh and throw away the
- *     component state it exists to preserve.
+ *     optional peer is installed, else the Bun island rebuild watcher).
  *   - **`.d.ts`** — types only; nothing it declares can change what the server serves.
  *   - **tests** — a `*.test.ts` / `*.spec.ts` beside the source is not part of the app.
  *   - **non-source extensions** — a `.css` edit is the STYLE watcher's job (it hot-swaps the
@@ -1774,7 +1784,8 @@ const RELOAD_TRIGGER_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts"]
 export function isReloadTriggerPath(relativePath: string): boolean {
   const path = relativePath.replaceAll("\\", "/");
 
-  if (path.startsWith("src/")) return false;
+  if (path === GENERATED_ROUTE_MANIFEST) return false;
+  if (path.startsWith(".") || path.includes("/.")) return false;
   if (path.startsWith("app/islands/")) return false;
   if (path.endsWith(".d.ts")) return false;
   if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path)) return false;
@@ -2185,13 +2196,28 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // seam, the handle is untouched (unchanged behaviour).
   if (deps.aiOverlay !== undefined) rootHandle = withAiEndpoint(rootHandle, deps.aiOverlay);
 
-  // Watch `app/routes/` (Workstream 3). On a debounced change: refresh the EDGE
-  // manifest (`routes.gen.ts`), re-load the app so a NEW route is live without a
+  // Watch the project's server sources (Workstream 3). On a debounced change: refresh the
+  // EDGE manifest (`routes.gen.ts`), re-load the app so a NEW route is live without a
   // restart (the NODE re-scan — distinct from the edge manifest above), and reload
   // the browser. A failure in any step is reported, not fatal — the dev server
   // stays up so the next save can fix it.
+  //
+  // Re-loads are GENERATION-GUARDED because they overlap: a save while an earlier re-load is
+  // still importing starts a second one, and the two finish in whatever order their work takes
+  // (a re-load re-evaluates the whole project graph, so a slow edit easily outlives a later
+  // fast one). Applying results in completion order let an OLDER edit win and stay live —
+  // serving code that is not on disk, permanently, which is the exact silent-staleness this
+  // whole path exists to prevent. Only the newest re-load may swap.
+  let reloadGeneration = 0;
+
   const onRouteChange = async (): Promise<void> => {
+    const generation = (reloadGeneration += 1);
+
     const { reloaded, error } = await refreshRoutes(deps, devLog);
+
+    // A newer save started while this one was loading: its result is the truth, so drop
+    // this one entirely rather than clobbering the newer app (or painting a stale overlay).
+    if (generation !== reloadGeneration) return;
 
     // The reloaded app + its routes move together — nesting them under `reloaded` makes that
     // a TYPE-enforced invariant, not a documented one — so the forwarder AND the dev MCP's

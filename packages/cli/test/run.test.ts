@@ -2535,6 +2535,73 @@ describe("run dev — route watching & live reload (Workstream 3)", () => {
     expect(lines).toContain("routes refreshed: src/routes.gen.ts (2 route files)");
   });
 
+  it("drops a SUPERSEDED re-load, so a slow earlier save can never overwrite a faster later one", async () => {
+    // Re-loads overlap: saving while one is still importing starts a second, and they finish in
+    // whatever order their work takes — a re-load re-evaluates the whole project graph, so a
+    // slow edit easily outlives a later fast one. Applying in completion order let the OLDER
+    // edit win and STAY live, serving code that is not on disk. Only the newest may swap.
+    let onChange: (() => void) | undefined;
+    const pageSwaps: string[] = [];
+
+    // The first re-load blocks until released; the second resolves immediately.
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    let reloadCalls = 0;
+    const appliedApps: string[] = [];
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: fakeServe(3000),
+        loadSites: () => Promise.resolve(sites),
+        watchRoutes: (cb) => {
+          onChange = cb;
+
+          return () => undefined;
+        },
+        regenerateRoutes: () => Promise.resolve({ path: "src/routes.gen.ts", count: 1 }),
+        reloadApp: async () => {
+          reloadCalls += 1;
+
+          if (reloadCalls === 1) await firstStarted;
+
+          appliedApps.push(`reload-${reloadCalls}`);
+
+          return buildConfig();
+        },
+        liveReload: {
+          script: "x",
+          notify: () => undefined,
+          notifyError: () => undefined,
+          notifyStyleUpdate: () => undefined,
+          notifyPageSwap: () => pageSwaps.push("swap"),
+          close: () => undefined,
+        },
+      }),
+    );
+
+    // Save #1 (slow, still in flight), then save #2 (fast) — the real burst shape.
+    const first = onChange?.();
+    void first;
+    const second = onChange?.();
+    void second;
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // #2 has already completed and swapped.
+    expect(pageSwaps).toEqual(["swap"]);
+
+    // Now let the STALE #1 finish. It must NOT swap again — its result is superseded.
+    releaseFirst();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(reloadCalls).toBe(2);
+    expect(pageSwaps).toEqual(["swap"]);
+  });
+
   it("swaps the live server's handle so a re-loaded app's new route serves without a restart", async () => {
     let onChange: (() => void) | undefined;
     const capture = capturingServe();
@@ -5252,9 +5319,6 @@ describe("missingModuleSpecifier — cross-runtime module-not-found classifier",
   });
 });
 
-// The self-module predicate `loadSites`/`loadBuildHook` use to tell an absent OPTIONAL
-// file (tolerate) from a real failure inside a present one (fail loud). The match is
-// ABSOLUTE-PATH equality, NOT a bare suffix — the red-team P2 tightening.
 // WHICH project edits re-load `lesto dev`. Widened from `app/routes/` alone — editing
 // `env.ts`, `lesto.app.ts`, or a component used to reload nothing at all, so a correct loader
 // still served stale code because no re-load was ever requested.
@@ -5274,11 +5338,31 @@ describe("isReloadTriggerPath", () => {
     }
   });
 
-  it("NEVER triggers on `src/` — a re-load writes src/routes.gen.ts, so it would loop forever", () => {
-    // `regenerateRoutes` writes this file as PART of a re-load. Watching it would make each
-    // re-load trigger the next one, indefinitely, on an idle machine.
+  it("NEVER triggers on the GENERATED route manifest — a re-load writes it, so it would loop", () => {
+    // `regenerateRoutes` writes `src/routes.gen.ts` as PART of a re-load. Counting it would
+    // make each re-load start the next one, indefinitely, on an idle machine.
     expect(isReloadTriggerPath("src/routes.gen.ts")).toBe(false);
-    expect(isReloadTriggerPath("src/anything.ts")).toBe(false);
+  });
+
+  it("DOES trigger on the rest of `src/` — that is where first-party apps keep their source", () => {
+    // `site/`, `www/` and `examples/estate` all put their server code in `src/` behind a
+    // three-line `lesto.app.ts` shim. Excluding the whole directory (rather than just the one
+    // generated file) left every first-party app with no hot reload at all.
+    expect(isReloadTriggerPath("src/app.ts")).toBe(true);
+    expect(isReloadTriggerPath("src/pages.tsx")).toBe(true);
+    expect(isReloadTriggerPath("src/ui/button.tsx")).toBe(true);
+  });
+
+  it("NEVER triggers on a DOT-prefixed path, at the root or nested", () => {
+    // `@lesto/assets` stages `.lesto-client-entry.tsx` IN THE PROJECT ROOT on every island
+    // bundle and deletes it again, so counting it made each island save trigger a full app
+    // re-load and page swap — fighting the island pipeline and discarding exactly the
+    // component state the `app/islands/` rule protects. Editors drop the same shape
+    // mid-keystroke (`.#page.tsx`, `.page.tsx.swp`), which would reload a half-typed line.
+    expect(isReloadTriggerPath(".lesto-client-entry.tsx")).toBe(false);
+    expect(isReloadTriggerPath("app/routes/.#page.tsx")).toBe(false);
+    expect(isReloadTriggerPath("app/.cache/thing.ts")).toBe(false);
+    expect(isReloadTriggerPath("src/.generated/x.ts")).toBe(false);
   });
 
   it("NEVER triggers on `app/islands/` — that belongs to the island pipeline", () => {
@@ -5307,6 +5391,9 @@ describe("isReloadTriggerPath", () => {
   });
 });
 
+// The self-module predicate `loadSites`/`loadBuildHook` use to tell an absent OPTIONAL
+// file (tolerate) from a real failure inside a present one (fail loud). The match is
+// ABSOLUTE-PATH equality, NOT a bare suffix — the red-team P2 tightening.
 describe("isMissingSelfModule — absolute-path equality (not a bare suffix)", () => {
   const SELF = "/proj/lesto.sites.ts";
 
