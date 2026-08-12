@@ -1746,6 +1746,42 @@ function listsIslandDevPeer(deps: unknown): boolean {
   return typeof deps === "object" && deps !== null && ISLAND_DEV_PEER in deps;
 }
 
+/** Server-source extensions whose edit changes what the app SERVES (so a re-load is warranted). */
+const RELOAD_TRIGGER_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts"];
+
+/**
+ * Whether a changed project file should trigger a `lesto dev` re-load, given its path
+ * RELATIVE to the project root (POSIX or Windows separators; the watcher hands either).
+ *
+ * `lesto dev` used to watch ONLY `app/routes/`, so editing `env.ts`, `lesto.app.ts`, or a
+ * component under `app/` changed nothing until the server was restarted — the loader could
+ * re-read correctly and it still would not matter, because no re-load was ever requested.
+ * This is the widened trigger, kept a pure predicate so every exclusion below is pinned by a
+ * test rather than by the shape of a watcher callback.
+ *
+ * The exclusions are each load-bearing:
+ *   - **`src/`** — `regenerateRoutes` WRITES `src/routes.gen.ts` as part of a re-load, so
+ *     watching it would make every re-load trigger the next one, forever.
+ *   - **`app/islands/`** — islands belong to the island pipeline (Vite Fast Refresh when the
+ *     optional peer is installed, else the Bun island rebuild watcher). Reloading the server
+ *     and swapping the page on an island edit would fight Fast Refresh and throw away the
+ *     component state it exists to preserve.
+ *   - **`.d.ts`** — types only; nothing it declares can change what the server serves.
+ *   - **tests** — a `*.test.ts` / `*.spec.ts` beside the source is not part of the app.
+ *   - **non-source extensions** — a `.css` edit is the STYLE watcher's job (it hot-swaps the
+ *     stylesheet without a reload); anything else (an asset, a `.md`) is not server code.
+ */
+export function isReloadTriggerPath(relativePath: string): boolean {
+  const path = relativePath.replaceAll("\\", "/");
+
+  if (path.startsWith("src/")) return false;
+  if (path.startsWith("app/islands/")) return false;
+  if (path.endsWith(".d.ts")) return false;
+  if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path)) return false;
+
+  return RELOAD_TRIGGER_EXTENSIONS.some((extension) => path.endsWith(extension));
+}
+
 /**
  * Whether an app's parsed `package.json` DECLARES the optional `@lesto/island-dev`
  * peer (in `dependencies` or `devDependencies`) — the true opt-in signal for the Vite

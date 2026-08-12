@@ -33,7 +33,12 @@ import {
 // the bin's loaders route through — pure helpers exported from the core (`run.ts`), imported
 // here directly (they are internal to the CLI's own wiring, not part of the package's public
 // barrel like `declaresIslandDevPeer`/`run`).
-import { isHelpRequest, isMissingSelfModule, missingModuleSpecifier } from "../src/run";
+import {
+  isHelpRequest,
+  isMissingSelfModule,
+  isReloadTriggerPath,
+  missingModuleSpecifier,
+} from "../src/run";
 import type { ServeTracing } from "../src/run";
 import type { BuildHook, BuildHookContext, CliDeps, DevError, ReleaseTarget } from "../src/index";
 import { createDevState } from "../src/dev-state";
@@ -5250,6 +5255,58 @@ describe("missingModuleSpecifier — cross-runtime module-not-found classifier",
 // The self-module predicate `loadSites`/`loadBuildHook` use to tell an absent OPTIONAL
 // file (tolerate) from a real failure inside a present one (fail loud). The match is
 // ABSOLUTE-PATH equality, NOT a bare suffix — the red-team P2 tightening.
+// WHICH project edits re-load `lesto dev`. Widened from `app/routes/` alone — editing
+// `env.ts`, `lesto.app.ts`, or a component used to reload nothing at all, so a correct loader
+// still served stale code because no re-load was ever requested.
+describe("isReloadTriggerPath", () => {
+  it("triggers on the app's own server sources, wherever they live", () => {
+    for (const path of [
+      "lesto.app.ts",
+      "env.ts",
+      "env.client.ts",
+      "lesto.sites.ts",
+      "app/routes/page.tsx",
+      "app/routes/blog/[slug]/page.tsx",
+      "app/components/Header.tsx",
+      "app/lib/format.ts",
+    ]) {
+      expect(isReloadTriggerPath(path), path).toBe(true);
+    }
+  });
+
+  it("NEVER triggers on `src/` — a re-load writes src/routes.gen.ts, so it would loop forever", () => {
+    // `regenerateRoutes` writes this file as PART of a re-load. Watching it would make each
+    // re-load trigger the next one, indefinitely, on an idle machine.
+    expect(isReloadTriggerPath("src/routes.gen.ts")).toBe(false);
+    expect(isReloadTriggerPath("src/anything.ts")).toBe(false);
+  });
+
+  it("NEVER triggers on `app/islands/` — that belongs to the island pipeline", () => {
+    // Islands are owned by Vite Fast Refresh (when the optional peer is installed) or the Bun
+    // island rebuild watcher. A server re-load + page swap here would fight Fast Refresh and
+    // discard the component state it exists to preserve.
+    expect(isReloadTriggerPath("app/islands/counter.tsx")).toBe(false);
+    expect(isReloadTriggerPath("app/islands/nested/widget.tsx")).toBe(false);
+  });
+
+  it("ignores files that cannot change what is served", () => {
+    expect(isReloadTriggerPath("app/styles/app.css")).toBe(false); // the STYLE watcher hot-swaps this
+    expect(isReloadTriggerPath("app/types.d.ts")).toBe(false); // types only
+    expect(isReloadTriggerPath("app/lib/format.test.ts")).toBe(false); // not part of the app
+    expect(isReloadTriggerPath("app/lib/format.spec.tsx")).toBe(false);
+    expect(isReloadTriggerPath("README.md")).toBe(false);
+    expect(isReloadTriggerPath("out")).toBe(false); // a build dir, reported bare by the root watch
+  });
+
+  it("normalises Windows separators, so the exclusions hold there too", () => {
+    // `fs.watch` reports backslash-separated paths on Windows; a raw prefix test would miss
+    // every exclusion and re-introduce the self-trigger loop.
+    expect(isReloadTriggerPath("src\\routes.gen.ts")).toBe(false);
+    expect(isReloadTriggerPath("app\\islands\\counter.tsx")).toBe(false);
+    expect(isReloadTriggerPath("app\\routes\\page.tsx")).toBe(true);
+  });
+});
+
 describe("isMissingSelfModule — absolute-path equality (not a bare suffix)", () => {
   const SELF = "/proj/lesto.sites.ts";
 

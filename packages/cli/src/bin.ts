@@ -56,6 +56,7 @@ import {
   declaresIslandDevPeer,
   isHelpRequest,
   isMissingSelfModule,
+  isReloadTriggerPath,
   missingModuleSpecifier,
   run,
 } from "./run";
@@ -451,31 +452,61 @@ const readAgentRoutes = async (): Promise<readonly RouteDescriptor[]> => {
   }));
 };
 
-// Watch `app/routes/` and fire `onChange` at most once per debounce window, like
-// `watchIslands` — so a burst of saves coalesces into one re-load. Absent dir → a
-// no-op stop handle (dev still runs; there is just nothing to watch).
+// Watch the project's SERVER SOURCES and fire `onChange` at most once per debounce window,
+// like `watchIslands` — so a burst of saves coalesces into one re-load.
+//
+// TWO watchers, because the sources are in two places and only one of them can be recursive
+// safely: `app/` recursively (routes, components, helpers) and the project ROOT
+// non-recursively (`lesto.app.ts`, `env.ts`, `env.client.ts`, `lesto.sites.ts`, …). The root
+// is deliberately NOT recursive — that would pull in `src/`, `out/`, and `node_modules`, and
+// `regenerateRoutes` writes `src/routes.gen.ts` on every re-load, so a recursive root watch
+// would make each re-load trigger the next one forever.
+//
+// This used to watch `app/routes/` ALONE, which meant editing `env.ts` or a component under
+// `app/` reloaded nothing at all — the half of the hot-reload bug that no loader fix could
+// reach. WHICH changes count is the covered `isReloadTriggerPath`; this is only the wiring.
+// A missing directory is not an error (a project with no `app/` still serves), so each watch
+// is attempted independently and the loop degrades to whatever exists.
 const watchRoutes = (onChange: () => void): (() => void) => {
-  let watcher: ReturnType<typeof watch> | undefined;
+  const watchers: ReturnType<typeof watch>[] = [];
 
-  try {
-    watcher = watch(routesDir, { recursive: true });
-  } catch {
-    // No `app/routes/` (or it cannot be watched) — nothing to watch; the dev loop
-    // still serves, it just has no route hot-reload. Return a no-op stop handle.
-    return () => undefined;
-  }
+  const attach = (dir: string, recursive: boolean, prefix: string): void => {
+    let watcher: ReturnType<typeof watch>;
+
+    try {
+      watcher = watch(dir, { recursive });
+    } catch {
+      // The directory does not exist (or cannot be watched) — nothing to watch here; the dev
+      // loop still serves, it just has no reload trigger from this root.
+      return;
+    }
+
+    // `fs.watch` emits its `change` event as (eventType, filename) — `filename` is relative to
+    // the WATCHED dir, so it is re-prefixed to be project-relative before the predicate sees
+    // it. A null filename (possible on some platforms) is treated as "something changed here"
+    // and allowed through rather than silently dropping a real edit.
+    watcher.on("change", (_event, filename) => {
+      const relative = filename === null ? undefined : `${prefix}${String(filename)}`;
+
+      if (relative !== undefined && !isReloadTriggerPath(relative)) return;
+
+      clearTimeout(timer);
+
+      timer = setTimeout(onChange, WATCH_DEBOUNCE_MS);
+    });
+
+    watchers.push(watcher);
+  };
 
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  watcher.on("change", () => {
-    clearTimeout(timer);
-
-    timer = setTimeout(onChange, WATCH_DEBOUNCE_MS);
-  });
+  attach(appSrcDir, true, `${APP_SRC_DIR}/`);
+  attach(projectRoot, false, "");
 
   return () => {
     clearTimeout(timer);
-    watcher?.close();
+
+    for (const watcher of watchers) watcher.close();
   };
 };
 
