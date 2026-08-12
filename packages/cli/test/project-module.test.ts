@@ -134,6 +134,40 @@ describe("createProjectModuleLoader", () => {
     expect(evictions).toBe(2);
   });
 
+  it("evicts ONCE per re-load, not once per import — or the entry and its routes fork", async () => {
+    // A re-load imports many files under ONE bust: `lesto.app.ts` plus every `app/routes/*`
+    // module. Evicting per import would throw away modules the SAME re-load just loaded, so the
+    // entry and the routes would end up holding DIFFERENT copies of everything they share — a
+    // project's in-memory cache or db wrapper silently forking in two after the first save, and
+    // module-scope side effects running again per file. That is the duplicate-singleton hazard
+    // this design avoids for `@lesto/*`, recreated inside the user's own code.
+    const jiti = recordingImporter("jiti");
+    let evictions = 0;
+
+    const load = createProjectModuleLoader({
+      runtimeIsBun: false,
+      nativeImport: forbiddenImporter("native"),
+      jitiImport: jiti.importer,
+      evictProjectModules: () => {
+        evictions += 1;
+      },
+    });
+
+    // One re-load: the entry plus three route modules, all sharing bust "1".
+    await load("/app/lesto.app.ts", "1");
+    await load("/app/app/routes/page.tsx", "1");
+    await load("/app/app/routes/about/page.tsx", "1");
+    await load("/app/app/routes/blog/page.tsx", "1");
+
+    expect(evictions).toBe(1);
+
+    // The NEXT re-load carries a new bust and must sweep again.
+    await load("/app/lesto.app.ts", "2");
+    await load("/app/app/routes/page.tsx", "2");
+
+    expect(evictions).toBe(2);
+  });
+
   it("under Bun: ALSO evicts on a re-load, and still sends the `?t=` as the floor", async () => {
     // Bun honours `?t=` — but only for the module NAMED in the import; that entry's own static
     // imports keep resolving to their cached modules, so editing `env.ts` or a component

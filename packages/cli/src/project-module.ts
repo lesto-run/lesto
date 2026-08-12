@@ -158,8 +158,24 @@ export function createProjectModuleLoader(
 ): ProjectModuleLoader {
   const { runtimeIsBun, nativeImport, jitiImport, evictProjectModules: evict } = options;
 
+  // The eviction is per RE-LOAD, not per import — and one re-load imports many files
+  // (`lesto.app.ts` plus every `app/routes/*` module, all sharing one `bust`).
+  //
+  // Evicting on each of them would throw away modules THE SAME RE-LOAD had just loaded, so the
+  // entry and the routes would end up holding DIFFERENT copies of every module they share: a
+  // project's in-memory cache, auth registry, or db wrapper silently forks in two after the
+  // first save, and module-scope side effects run again per file. That is the very
+  // duplicate-singleton hazard this design avoids for `@lesto/*` — recreated inside the user's
+  // own code. So the first import of a given `bust` sweeps, and the rest of that re-load ride
+  // on it. (Route modules load through `Promise.all`, so the split was 2 copies; making that
+  // sequential would have made it N+1.)
+  let sweptBust: string | undefined;
+
   return (specifier, bust) => {
-    if (bust !== undefined) evict();
+    if (bust !== undefined && bust !== sweptBust) {
+      sweptBust = bust;
+      evict();
+    }
 
     if (runtimeIsBun) {
       return nativeImport(bust === undefined ? specifier : `${specifier}?t=${bust}`);

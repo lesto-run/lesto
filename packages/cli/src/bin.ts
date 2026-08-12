@@ -413,7 +413,17 @@ const loadApp = (seams?: TraceSeams): Promise<LestoAppConfig> => loadAppConfig(s
 
 // `dev`'s on-change re-load: a fresh config with cache-busted route imports, so a
 // NEW route appears (and an edited one re-renders) without a server restart.
-const reloadApp = (): Promise<LestoAppConfig> => loadAppConfig(undefined, String(Date.now()));
+// `dev`'s on-change re-load. The bust is a MONOTONIC COUNTER, not `Date.now()`: it is both the
+// cache-bust suffix Bun keys a fresh module on AND the identity the loader uses to sweep the
+// module cache exactly once per re-load, and two re-loads landing in the same millisecond would
+// share a timestamp — so the second would skip its sweep and serve the first one's modules.
+let reloadCount = 0;
+
+const reloadApp = (): Promise<LestoAppConfig> => {
+  reloadCount += 1;
+
+  return loadAppConfig(undefined, String(reloadCount));
+};
 
 // The edge route manifest path (`src/routes.gen.ts`) and its import base — the same
 // `src/routes.gen.ts` + `../app/routes` the per-app `regenerate-routes.ts` used, now
@@ -457,10 +467,11 @@ const readAgentRoutes = async (): Promise<readonly RouteDescriptor[]> => {
 //
 // TWO watchers, because the sources are in two places and only one of them can be recursive
 // safely: `app/` recursively (routes, components, helpers) and the project ROOT
-// non-recursively (`lesto.app.ts`, `env.ts`, `env.client.ts`, `lesto.sites.ts`, …). The root
-// is deliberately NOT recursive — that would pull in `src/`, `out/`, and `node_modules`, and
-// `regenerateRoutes` writes `src/routes.gen.ts` on every re-load, so a recursive root watch
-// would make each re-load trigger the next one forever.
+// non-recursively (`lesto.app.ts`, `env.ts`, `env.client.ts`, `lesto.sites.ts`, …), and `src/`
+// recursively — that last one is where the framework's OWN apps (`site/`, `www/`,
+// `examples/estate`) keep their server source behind a three-line `lesto.app.ts` shim, so
+// without it every first-party app would still have no hot reload. The root stays
+// NON-recursive so it never descends into `out/`, `dist/`, or `node_modules`.
 //
 // This used to watch `app/routes/` ALONE, which meant editing `env.ts` or a component under
 // `app/` reloaded nothing at all — the half of the hot-reload bug that no loader fix could
@@ -480,6 +491,12 @@ const watchRoutes = (onChange: () => void): (() => void) => {
       // loop still serves, it just has no reload trigger from this root.
       return;
     }
+
+    // A watcher that errors later (the directory is deleted, or the OS runs out of file
+    // handles) emits `error` — and an unhandled `error` on an EventEmitter THROWS, which would
+    // take the whole dev server down over a lost watch. Degrade instead: this root simply
+    // stops triggering re-loads, and the server keeps serving.
+    watcher.on("error", () => watcher.close());
 
     // `fs.watch` emits its `change` event as (eventType, filename) — `filename` is relative to
     // the WATCHED dir, so it is re-prefixed to be project-relative before the predicate sees
@@ -501,6 +518,7 @@ const watchRoutes = (onChange: () => void): (() => void) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   attach(appSrcDir, true, `${APP_SRC_DIR}/`);
+  attach(join(projectRoot, "src"), true, "src/");
   attach(projectRoot, false, "");
 
   return () => {
