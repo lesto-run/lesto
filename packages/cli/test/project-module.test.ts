@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createProjectModuleLoader, NODE_RELOAD_INERT_NOTICE } from "../src/project-module";
+import { createProjectModuleLoader, evictProjectModules } from "../src/project-module";
 import type { ModuleImporter } from "../src/project-module";
 
 /**
@@ -46,7 +46,7 @@ describe("createProjectModuleLoader", () => {
       runtimeIsBun: false,
       nativeImport: forbiddenImporter("native"),
       jitiImport: jiti.importer,
-      warn: () => undefined,
+      evictProjectModules: () => undefined,
     });
 
     await expect(load("/app/lesto.app.ts")).resolves.toEqual({ loadedBy: "jiti" });
@@ -64,7 +64,7 @@ describe("createProjectModuleLoader", () => {
       runtimeIsBun: false,
       nativeImport: forbiddenImporter("native"),
       jitiImport: jiti.importer,
-      warn: () => undefined,
+      evictProjectModules: () => undefined,
     });
 
     await load("/app/lesto.app.ts", "1731000000000");
@@ -82,7 +82,7 @@ describe("createProjectModuleLoader", () => {
       runtimeIsBun: true,
       nativeImport: native.importer,
       jitiImport: forbiddenImporter("jiti"),
-      warn: () => undefined,
+      evictProjectModules: () => undefined,
     });
 
     await expect(load("/app/lesto.app.ts")).resolves.toEqual({ loadedBy: "native" });
@@ -98,7 +98,7 @@ describe("createProjectModuleLoader", () => {
       runtimeIsBun: true,
       nativeImport: native.importer,
       jitiImport: forbiddenImporter("jiti"),
-      warn: () => undefined,
+      evictProjectModules: () => undefined,
     });
 
     await load("/app/app/routes/page.tsx", "1731000000000");
@@ -106,51 +106,110 @@ describe("createProjectModuleLoader", () => {
     expect(native.seen).toEqual(["/app/app/routes/page.tsx?t=1731000000000"]);
   });
 
-  it("under node: says ONCE that a re-load is inert, rather than silently serving a stale module", async () => {
-    // `lesto dev` under plain node used to die outright in a published install, so this path is
-    // newly reachable — and the watcher happily prints "reloaded" while the server keeps serving
-    // the OLD module. Silently-stale is the worst outcome; the notice makes it visible. Once,
-    // because the watcher fires on every save.
+  it("under node: EVICTS the project's cached modules on a re-load, so the next import re-reads", async () => {
+    // The whole of node hot reload. jiti ignores `?t=` and serves its cached module, so
+    // without this eviction `lesto dev` re-imports the OLD code while the watcher reports a
+    // reload — the server silently serves stale routes.
     const jiti = recordingImporter("jiti");
-    const warnings: string[] = [];
+    let evictions = 0;
 
     const load = createProjectModuleLoader({
       runtimeIsBun: false,
       nativeImport: forbiddenImporter("native"),
       jitiImport: jiti.importer,
-      warn: (message) => warnings.push(message),
+      evictProjectModules: () => {
+        evictions += 1;
+      },
     });
 
-    // A normal boot carries no `bust` and must stay quiet — a warning on every plain `lesto
-    // routes`/`serve` would be noise on a path where nothing is wrong.
+    // A plain boot must NOT evict — there is nothing stale, and dropping the cache on every
+    // ordinary `lesto routes`/`serve` import would re-read the project for no reason.
     await load("/app/lesto.app.ts");
-    expect(warnings).toEqual([]);
+    expect(evictions).toBe(0);
 
-    // Three re-loads (a burst of saves) → exactly one notice, naming the runtime and the way out.
+    // Each re-load evicts exactly once, before its import.
     await load("/app/lesto.app.ts", "1");
     await load("/app/app/routes/page.tsx", "2");
-    await load("/app/lesto.app.ts", "3");
 
-    expect(warnings).toEqual([NODE_RELOAD_INERT_NOTICE]);
-    expect(warnings[0]).toContain("hot reload is inactive under node");
-
-    // ...and the loads themselves still happened, un-busted.
-    expect(jiti.seen).toHaveLength(4);
+    expect(evictions).toBe(2);
   });
 
-  it("under Bun: never warns — the `?t=` re-load genuinely works there", async () => {
+  it("under Bun: never evicts — the `?t=` re-load already re-reads there", async () => {
     const native = recordingImporter("native");
-    const warnings: string[] = [];
+    let evictions = 0;
 
     const load = createProjectModuleLoader({
       runtimeIsBun: true,
       nativeImport: native.importer,
       jitiImport: forbiddenImporter("jiti"),
-      warn: (message) => warnings.push(message),
+      evictProjectModules: () => {
+        evictions += 1;
+      },
     });
 
     await load("/app/lesto.app.ts", "1");
 
-    expect(warnings).toEqual([]);
+    expect(evictions).toBe(0);
+  });
+});
+
+/** Cache entries as jiti holds them: absolute real paths → module records. */
+const cacheOf = (...keys: readonly string[]): Record<string, unknown> =>
+  Object.fromEntries(keys.map((key) => [key, { id: key }]));
+
+describe("evictProjectModules", () => {
+  // Cache keys as jiti holds them: absolute real paths.
+  const ROOT = "/proj";
+
+  it("drops the project's own modules and reports how many", () => {
+    const cache = cacheOf(
+      "/proj/lesto.app.ts",
+      "/proj/env.ts",
+      "/proj/app/routes/page.tsx",
+      "/other/elsewhere.ts",
+    );
+
+    expect(evictProjectModules(cache, [ROOT])).toBe(3);
+    expect(Object.keys(cache)).toEqual(["/other/elsewhere.ts"]);
+  });
+
+  it("KEEPS installed dependencies, even nested under the project root", () => {
+    // Re-evaluating `@lesto/*` would mint a second copy of every module-level singleton (the
+    // request-context AsyncLocalStorage among them), so the reloaded app and the running
+    // server would disagree about live state. This is the assertion that keeps a future
+    // "just clear the whole cache" from looking harmless.
+    const cache = cacheOf(
+      "/proj/lesto.app.ts",
+      "/proj/node_modules/@lesto/web/dist/index.js",
+      "/proj/node_modules/.bun/jiti/dist/jiti.cjs",
+    );
+
+    expect(evictProjectModules(cache, [ROOT])).toBe(1);
+    expect(Object.keys(cache)).toEqual([
+      "/proj/node_modules/@lesto/web/dist/index.js",
+      "/proj/node_modules/.bun/jiti/dist/jiti.cjs",
+    ]);
+  });
+
+  it("matches ANY of the given roots, so a symlinked project still reloads", () => {
+    // jiti keys the cache by REAL path. A project reached through a symlink would never match
+    // a bare `process.cwd()` prefix, and its hot reload would silently do nothing.
+    const cache = cacheOf("/real/volume/app/lesto.app.ts", "/elsewhere/x.ts");
+
+    expect(evictProjectModules(cache, ["/home/me/app", "/real/volume/app"])).toBe(1);
+    expect(Object.keys(cache)).toEqual(["/elsewhere/x.ts"]);
+  });
+
+  it("does not treat a SIBLING directory sharing the root's name prefix as the project", () => {
+    // `/proj-backup/x.ts` starts with `/proj` as a raw string; only a path-separated prefix
+    // is genuinely inside the project.
+    const cache = cacheOf("/proj-backup/x.ts", "/proj/keep-me.ts");
+
+    expect(evictProjectModules(cache, [ROOT])).toBe(1);
+    expect(Object.keys(cache)).toEqual(["/proj-backup/x.ts"]);
+  });
+
+  it("is a no-op on an empty cache", () => {
+    expect(evictProjectModules({}, [ROOT])).toBe(0);
   });
 });

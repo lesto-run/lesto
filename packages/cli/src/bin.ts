@@ -11,7 +11,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { watch } from "node:fs";
+import { realpathSync, watch } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import type { AddressInfo, Server as NetServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -50,7 +50,7 @@ import type { LestoMcpContext, McpAuditRecord } from "@lesto/mcp";
 import { isLestoError } from "@lesto/errors";
 
 import { createDevState } from "./dev-state";
-import { createProjectModuleLoader } from "./project-module";
+import { createProjectModuleLoader, evictProjectModules } from "./project-module";
 import {
   declaresIslandDevPeer,
   isHelpRequest,
@@ -252,13 +252,28 @@ const projectJiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic", importSource: "react" },
 });
 
+// The roots a project-owned module can be cached under. jiti keys its cache by REAL path, so
+// a project reached through a symlink (a common `~/dev/app` → volume layout) would never match
+// a bare `process.cwd()` prefix and its hot reload would silently do nothing. Both spellings
+// are offered; `evictProjectModules` matches any of them. Resolved once — the cwd cannot
+// change under us here — and tolerant of a realpath failure (an unreadable or deleted cwd).
+const projectRootAliases = [
+  projectRoot,
+  ...(() => {
+    try {
+      return realpathSync(projectRoot) === projectRoot ? [] : [realpathSync(projectRoot)];
+    } catch {
+      return [];
+    }
+  })(),
+];
+
 const importProjectModule = createProjectModuleLoader({
   runtimeIsBun: (globalThis as { Bun?: unknown }).Bun !== undefined,
   nativeImport: (specifier) => import(specifier),
   jitiImport: (specifier) => projectJiti.import(specifier),
-  // stderr, like every other operator note the CLI emits — never stdout, which `routes`
-  // and `openapi` reserve for machine-readable output.
-  warn: (message) => console.error(message),
+  // `Jiti extends NodeRequire`, so its module cache is the standard `require.cache` shape.
+  evictProjectModules: () => evictProjectModules(projectJiti.cache, projectRootAliases),
 });
 
 // Scan `app/routes/` with the real `fs.readdir`, yielding the flat DiscoveredFile

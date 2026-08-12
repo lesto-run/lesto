@@ -33,6 +33,8 @@
  * The decision lives here, injected and covered; `bin.ts` holds only the real importers.
  */
 
+import { sep } from "node:path";
+
 /** A dynamic-import function: resolves a specifier to its module namespace. */
 export type ModuleImporter = (specifier: string) => Promise<unknown>;
 
@@ -54,51 +56,90 @@ export interface ProjectModuleLoaderOptions {
   readonly jitiImport: ModuleImporter;
 
   /**
-   * Where the one-time "hot reload is inert under node" notice goes (real impl:
-   * `console.error`). Injected so the warn-once decision is testable without a console spy.
+   * Drop the PROJECT's own modules from the node loader's cache, so the next import re-reads
+   * them from disk. Called once per `lesto dev` re-load (see {@link evictProjectModules} for
+   * what "the project's own" means and why it is not simply everything).
    */
-  readonly warn: (message: string) => void;
+  readonly evictProjectModules: () => void;
 }
 
-/** The one-time notice a `lesto dev` re-load emits under plain node (see the warn-once below). */
-export const NODE_RELOAD_INERT_NOTICE =
-  "lesto: hot reload is inactive under node — the module cache cannot be busted here. " +
-  "Restart `lesto dev` to pick up changes, or run it under bun for live reload.";
+/**
+ * Drop every PROJECT-OWNED module from a jiti module cache, returning how many were dropped.
+ * The one thing that makes `lesto dev` hot reload work under plain node.
+ *
+ * jiti serves a cached module for a repeated import and IGNORES a `?t=` query (unlike node's
+ * ESM loader and Bun, which treat the query as a new module) — so once the CLI routes project
+ * files through jiti, the re-import a file-change triggers hands back the OLD module and the
+ * server keeps serving stale code while the watcher cheerfully reports a reload. Evicting the
+ * cache entry first is what turns the re-import into a genuine re-read.
+ *
+ * Only the project's own files are dropped — never anything under a `node_modules`. That
+ * distinction is the whole design:
+ *   - The user's `lesto.app.ts`, `env.ts`, and `app/routes/*` MUST be re-read; they are what
+ *     changed. Dropping the entry re-reads the file's transitive project imports too, so
+ *     editing `env.ts` is picked up, not just the entry.
+ *   - The framework graph MUST NOT be, and not merely for speed: re-evaluating `@lesto/*`
+ *     would mint a SECOND copy of every module-level singleton (the request-context
+ *     `AsyncLocalStorage` among them), so the reloaded app and the running server would
+ *     disagree about live state. Keeping installed deps cached is what makes this safe where
+ *     a blunt `moduleCache: false` instance would not be.
+ *
+ * `projectRoots` is normally one path (the project root) but takes several so a root reached
+ * through a symlink can pass both its literal and real paths — jiti keys the cache by REAL
+ * path, and a missed prefix would silently mean "no reload" again.
+ */
+export function evictProjectModules(
+  cache: Record<string, unknown>,
+  projectRoots: readonly string[],
+): number {
+  let evicted = 0;
+
+  for (const key of Object.keys(cache)) {
+    // An installed dependency, even one nested under the project root: keep it.
+    if (key.includes(`${sep}node_modules${sep}`)) continue;
+
+    if (projectRoots.some((root) => key.startsWith(`${root}${sep}`))) {
+      delete cache[key];
+      evicted += 1;
+    }
+  }
+
+  return evicted;
+}
 
 /**
  * Build the loader every project-module import in the bin goes through.
  *
- * Bun → the native import, with the `?t=<now>` suffix appended when a re-load asks for
- * one (Bun treats the query as a distinct module, so the edited file is re-read).
+ * Bun → the native import, with the `?t=<now>` suffix appended when a re-load asks for one
+ * (Bun treats the query as a distinct module, so the edited file is re-read).
  *
- * Node → jiti, always with the BARE specifier: jiti resolves a `?t=` query to the same
- * cached module, so appending one would buy nothing and only obscure the path in an error
- * message. A `bust` is therefore accepted but INERT under node.
+ * KNOWN LIMIT on that Bun path: `?t=` re-reads the named ENTRY only — its static imports still
+ * resolve to their already-cached modules. So `lesto dev` under Bun picks up an edit to
+ * `lesto.app.ts` or to a route file, but NOT to a helper/component/`env.ts` those import; that
+ * stays stale until restart. The node path below has no such hole (evicting drops the whole
+ * project subtree). It is tempting to "fix" Bun by routing its re-loads through jiti too —
+ * DON'T: jiti-under-Bun mangles a top-level-await rejection into `Cannot access 'default'
+ * before initialization`, and the scaffold's `lesto.app.ts` opens its database with TLA, so
+ * every failed reload would report that instead of the real error. Bun exposes no userland ESM
+ * cache to evict, so closing this properly needs the reload to run through a real module graph
+ * (the Vite dev-server direction `@lesto/island-dev` already takes for islands), not a
+ * different loader here.
  *
- * Inert, so it says so — ONCE, on the first re-load that asks. `lesto dev` under plain node
- * used to die outright in a published install (it could not even load `lesto.app.ts`), so
- * this path is newly reachable, and a dev whose watcher prints "reloaded" while the server
- * keeps serving the old module has no way to tell. Warning beats silently-stale; the notice
- * is once-per-process because the watcher fires on every save. (Genuinely re-reading under
- * node needs a fresh no-cache jiti per reload, which re-transpiles the whole user graph —
- * a bigger change than this fix, and tracked separately.)
+ * Node → jiti, always with the BARE specifier, since jiti ignores a `?t=` query. A re-load
+ * instead EVICTS the project's own modules from jiti's cache first ({@link
+ * evictProjectModules}), which is what actually makes the next import re-read from disk.
  */
 export function createProjectModuleLoader(
   options: ProjectModuleLoaderOptions,
 ): ProjectModuleLoader {
-  const { runtimeIsBun, nativeImport, jitiImport, warn } = options;
-
-  let warned = false;
+  const { runtimeIsBun, nativeImport, jitiImport, evictProjectModules: evict } = options;
 
   return (specifier, bust) => {
     if (runtimeIsBun) {
       return nativeImport(bust === undefined ? specifier : `${specifier}?t=${bust}`);
     }
 
-    if (bust !== undefined && !warned) {
-      warned = true;
-      warn(NODE_RELOAD_INERT_NOTICE);
-    }
+    if (bust !== undefined) evict();
 
     return jitiImport(specifier);
   };
