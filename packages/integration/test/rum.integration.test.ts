@@ -25,8 +25,19 @@ import type { Server } from "@lesto/runtime";
 import { createElement } from "react";
 
 import { BROWSER_SPANS_ROUTE, currentRequestSpan, lesto, runWithContext } from "@lesto/web";
-import { formatTraceparent, parseTraceparent, tracesFromEnv } from "@lesto/observability";
-import type { BrowserSpan, CurrentSpan, Traces } from "@lesto/observability";
+import {
+  formatTraceparent,
+  parseTraceparent,
+  startBrowserRum,
+  tracesFromEnv,
+} from "@lesto/observability";
+import type {
+  BrowserSpan,
+  BrowserSpansPayload,
+  CurrentSpan,
+  RumEnvironment,
+  Traces,
+} from "@lesto/observability";
 
 import { startOtlpCollector } from "./otlp-collector";
 import type { OtlpCollector } from "./otlp-collector";
@@ -81,15 +92,31 @@ afterAll(async () => {
   await collector.close();
 });
 
-/** Flush and wait for the collector to receive at least `count` spans. */
-async function flushUntil(count: number): Promise<void> {
+/**
+ * Flush and wait for the collector to receive at least `count` spans — or, with a
+ * `name`, at least `count` spans OF THAT NAME (a span the test is actually waiting
+ * on, rather than a total the earlier cases already inflated).
+ */
+async function flushUntil(count: number, name?: string): Promise<void> {
+  const reached = (): boolean =>
+    name === undefined
+      ? collector.spans.length >= count
+      : collector.spans.filter((span) => span.name === name).length >= count;
+
   for (let i = 0; i < 50; i++) {
     await traces.flush();
 
-    if (collector.spans.length >= count) return;
+    if (reached()) return;
 
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+}
+
+/** A deterministic 16-hex span-id source for the injected RUM environment. */
+function spanIds(): () => string {
+  let n = 0;
+
+  return () => (++n).toString(16).padStart(16, "0");
 }
 
 /** Drain a streamed response body to a single HTML string. */
@@ -200,6 +227,118 @@ describe("browser spans stitch to the server trace (ARCHITECTURE.md §7)", () =>
 
     // The whole graph is one service, one trace.
     expect(navigation?.serviceName).toBe("integration-rum");
+  });
+
+  it("lands the REAL runtime's lifetime vitals (INP + CLS) under the server trace", async () => {
+    // The other cases hand-write browser spans. This one drives the ACTUAL
+    // `startBrowserRum` — the code an app ships — through the real receiver and the
+    // real exporter, so the two lifetime vitals ADR 0048 Phase 0.3 added are proven
+    // end to end, not just unit-tested. Node has no `PerformanceObserver` and no
+    // page to hide, which is exactly what those seams are injected for.
+    const response = await fetch(`${base}/page`);
+    const html = await drain(response.body as unknown as ReadableStream<Uint8Array>);
+
+    const parsed = parseTraceparent(readTraceparentFromHtml(html));
+    expect(parsed).toBeDefined();
+
+    const serverTraceId = parsed!.traceId;
+
+    let deliver: ((entries: readonly unknown[]) => void) | undefined;
+    let hide: (() => void) | undefined;
+
+    const posts: Promise<Response>[] = [];
+
+    const environment: RumEnvironment = {
+      readTraceparent: () => parsed,
+      timeOrigin: 1_700_000_000_000,
+      createObserver: (callback) => {
+        deliver = callback as (entries: readonly unknown[]) => void;
+
+        return { observe: () => {}, disconnect: () => {} };
+      },
+      // The browser's fire-and-forget POST, done over the real socket instead.
+      send: (payload: BrowserSpansPayload) => {
+        posts.push(
+          fetch(`${base}${BROWSER_SPANS_ROUTE}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
+          }),
+        );
+      },
+      random: () => 0,
+      randomSpanId: spanIds(),
+      randomTraceId: () => "f".repeat(32),
+      onPageHide: (callback) => {
+        hide = callback;
+
+        return () => {};
+      },
+    };
+
+    startBrowserRum({ sampleRate: 1, environment });
+
+    // Two interactions (the worse one is 310ms) and two layout-shift sessions
+    // (0.05 then 0.10) — the numbers the vitals must resolve to.
+    deliver?.([
+      { entryType: "event", name: "pointerdown", startTime: 100, duration: 24, interactionId: 1 },
+      { entryType: "event", name: "click", startTime: 900, duration: 310, interactionId: 2 },
+      {
+        entryType: "layout-shift",
+        name: "",
+        startTime: 0,
+        duration: 0,
+        value: 0.02,
+        hadRecentInput: false,
+      },
+      {
+        entryType: "layout-shift",
+        name: "",
+        startTime: 500,
+        duration: 0,
+        value: 0.03,
+        hadRecentInput: false,
+      },
+      {
+        entryType: "layout-shift",
+        name: "",
+        startTime: 2000,
+        duration: 0,
+        value: 0.06,
+        hadRecentInput: false,
+      },
+      {
+        entryType: "layout-shift",
+        name: "",
+        startTime: 2400,
+        duration: 0,
+        value: 0.04,
+        hadRecentInput: false,
+      },
+    ]);
+
+    hide?.();
+
+    for (const post of posts) expect((await post).status).toBe(204);
+
+    await flushUntil(1, "browser.web_vital");
+
+    const vitals = collector.spans.filter(
+      (span) => span.name === "browser.web_vital" && span.traceId === serverTraceId,
+    );
+
+    const inp = vitals.find((span) => span.attributes["browser.vital"] === "INP");
+    const cls = vitals.find((span) => span.attributes["browser.vital"] === "CLS");
+
+    // INP is the WORST interaction over the page — not the first input, which is
+    // what the span with this name carried before.
+    expect(inp?.attributes["browser.value"]).toBe(310);
+    expect(inp?.attributes["browser.value_unit"]).toBe("ms");
+
+    // CLS is the MAX session-windowed sum (0.10), scaled ×1000 for the wire — not
+    // the page total (0.15), and not a single raw shift.
+    expect(cls?.attributes["browser.value"]).toBe(100);
+    expect(cls?.attributes["browser.value_unit"]).toBe("score_x1000");
   });
 
   it("adopts the SSR traceparent meta the page emitted (the browser→server seam)", async () => {

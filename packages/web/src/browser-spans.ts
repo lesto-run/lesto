@@ -5,8 +5,16 @@
  * into `@lesto/assets`' synthesized client entry) POSTs the spans it built from the
  * page's `PerformanceObserver` records: a `browser.navigation` span for the page
  * load's phases, a `browser.resource` span per same-origin fetch (the island chunk
- * and data fetch — the UI→API hop), and `browser.web_vital` spans for LCP/INP/CLS.
- * Each carries the SERVER trace id (adopted from the SSR-injected
+ * and data fetch — the UI→API hop), and `browser.web_vital` spans. The vitals
+ * arrive in two shapes: an ENTRY-shaped one as it happens (`LCP`, `first-input`,
+ * and each CLS-eligible `layout-shift`), and the two LIFETIME ones at page hide
+ * (`INP` — the worst interaction over the page — and `CLS`, the maximum
+ * session-windowed sum), since neither of those has a final value until the page
+ * ends. A vital states its own `browser.value_unit` (`ms` or `score_x1000`),
+ * because a layout score is unitless and below 1 and so rides the wire scaled by
+ * 1000 to survive rounding.
+ *
+ * Every span here carries the SERVER trace id (adopted from the SSR-injected
  * `<meta name="lesto-traceparent">`) and parents on the server request span, so
  * this receiver is the seam that lands them in the SAME OTLP collector as the
  * server spans — UI → API → DB, one trace.
@@ -47,7 +55,13 @@
  *     out of scope for this receiver. The `browser.*` span names already mark
  *     every span here as client-origin, so a collector can treat them as untrusted.
  *   - Ingestion-cost DoS. Unauthenticated + no built-in per-caller rate cap means a
- *     flood inflates OTLP/log ingestion. The per-request blast radius is already
+ *     flood inflates OTLP/log ingestion — and, since ADR 0048 Phase 0.2, also
+ *     spends the capacity of the bounded dev-only trace ring `lesto dev` keeps, so
+ *     a flood can evict a developer's real traces (a rebuilt trace reports
+ *     `truncated`, so the loss is visible rather than silent). That ring keys
+ *     NOTHING off these payloads — its `requestId` bridge is written by the server
+ *     from the in-flight request span — so a forged span can add noise to a trace
+ *     whose id it already knows, never redirect a lookup. The per-request blast radius is already
  *     bounded (the byte cap above); the request RATE is bounded when the app wires
  *     `secureStack({ rateLimit })`, which covers this route (it rides `useChain`).
  *     A BUILT-IN cap independent of app middleware was considered and deferred: the

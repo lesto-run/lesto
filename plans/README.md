@@ -15,6 +15,9 @@ folded in — see "Review outcome" below.
 Each executor: read the plan fully, honor its STOP conditions, run every
 verification gate, and update your row when done.
 
+Plans numbered 028 and up are **not** from that audit — they are ADR-driven build
+plans written as the work is picked up, following the same shape.
+
 ## Execution order & status
 
 | Plan | Title | Priority | Effort | Depends on | Status |
@@ -46,6 +49,9 @@ verification gate, and update your row when done.
 | 025 | Investigate: unauthenticated browser-telemetry trace grafting | P3 | S–M | — | TODO |
 | 026 | Design: `lesto add <component>` routing (forward design) | P3 | S–M | — | TODO |
 | 027 | Design+implement `toolChoice` on the `LanguageModel` seam | P2 | S–M | — | TODO |
+| 028 | The island dispose contract — stop soft nav orphaning React roots | P1 | M | — | DONE |
+| 029 | The bounded dev-only trace ring + `get_trace` | P2 | M | — | DONE |
+| 030 | Honest web vitals — real INP, session-windowed CLS, doc drifts | P2 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (reason) | REJECTED (rationale)
 
@@ -71,10 +77,10 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (reason) | REJECTED (rational
 ## Grouping by theme
 
 - **Security & reliability**: 001, 002, 003, 025
-- **Correctness**: 003, 004, 010, 011, 014, 015, 020, 021
+- **Correctness**: 003, 004, 010, 011, 014, 015, 020, 021, 028, 030
 - **content-\* absorption (DIR-03)**: 002, 007, 016, 017
 - **DX / docs / launch-readiness**: 005, 006, 009, 012, 013, 022
-- **Architecture / tech-debt**: 007, 018, 019
+- **Architecture / tech-debt**: 007, 018, 019, 029
 - **Test coverage**: 008
 - **Direction / spikes**: 023, 024, 026, 027
 

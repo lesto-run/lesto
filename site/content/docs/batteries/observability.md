@@ -57,9 +57,15 @@ serving a request shows up under that request's span with no code from you.
 ## Export over OTLP
 
 `serve` and `dev` wire tracing from the environment. `LESTO_OTLP_URL` is the on
-switch: set it to your collector's trace endpoint and tracing turns on; leave it
-unset and the app mints **no spans at all** — no tracer, no exporter, zero
-overhead. That is the safe default, so an app with no collector pays nothing.
+switch for the **collector**: set it to your collector's trace endpoint and spans
+ship there. Leave it unset and `lesto serve` mints **no spans at all** — no tracer,
+no exporter, zero overhead. That is the safe default, so a production app with no
+collector pays nothing.
+
+`lesto dev` is the one exception, on purpose: it always traces, into a bounded
+in-process ring and nowhere else, so the `get_trace` dev tool can answer what
+happened inside a request without asking you to run a collector. Nothing leaves
+the process unless `LESTO_OTLP_URL` is set.
 
 ```bash
 LESTO_OTLP_URL=http://localhost:4318/v1/traces  # the on switch
@@ -110,7 +116,15 @@ env-var contract is identical to node — same `LESTO_OTLP_URL` / `LESTO_OTLP_SE
 
 RUM closes the loop into the UI. `startBrowserRum` observes the page's own
 performance — navigation phases, resource fetches, Core Web Vitals — and turns
-each into a span. The join is a `<meta name="lesto-traceparent">` the SSR layer
+each into a span. LCP, the first input, and each layout shift are emitted as they
+happen; **INP** (the worst interaction over the page) and **CLS** (the largest
+session-windowed shift sum) are lifetime metrics, so RUM computes them as it goes
+and emits them once, when the page hides. It registers that hide itself — on
+`visibilitychange` and `pagehide`, never `unload`, which would cost you the
+back/forward cache — so you get the vitals whether or not you hold the disposer.
+Every vital span carries a `browser.value_unit`: `ms` for a duration, or
+`score_x1000` for a layout score (which is unitless and below 1, so it rides the
+wire scaled to survive rounding). The join is a `<meta name="lesto-traceparent">` the SSR layer
 injects: the browser reads the server request span's ids from it and emits its
 spans **under that same trace id**, so a page load and the server work that
 rendered it share one timeline. Without the meta (a static page, tracing off), it
@@ -120,7 +134,8 @@ roots its own trace instead of crashing.
 import { startBrowserRum, wrapFetch } from "@lesto/observability";
 
 const dispose = startBrowserRum(); // samples 10% of sessions by default
-window.addEventListener("pagehide", dispose); // flush the last batch on the way out
+// RUM already flushes and finalizes its vitals on page hide. Keep the handle only
+// if you need an explicit teardown — a client-side route unmount, or a test.
 ```
 
 `wrapFetch` carries the propagation outward. Wrap your `fetch` and every
@@ -173,9 +188,10 @@ collector, asserted end-to-end in `examples/estate/test/ai-trace.dogfood.test.ts
 > [!NOTE]
 > **Preview, and traces only — still.** The `ai.*` spans ride the preview
 > `@lesto/ai` package. The token counts on them are span **attributes**, not a
-> metrics or cost pipeline — there is no counter, no spend dashboard, and no
-> queryable span store; the spans ship to your OTLP collector like every other
-> span.
+> metrics or cost pipeline — there is no counter, no spend dashboard, and (in
+> production) no queryable span store; the spans ship to your OTLP collector like
+> every other span. Under `lesto dev` the bounded trace ring behind `get_trace` is
+> that store, dev-only and preview.
 
 The **MCP control plane** is a separate story. A governed tool dispatch
 (`@lesto/mcp`) offers an `onSpan` seam, and the `mcp.tool` span an app emits from
@@ -195,6 +211,7 @@ parent on. Lesto does not claim MCP actions appear on your request trace today.
 - **Propagation is W3C `traceparent`, verbatim.** Lesto never invents a header or
   format — the W3C wire is what every collector and sibling service already
   speaks.
-- **Tracing off costs nothing.** With `LESTO_OTLP_URL` unset, no tracer is built,
-  the per-domain seams are never wired into the batteries, and the served path is
-  byte-for-byte the untraced one.
+- **Tracing off costs nothing in production.** With `LESTO_OTLP_URL` unset,
+  `lesto serve` builds no tracer, never wires the per-domain seams into the
+  batteries, and runs the byte-for-byte untraced path. (`lesto dev` always traces
+  in-process — see the on-switch note above.)

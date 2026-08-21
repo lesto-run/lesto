@@ -25,7 +25,7 @@ None of this is wrong — it's the consequence of the browser and the server bei
 
 ## What Lesto ships
 
-The server mints one `http.request` root span per request and stamps its W3C `traceparent` into a `<meta name="lesto-traceparent">` on every dynamically rendered page. The browser RUM client (`startBrowserRum`, from the node-free `@lesto/observability/rum` subpath, bundled into the client entry automatically) reads that meta tag and **adopts the server's trace id** — so the browser doesn't start a new trace, it continues the one the server already opened. It emits spans for navigation timing, same-origin resource fetches, and web vitals (LCP, INP, raw per-shift layout-shift scores), then POSTs them to a built-in receiver at `POST /__lesto/browser-spans`, which routes them through the *same* OTLP exporter the server spans use.
+The server mints one `http.request` root span per request and stamps its W3C `traceparent` into a `<meta name="lesto-traceparent">` on every dynamically rendered page. The browser RUM client (`startBrowserRum`, from the node-free `@lesto/observability/rum` subpath, bundled into the client entry automatically) reads that meta tag and **adopts the server's trace id** — so the browser doesn't start a new trace, it continues the one the server already opened. It emits spans for navigation timing, same-origin resource fetches, and web vitals — LCP, the first input, and each raw layout-shift score as they happen, plus a real INP (the worst interaction over the page) and a real session-windowed CLS at page hide — then POSTs them to a built-in receiver at `POST /__lesto/browser-spans`, which routes them through the *same* OTLP exporter the server spans use.
 
 The result: a page load's browser spans land **under** the server `http.request` span, on one trace id. And when the page fetches data, `@lesto/client` carries the `traceparent` on same-origin requests, so the API handler joins the very same trace. Every battery terminates in a seam that opens a child span on the in-flight request span — `@lesto/db`'s `onQuery` turns each executed query into a `db.query` child — so a single trace reads like this:
 
@@ -33,7 +33,7 @@ The result: a page load's browser spans land **under** the server `http.request`
 http.request   GET /dashboard                         218ms
 ├─ db.query    select * from projects where org = ?    12ms
 ├─ db.query    select * from tasks where project = ?    9ms
-└─ web-vitals  LCP 1.2s · INP 40ms                     (same traceId)
+└─ web-vitals  LCP 1.2s · INP 40ms · CLS 0.02          (same traceId)
 ```
 
 UI → API → DB, unbroken, one id. It's proven end to end in `packages/integration/test/rum.integration.test.ts` against a real OTLP collector — not a diagram, a test.

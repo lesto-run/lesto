@@ -6,12 +6,16 @@ import {
   BROWSER_SPANS_PATH,
   BrowserTracer,
   browserRumEnvironment,
+  BrowserVitals,
+  CLS_SESSION_GAP_MS,
+  CLS_SESSION_WINDOW_MS,
   DEFAULT_RUM_SAMPLE_RATE,
   defaultSendBrowserSpans,
   readTraceparentMeta,
   shouldSampleRum,
   startBrowserRum,
   TRACEPARENT_META_NAME,
+  VITAL_SCORE_SCALE,
   wrapFetch,
 } from "../src/rum";
 import type { BrowserSpansPayload, RumEnvironment } from "../src/rum";
@@ -144,7 +148,7 @@ describe("BrowserTracer", () => {
 
     expect(tracer.traceId).toBe(SERVER_TRACE.traceId);
 
-    const span = tracer.vitalSpan("LCP", 2500, 40);
+    const span = tracer.vitalSpan("LCP", 2500, 40, "ms");
 
     expect(span.traceId).toBe(SERVER_TRACE.traceId);
     expect(span.parentSpanId).toBe(SERVER_TRACE.parentId);
@@ -156,7 +160,7 @@ describe("BrowserTracer", () => {
     expect(tracer.traceId).toBe("ffffffffffffffffffffffffffffffff");
 
     // A rooted span has no parent — the browser trace stands alone.
-    const span = tracer.vitalSpan("layout-shift", 100, 10);
+    const span = tracer.vitalSpan("layout-shift", 100, 10, "score_x1000");
 
     expect(span.parentSpanId).toBeUndefined();
   });
@@ -266,14 +270,17 @@ describe("BrowserTracer", () => {
     expect(span).toBeUndefined();
   });
 
-  it("builds a zero-width vital span carrying the rounded value", () => {
+  it("builds a zero-width vital span carrying the rounded value and its UNIT", () => {
     const tracer = new BrowserTracer({ inbound: SERVER_TRACE, ...tracerOptions });
 
-    const span = tracer.vitalSpan("LCP", 2500.7, 40);
+    const span = tracer.vitalSpan("LCP", 2500.7, 40, "ms");
 
     expect(span.name).toBe("browser.web_vital");
     expect(span.attributes["browser.vital"]).toBe("LCP");
     expect(span.attributes["browser.value"]).toBe(2501);
+    // The number alone cannot say whether it is ms or a ×1000 layout score — a
+    // consumer reads the unit off the span rather than knowing which vitals scale.
+    expect(span.attributes["browser.value_unit"]).toBe("ms");
     // A vital is a measurement, not a window: zero-width.
     expect(span.startedAt).toBe(span.endedAt);
     expect(span.startedAt).toBe(1040);
@@ -399,12 +406,19 @@ describe("defaultSendBrowserSpans", () => {
 function fakeEnvironment(overrides: Partial<RumEnvironment> = {}): {
   environment: RumEnvironment;
   fire: (entries: readonly unknown[]) => void;
+  /** Drive the page-hide seam — the moment the lifetime vitals are published. */
+  hide: () => void;
   disconnects: number;
+  pageHideUnregisters: number;
   sent: BrowserSpansPayload[];
+  observed: { type: string; buffered?: boolean; durationThreshold?: number }[];
 } {
   let callback: ((entries: readonly unknown[]) => void) | undefined;
+  let onHide: (() => void) | undefined;
   let disconnects = 0;
+  let pageHideUnregisters = 0;
   const sent: BrowserSpansPayload[] = [];
+  const observed: { type: string; buffered?: boolean; durationThreshold?: number }[] = [];
 
   const environment: RumEnvironment = {
     readTraceparent: () => SERVER_TRACE,
@@ -413,7 +427,7 @@ function fakeEnvironment(overrides: Partial<RumEnvironment> = {}): {
       callback = cb as (entries: readonly unknown[]) => void;
 
       return {
-        observe: () => {},
+        observe: (options) => void observed.push(options),
         disconnect: () => {
           disconnects += 1;
         },
@@ -423,18 +437,118 @@ function fakeEnvironment(overrides: Partial<RumEnvironment> = {}): {
     random: () => 0,
     randomSpanId: countingSpanIds(),
     randomTraceId: () => "ffffffffffffffffffffffffffffffff",
+    onPageHide: (cb) => {
+      onHide = cb;
+
+      return () => {
+        pageHideUnregisters += 1;
+      };
+    },
     ...overrides,
   };
 
   return {
     environment,
     fire: (entries) => callback?.(entries as never),
+    hide: () => onHide?.(),
     get disconnects() {
       return disconnects;
     },
+    get pageHideUnregisters() {
+      return pageHideUnregisters;
+    },
     sent,
+    observed,
   };
 }
+
+// ---------------------------------------------------------------------------
+// BrowserVitals — the two LIFETIME metrics. Neither is a property of one entry,
+// which is exactly how RUM got them wrong: it published a single `first-input`
+// entry as "INP" and never summed a layout shift at all.
+// ---------------------------------------------------------------------------
+
+describe("BrowserVitals — INP", () => {
+  it("is undefined before any interaction", () => {
+    expect(new BrowserVitals().inp()).toBeUndefined();
+  });
+
+  it("is the LONGEST interaction, not the first and not the last", () => {
+    const vitals = new BrowserVitals();
+
+    vitals.recordInteraction(24, 100);
+    vitals.recordInteraction(310, 900);
+    vitals.recordInteraction(48, 1_500);
+
+    // The old behaviour would have reported 24 (the first input) — a page whose
+    // every later interaction janked would have read green.
+    expect(vitals.inp()).toEqual({ value: 310, at: 900 });
+  });
+
+  it("keeps the worst even when a later interaction ties it", () => {
+    const vitals = new BrowserVitals();
+
+    vitals.recordInteraction(200, 10);
+    vitals.recordInteraction(200, 20);
+
+    // A tie does not move the timestamp — the first occurrence is the one measured.
+    expect(vitals.inp()).toEqual({ value: 200, at: 10 });
+  });
+});
+
+describe("BrowserVitals — CLS", () => {
+  it("is undefined before any shift", () => {
+    expect(new BrowserVitals().cls()).toBeUndefined();
+  });
+
+  it("sums shifts that fall inside one session window", () => {
+    const vitals = new BrowserVitals();
+
+    vitals.recordLayoutShift(0.03, 100);
+    vitals.recordLayoutShift(0.04, 500);
+    vitals.recordLayoutShift(0.02, 900);
+
+    expect(vitals.cls()?.value).toBeCloseTo(0.09, 10);
+    expect(vitals.cls()?.at).toBe(900);
+  });
+
+  it("starts a NEW session after a gap, and reports the MAX session — not the total", () => {
+    const vitals = new BrowserVitals();
+
+    // Session 1: 0.05 total.
+    vitals.recordLayoutShift(0.02, 0);
+    vitals.recordLayoutShift(0.03, 500);
+
+    // A gap longer than the inter-shift limit opens session 2: 0.10 total.
+    vitals.recordLayoutShift(0.1, 500 + CLS_SESSION_GAP_MS + 1);
+
+    // The page total is 0.15; CLS is the WORST SESSION, which is 0.10.
+    expect(vitals.cls()?.value).toBeCloseTo(0.1, 10);
+  });
+
+  it("keeps the earlier session when it is the worst one", () => {
+    const vitals = new BrowserVitals();
+
+    vitals.recordLayoutShift(0.4, 0);
+    vitals.recordLayoutShift(0.05, CLS_SESSION_GAP_MS + 1);
+
+    expect(vitals.cls()).toEqual({ value: 0.4, at: 0 });
+  });
+
+  it("caps a session at the 5s window even when every shift is within 1s of the last", () => {
+    // The second window rule, which a naive gap-only implementation drops: a
+    // steady drizzle of shifts would otherwise accumulate forever into one session.
+    const vitals = new BrowserVitals();
+
+    for (let at = 0; at <= CLS_SESSION_WINDOW_MS; at += 500) {
+      vitals.recordLayoutShift(0.01, at);
+    }
+
+    // 11 shifts × 0.01 = 0.11 if it were one session. The window closes at 5s, so
+    // the last shift opens a fresh session and the worst session is the first ten.
+    expect(vitals.cls()?.value).toBeCloseTo(0.1, 10);
+  });
+});
 
 describe("startBrowserRum", () => {
   it("does nothing (no observer) when the session is not sampled", () => {
@@ -530,11 +644,19 @@ describe("startBrowserRum", () => {
     }
 
     const vitals = payload.spans.filter((span) => span.name === "browser.web_vital");
-    // layout-shift is emitted RAW (per-shift), never relabeled as the cumulative CLS.
+    // layout-shift is emitted RAW (per-shift) and named for what it is; the
+    // cumulative CLS is a lifetime metric published at page hide, not here. The
+    // first input is likewise named `first-input` — it was mislabelled "INP" for
+    // its whole life, and INP is the worst interaction over the page, not the first.
     expect(vitals.map((span) => span.attributes["browser.vital"])).toEqual([
       "LCP",
-      "INP",
+      "first-input",
       "layout-shift",
+    ]);
+    expect(vitals.map((span) => span.attributes["browser.value_unit"])).toEqual([
+      "ms",
+      "ms",
+      "score_x1000",
     ]);
   });
 
@@ -661,6 +783,290 @@ describe("startBrowserRum", () => {
 });
 
 // ---------------------------------------------------------------------------
+// The page-hide finalization: where the two LIFETIME vitals are published. A
+// metric defined over the whole page has no honest value until the page ends.
+// ---------------------------------------------------------------------------
+
+/** One `event`-timing entry, as the browser reports an interaction's events. */
+const eventEntry = (
+  duration: number,
+  startTime: number,
+  interactionId: number,
+): Record<string, unknown> => ({
+  entryType: "event",
+  name: "pointerdown",
+  startTime,
+  duration,
+  interactionId,
+});
+
+/** One CLS-eligible layout-shift entry. */
+const shiftEntry = (value: number, startTime: number): Record<string, unknown> => ({
+  entryType: "layout-shift",
+  name: "",
+  startTime,
+  duration: 0,
+  value,
+  hadRecentInput: false,
+});
+
+describe("startBrowserRum — lifetime vitals at page hide", () => {
+  it("observes `event` entries with a lowered duration threshold", () => {
+    const harness = fakeEnvironment();
+
+    startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    const event = harness.observed.find((options) => options.type === "event");
+
+    // Without a threshold the browser reports only interactions over 104ms, so a
+    // merely-slow one would never reach INP at all.
+    expect(event).toEqual({ type: "event", buffered: true, durationThreshold: 40 });
+    // Every type is buffered, so an entry from before the observer attached lands.
+    expect(harness.observed.every((options) => options.buffered === true)).toBe(true);
+  });
+
+  it("emits ONE INP vital at page hide, valued by the WORST interaction", () => {
+    const harness = fakeEnvironment();
+
+    startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    harness.fire([eventEntry(24, 100, 1), eventEntry(310, 900, 2), eventEntry(48, 1_500, 3)]);
+
+    // No span per event: three interactions, nothing on the wire yet.
+    expect(harness.sent).toHaveLength(0);
+
+    harness.hide();
+
+    const vitals = harness.sent
+      .flatMap((payload) => payload.spans)
+      .filter((span) => span.attributes["browser.vital"] === "INP");
+
+    expect(vitals).toHaveLength(1);
+    expect(vitals[0]?.attributes["browser.value"]).toBe(310);
+    expect(vitals[0]?.attributes["browser.value_unit"]).toBe("ms");
+  });
+
+  it("ignores an event that is not part of an interaction", () => {
+    const harness = fakeEnvironment();
+
+    startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    // `interactionId: 0` means the browser did not treat this event as a user
+    // interaction — counting it would inflate INP with work no user waited on. A
+    // browser that omits the field entirely is the same case, not a crash.
+    harness.fire([
+      eventEntry(500, 10, 0),
+      { entryType: "event", name: "pointerdown", startTime: 20, duration: 400 },
+    ]);
+    harness.hide();
+
+    expect(harness.sent).toHaveLength(0);
+  });
+
+  it("folds a `first-input` entry into INP, so a browser with no `event` support still reports one", () => {
+    const harness = fakeEnvironment();
+
+    startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    harness.fire([{ entryType: "first-input", name: "", startTime: 300, duration: 120 }]);
+    harness.hide();
+
+    const vitals = harness.sent
+      .flatMap((payload) => payload.spans)
+      .map((span) => span.attributes["browser.vital"]);
+
+    // Its own honestly-named span at the time it happened, plus the lifetime INP.
+    expect(vitals).toEqual(["first-input", "INP"]);
+  });
+
+  it("emits ONE CLS vital at page hide, valued by the max session sum, scaled", () => {
+    const harness = fakeEnvironment();
+
+    startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    // Session 1 sums to 0.05; a gap opens session 2, which sums to 0.10.
+    harness.fire([
+      shiftEntry(0.02, 0),
+      shiftEntry(0.03, 500),
+      shiftEntry(0.06, 2_000),
+      shiftEntry(0.04, 2_400),
+    ]);
+
+    harness.hide();
+
+    const spans = harness.sent.flatMap((payload) => payload.spans);
+
+    // The raw per-shift spans still ship — the only per-event detail a debugger has.
+    expect(
+      spans.filter((span) => span.attributes["browser.vital"] === "layout-shift"),
+    ).toHaveLength(4);
+
+    const cls = spans.filter((span) => span.attributes["browser.vital"] === "CLS");
+
+    expect(cls).toHaveLength(1);
+    expect(cls[0]?.attributes["browser.value"]).toBe(Math.round(0.1 * VITAL_SCORE_SCALE));
+    // Never a bare 0.1 rounded to 0 — and the wire says which convention it used.
+    expect(cls[0]?.attributes["browser.value_unit"]).toBe("score_x1000");
+  });
+
+  it("keeps reporting after a tab switch — a hide is not the end of the page", () => {
+    // The defect a one-shot latch has: a hide is ANY tab switch. Latch on the first
+    // one and INP/CLS freeze at whatever the page managed in its first few seconds,
+    // and the work the user actually came back to do is never reported.
+    const harness = fakeEnvironment();
+
+    startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    harness.fire([eventEntry(24, 100, 1), shiftEntry(0.02, 0)]);
+    harness.hide();
+
+    const first = harness.sent
+      .flatMap((payload) => payload.spans)
+      .filter((span) => span.attributes["browser.vital"] === "INP");
+
+    expect(first).toHaveLength(1);
+    expect(first[0]?.attributes["browser.value"]).toBe(24);
+
+    // The user comes back and janks something badly, then leaves for real.
+    harness.fire([eventEntry(310, 900, 2), shiftEntry(0.2, 8_000)]);
+    harness.hide();
+
+    const spans = harness.sent.flatMap((payload) => payload.spans);
+    const inp = spans.filter((span) => span.attributes["browser.vital"] === "INP");
+    const cls = spans.filter((span) => span.attributes["browser.vital"] === "CLS");
+
+    // Both moved, so both re-report; the LAST is authoritative (both metrics are
+    // running maxima, so last === max).
+    expect(inp.map((span) => span.attributes["browser.value"])).toEqual([24, 310]);
+    expect(cls.map((span) => span.attributes["browser.value"])).toEqual([20, 200]);
+  });
+
+  it("does not re-report a vital that only moved below the wire's resolution", () => {
+    // The gate compares the value the wire carries, so two readings that round to
+    // the same integer do not become two spans a consumer cannot tell apart.
+    const harness = fakeEnvironment();
+
+    startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    harness.fire([shiftEntry(0.0201, 0)]);
+    harness.hide();
+
+    harness.fire([shiftEntry(0.0001, 500)]);
+    harness.hide();
+
+    const cls = harness.sent
+      .flatMap((payload) => payload.spans)
+      .filter((span) => span.attributes["browser.vital"] === "CLS");
+
+    // 0.0201 and 0.0202 both round to 20 on the ×1000 wire.
+    expect(cls.map((span) => span.attributes["browser.value"])).toEqual([20]);
+  });
+
+  it("does not re-report a vital whose value did not move", () => {
+    const harness = fakeEnvironment();
+
+    startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    harness.fire([eventEntry(200, 10, 1)]);
+
+    harness.hide();
+    harness.hide();
+    harness.hide();
+
+    // Three hides, one span: the common page still gets exactly one INP.
+    expect(
+      harness.sent
+        .flatMap((payload) => payload.spans)
+        .filter((span) => span.attributes["browser.vital"] === "INP"),
+    ).toHaveLength(1);
+  });
+
+  it("finalizes exactly once across a hide followed by a dispose", () => {
+    const harness = fakeEnvironment();
+
+    const dispose = startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    harness.fire([eventEntry(200, 10, 1), shiftEntry(0.2, 20)]);
+
+    harness.hide();
+    dispose();
+
+    const vitals = harness.sent
+      .flatMap((payload) => payload.spans)
+      .map((span) => span.attributes["browser.vital"]);
+
+    // Two INPs for one page would leave a consumer guessing which is the page's.
+    expect(vitals.filter((name) => name === "INP")).toHaveLength(1);
+    expect(vitals.filter((name) => name === "CLS")).toHaveLength(1);
+  });
+
+  it("finalizes on dispose even when the page never hid", () => {
+    const harness = fakeEnvironment();
+
+    const dispose = startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    harness.fire([eventEntry(200, 10, 1)]);
+
+    dispose();
+
+    expect(
+      harness.sent
+        .flatMap((payload) => payload.spans)
+        .map((span) => span.attributes["browser.vital"]),
+    ).toEqual(["INP"]);
+  });
+
+  it("emits neither vital on a page with no interaction and no shift", () => {
+    const harness = fakeEnvironment();
+
+    const dispose = startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    harness.hide();
+    dispose();
+
+    // Nothing measured, nothing invented, and so no POST at all.
+    expect(harness.sent).toHaveLength(0);
+  });
+
+  it("falls back to the real browser page-hide seam when the environment omits one", () => {
+    // `onPageHide` is optional, so an environment that predates it still gets the
+    // lifetime vitals — through the real listener, driven here at its real target.
+    const harness = fakeEnvironment();
+
+    const { onPageHide: _omitted, ...withoutSeam } = harness.environment;
+
+    const dispose = startBrowserRum({ sampleRate: 1, environment: withoutSeam });
+
+    harness.fire([eventEntry(200, 10, 1)]);
+
+    expect(harness.sent).toHaveLength(0);
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(
+      harness.sent
+        .flatMap((payload) => payload.spans)
+        .map((span) => span.attributes["browser.vital"]),
+    ).toEqual(["INP"]);
+
+    // Real listeners were attached to the real window; take them back off, or a
+    // later case in this file fires this one's callback too.
+    dispose();
+  });
+
+  it("unregisters the page-hide listener and disconnects on dispose", () => {
+    const harness = fakeEnvironment();
+
+    const dispose = startBrowserRum({ sampleRate: 1, environment: harness.environment });
+
+    dispose();
+
+    expect(harness.pageHideUnregisters).toBe(1);
+    expect(harness.disconnects).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // browserRumEnvironment — the default wiring off the live (jsdom) globals.
 // ---------------------------------------------------------------------------
 
@@ -720,6 +1126,66 @@ describe("browserRumEnvironment", () => {
     // With no `performance`, timeOrigin reads 0.
     vi.stubGlobal("performance", undefined);
     expect(browserRumEnvironment().timeOrigin).toBe(0);
+  });
+
+  it("fires its page-hide callback on visibilitychange → hidden, never on visible", () => {
+    const onPageHide = browserRumEnvironment().onPageHide as NonNullable<
+      RumEnvironment["onPageHide"]
+    >;
+
+    let hides = 0;
+    const stop = onPageHide(() => {
+      hides += 1;
+    });
+
+    // jsdom reports "visible" by default; a change back to visible is not a hide.
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(hides).toBe(0);
+
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(hides).toBe(1);
+
+    // Put jsdom back: a stubbed `visibilityState` left behind changes what every
+    // later case in this file observes.
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+
+    // `pagehide` is dispatched at the WINDOW and never reaches the document — a
+    // listener registered on the document there can never fire, so dispatching at
+    // the real target is the whole point of this assertion.
+    window.dispatchEvent(new Event("pagehide"));
+    expect(hides).toBe(2);
+
+    stop();
+
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("pagehide"));
+    expect(hides).toBe(2);
+  });
+
+  it("registers each listener on the target that actually dispatches it", () => {
+    const onDocument = vi.spyOn(document, "addEventListener");
+    const onWindow = vi.spyOn(window, "addEventListener");
+
+    (browserRumEnvironment().onPageHide as NonNullable<RumEnvironment["onPageHide"]>)(() => {});
+
+    // …and NO unload/beforeunload anywhere: either would disqualify the page from
+    // the back/forward cache.
+    expect(onDocument.mock.calls.map((call) => call[0])).toEqual(["visibilitychange"]);
+    expect(onWindow.mock.calls.map((call) => call[0])).toEqual(["pagehide"]);
+  });
+
+  it("is a no-op page-hide seam with no document and no window (SSR, a bare test)", () => {
+    vi.stubGlobal("document", undefined);
+    vi.stubGlobal("window", undefined);
+
+    const stop = (browserRumEnvironment().onPageHide as NonNullable<RumEnvironment["onPageHide"]>)(
+      () => {
+        throw new Error("must never fire");
+      },
+    );
+
+    expect(() => stop()).not.toThrow();
   });
 
   it("falls back to Math.random ids when crypto.getRandomValues is absent", () => {

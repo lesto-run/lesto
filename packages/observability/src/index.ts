@@ -111,6 +111,15 @@ export type { CurrentSpan, Traces, TracesEnv, TracesOptions, TraceSeams } from "
 // `startBrowserRum` observes the page's performance and POSTs spans under the
 // SSR-injected server trace id; `wrapFetch` carries an outbound `traceparent` on
 // same-origin fetches so the server handler joins the same trace.
+// The two LIFETIME vitals — INP (the worst interaction over the page) and
+// session-windowed CLS — accumulate as the page runs and are published at the
+// page-hide seam `RumEnvironment.onPageHide` owns. Every vital span states its own
+// unit in `browser.value_unit`, so a consumer reads the number correctly without
+// importing a scaling constant. The accumulator and its tuning constants are not
+// re-exported here — they live on the `@lesto/observability/rum` subpath with the
+// rest of the browser half, which is where a browser consumer imports from. That
+// subpath is itself published, so this is about keeping the node-facing barrel to
+// what a node caller needs, not about hiding them.
 export {
   BROWSER_SPANS_PATH,
   BrowserTracer,
@@ -123,6 +132,12 @@ export {
   TRACEPARENT_META_NAME,
   wrapFetch,
 } from "./rum";
-export type { BrowserSpan, BrowserSpansPayload, RumEnvironment, RumOptions } from "./rum";
+export type {
+  BrowserSpan,
+  BrowserSpansPayload,
+  RumEnvironment,
+  RumOptions,
+  VitalUnit,
+} from "./rum";
 
 export type { Clock, Span, SpanData, SpanExporter, SpanStatus } from "./types";

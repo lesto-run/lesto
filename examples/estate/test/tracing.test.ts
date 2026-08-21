@@ -35,6 +35,11 @@ function tracingFixture(requestSpan: () => Span | undefined): {
     tracer: new Tracer({ exporter }),
     flush: async () => {},
     currentSpan: requestSpan,
+    // Browser spans keep their OWN ids and timestamps (that preservation IS the
+    // cross-tier join), so `onBrowserSpan` writes them straight to the exporter
+    // rather than re-minting them through the tracer. Absent this seam it is a
+    // documented no-op — the production wiring (`tracesFromEnv`) always sets it.
+    exportSpan: (span) => exporter.export(span),
   });
 
   return { exporter, traces };
@@ -92,6 +97,60 @@ describe("estate tracing dogfood", () => {
     const names = exporter.spans.map((s) => s.name);
 
     expect(names).toContain("identity.login_succeeded");
+  });
+
+  it("a browser RUM batch's LIFETIME vitals land under the page's trace", async () => {
+    // INP and CLS are computed over the whole page and POSTed at page hide (ADR
+    // 0048 Phase 0.3). Estate wires `.browserSpans()` to the tracer seam, so this
+    // proves the new vital spans survive estate's own receiver wiring — including
+    // the unit attribute, without which the CLS number is three orders of
+    // magnitude away from the 0.1 threshold it is read against.
+    const root = new Tracer({ exporter: new InMemoryExporter() }).startSpan("http.request");
+
+    const { exporter, traces } = tracingFixture(() => root);
+
+    const app = await createApp(await buildAppConfig("d".repeat(32), traces.seams));
+
+    // The receiver requires the W3C wire widths — a 32-hex trace id and a 16-hex
+    // span/parent id — and drops anything else rather than exporting an orphan.
+    const pageSpanId = "1234567890abcdef";
+
+    const vital = (
+      spanId: string,
+      name: string,
+      value: number,
+      unit: string,
+    ): Record<string, unknown> => ({
+      traceId: root.data.traceId,
+      spanId,
+      parentSpanId: pageSpanId,
+      name: "browser.web_vital",
+      startedAt: 1_700_000_000_000,
+      endedAt: 1_700_000_000_000,
+      attributes: { "browser.vital": name, "browser.value": value, "browser.value_unit": unit },
+      status: 1,
+    });
+
+    await app.handle("POST", "/__lesto/browser-spans", {
+      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+      body: {
+        v: 1,
+        traceId: root.data.traceId,
+        spans: [
+          vital("a".repeat(16), "INP", 310, "ms"),
+          vital("b".repeat(16), "CLS", 100, "score_x1000"),
+        ],
+      },
+    });
+
+    const vitals = exporter.spans.filter((s) => s.name === "browser.web_vital");
+
+    expect(vitals.map((s) => s.attributes["browser.vital"])).toEqual(["INP", "CLS"]);
+    expect(vitals.map((s) => s.attributes["browser.value_unit"])).toEqual(["ms", "score_x1000"]);
+    // Both keep the page's trace id — the join key — and the parent the browser
+    // adopted from the SSR traceparent, verbatim. One timeline, UI to DB.
+    expect(vitals.every((s) => s.traceId === root.data.traceId)).toBe(true);
+    expect(vitals.every((s) => s.parentSpanId === pageSpanId)).toBe(true);
   });
 
   it("the client-error beacon becomes a client.island_error span", async () => {
