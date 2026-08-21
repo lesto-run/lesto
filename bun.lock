@@ -1319,6 +1319,7 @@
       },
       "devDependencies": {
         "@lesto/cli": "workspace:*",
+        "@lesto/content-prose": "workspace:*",
       },
     },
     "www": {
