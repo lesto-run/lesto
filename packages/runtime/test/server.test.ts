@@ -1175,6 +1175,47 @@ describe("serve", () => {
     expect((errors[0]!.error as Error).message).toBe("BOOM from the app's access-log sink");
   });
 
+  it("carries the request's traceId on the access entry — and omits it when untraced", async () => {
+    // The access line and the request span settle in the same `finally`, so the
+    // correlation is recorded at its source. A consumer keeping both an access log
+    // and a span store joins them on this field instead of re-deriving the link
+    // from a span ATTRIBUTE, which a client-supplied span could set.
+    const traced: AccessEntry[] = [];
+
+    const app: App = {
+      migrationsApplied: [],
+      handle: async () => ({ status: 200, headers: {}, body: "ok" }),
+    };
+
+    server = await serve(app, {
+      port: 0,
+      logRequest: (entry) => traced.push(entry),
+      tracer: {
+        startSpan: () => ({
+          setAttribute: () => undefined,
+          setStatus: () => undefined,
+          end: () => undefined,
+          data: { traceId: "trace-abc", spanId: "span-abc" },
+        }),
+      } satisfies NonNullable<ServeOptions["tracer"]>,
+    });
+
+    await makeRequest(server.port, { method: "GET", path: "/x" });
+
+    expect(traced[0]?.traceId).toBe("trace-abc");
+
+    await server.close();
+
+    const untraced: AccessEntry[] = [];
+
+    server = await serve(app, { port: 0, logRequest: (entry) => untraced.push(entry) });
+
+    await makeRequest(server.port, { method: "GET", path: "/x" });
+
+    // No tracer, no span, no field — the untraced default carries nothing extra.
+    expect(untraced[0]).not.toHaveProperty("traceId");
+  });
+
   it("bounds the readiness probe: a wedged probe answers 503 rather than hanging", async () => {
     const app: App = {
       migrationsApplied: [],

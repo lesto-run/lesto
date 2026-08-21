@@ -32,6 +32,18 @@ export type {
 export { createDevState, DEFAULT_DEV_RING_CAPACITY } from "./dev-state";
 export type { DevState, DevStateReader, DevStateWriter } from "./dev-state";
 
+// The TYPES of the bounded TRACE ring the dev-state ring composes (ADR 0048 Phase
+// 0.2) — reachable through `DevState`, so a caller that names one needs them. The
+// ring's own constructor and constants stay internal until something outside the
+// CLI builds a ring of its own; `createDevState` is the supported way in.
+export type {
+  TraceLookup,
+  TraceRingOptions,
+  TraceRingReader,
+  TraceRingWriter,
+  TraceSelector,
+} from "./trace-ring";
+
 // The in-preview AI overlay client string (ADR 0033 Phase 1). Exported for the SAME
 // reason as `createDevState`: the estate overlay dogfood (L-d43dde63) drives `run`'s dev
 // path itself and needs the EXACT script the bin bakes into the `aiOverlay` seam, so it

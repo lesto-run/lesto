@@ -1,6 +1,8 @@
 # ADR 0032 — Dev-loop control plane (`lesto dev` as a live, governed MCP server + a source-location bridge)
 
-- **Status:** Accepted (ratified 2026-06-23). **Phase 1** (a DEV-ONLY MCP
+- **Status:** Accepted (ratified 2026-06-23); **amended 2026-08-18** — a fourth
+  read-only dev tool, `get_trace`, over the ADR 0048 Phase 0.2 trace ring (see
+  *Amendments*). **Phase 1** (a DEV-ONLY MCP
   server stood up by `lesto dev`, exposing read-only introspection tools —
   `get_dev_diagnostics`, `get_recent_requests`, `tail_logs` — over the existing
   `buildTools`/`dispatch`/audit machinery, over a **new loopback HTTP MCP transport**
@@ -322,6 +324,43 @@ extends the retention window; it is not a prerequisite for the in-process explai
   `$EDITOR`; Lesto ships no editor extension.
 - **No silent fail-open.** The dev surface is off unless `lesto dev` turned it on;
   out-of-tree file opens are refused, not best-effort.
+
+## Amendments
+
+> **Terminology note (2026-08-18).** Phase 1's committed ring is called a "span
+> ring" in six places below (`:15`, `:21`, `:121`, `:267`, `:270`, `:294`,
+> `:448`). It holds `AccessEntry`s, not spans — a naming this ADR never corrected.
+> The REAL span ring is the one ADR 0048 Phase 0.2 commits, amended in below. Read
+> every "span ring" above as "the access-log ring".
+
+- **A fourth read-only dev tool: `get_trace` (2026-08-18, ADR 0048 Phase 0.2).**
+  Phase 1's committed ring holds `AccessEntry`s and said so — "this plan mints no
+  spans of its own". ADR 0048 needed the other half (a failed invariant must
+  arrive with its trace), so it commits a **bounded, dev-only TRACE ring** keyed
+  by `traceId`, holding server spans and the browser-span receiver's payloads
+  alike. It is COMPOSED into `createDevState`, so `@lesto/mcp` still takes exactly
+  one reader and the tool keeps this ADR's build-time gate verbatim: no
+  `devState`, no tool, on any non-dev or remote server. `get_trace` takes a
+  `traceId`, or the `requestId` `get_recent_requests` reports — bridged through the
+  `traceId` the runtime stamps on the access entry beside the request span, NEVER
+  through a span attribute, which a caller of the public unauthenticated
+  browser-spans receiver could set — or neither (the most recent trace). A trace
+  that aged out of the ring is a truthful `retained: false`, never an error, and so
+  is a request served with no span behind it (an unparsable target, an in-flight
+  shed, a long-lived stream's first byte). PREVIEW, by inheritance from this ADR. One behavior change worth
+  naming: supplying the ring also turns request tracing ON for `lesto dev` when no
+  `LESTO_OTLP_URL` is configured — spans are minted in-process and shipped
+  nowhere — because a ring that fills only for a developer already running a
+  collector would not be a queryable span store. `lesto serve` passes no sink and
+  is unchanged. Two consequences of that follow and are accepted deliberately:
+  (a) a dev page now carries the `<meta name="lesto-traceparent">` the runtime
+  stamps whenever a request span exists, and (b) `loadApp` receives real `seams`
+  in dev, so an app that gates its own wiring on their presence — as
+  `examples/estate` does — mounts `POST /__lesto/browser-spans` and
+  `POST /__lesto/client-errors` in dev where it previously did not. (b) is what
+  makes the ring hold BROWSER spans at all, which is the point; both endpoints
+  keep the framework's default CSRF posture, and the receiver's own trust boundary
+  now records that its payloads also spend the ring's capacity.
 
 ## Deferred — recorded, not scheduled; each gated on a real consumer
 

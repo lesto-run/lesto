@@ -119,6 +119,7 @@ describe("buildTools — domain tool registration (ADR 0043 D1/D2/D4)", () => {
       getDiagnostics: () => null,
       recentRequests: () => [],
       recentLogs: () => [],
+      retainedTrace: () => ({ retained: false, spans: [], truncated: false }),
     };
     const { context } = ctx({
       policy,

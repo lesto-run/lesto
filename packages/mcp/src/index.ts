@@ -28,6 +28,7 @@ export type {
   McpDevStateReader,
   McpMode,
   McpPrincipalResolverOptions,
+  TraceSelector,
 } from "./tools";
 
 export { startMcpServer, startMcpHttpServer } from "./server";

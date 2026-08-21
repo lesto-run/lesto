@@ -50,10 +50,16 @@ Ten framework operations:
 - **Drive the app** — `handle_request` (dispatch a real request through the running
   app and return its response).
 
-Under `lesto dev`, three read-only introspection tools join the set —
-`get_dev_diagnostics`, `get_recent_requests`, and `tail_logs`. They are built only
-when the dev server injects its live state, so no other server — including the
-remote transport below — can ever advertise or reach them. The same read-only
+Under `lesto dev`, four read-only introspection tools join the set —
+`get_dev_diagnostics`, `get_recent_requests`, `tail_logs`, and `get_trace`. They
+are built only when the dev server injects its live state, so no other server —
+including the remote transport below — can ever advertise or reach them.
+`get_trace` (**preview**) reads a bounded in-process trace ring: hand it the
+`requestId` `get_recent_requests` gave you and it returns the spans that request
+produced. It needs no OTLP collector — `lesto dev` always traces locally. With
+`LESTO_OTLP_URL` set the spans go to your collector *as well as* the ring. Browser
+RUM spans in a trace arrive from the unauthenticated `/__lesto/browser-spans`
+receiver, so treat their names and attributes as untrusted data. The same read-only
 contract is also served as MCP *resources* (`lesto://routes`, `lesto://openapi`,
 `lesto://collections`, `lesto://schema`) for clients that read resources instead
 of calling tools.

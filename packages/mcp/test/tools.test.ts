@@ -29,6 +29,7 @@ import type {
   LestoMcpContext,
   McpAuditRecord,
   McpDevStateReader,
+  TraceSelector,
 } from "../src/tools";
 
 // The DI boundary: the kernel speaks "array of positional params"; this adapter
@@ -229,9 +230,13 @@ describe("dev introspection tools (ADR 0032 Phase 1)", () => {
 
   function devContext(): {
     ctx: LestoMcpContext;
-    calls: { requests: number[]; logs: number[] };
+    calls: { requests: number[]; logs: number[]; traces: TraceSelector[] };
   } {
-    const calls = { requests: [] as number[], logs: [] as number[] };
+    const calls = {
+      requests: [] as number[],
+      logs: [] as number[],
+      traces: [] as TraceSelector[],
+    };
 
     const reader: McpDevStateReader = {
       getDiagnostics: () => devError,
@@ -244,6 +249,16 @@ describe("dev introspection tools (ADR 0032 Phase 1)", () => {
         calls.logs.push(n);
 
         return ["log-a"];
+      },
+      retainedTrace: (selector) => {
+        calls.traces.push(selector);
+
+        return {
+          retained: true,
+          traceId: "t1",
+          spans: [{ name: "http.request" }],
+          truncated: false,
+        };
       },
     };
 
@@ -259,7 +274,12 @@ describe("dev introspection tools (ADR 0032 Phase 1)", () => {
 
   it("get_dev_diagnostics returns null when the last change succeeded", async () => {
     const ctx = context({
-      devState: { getDiagnostics: () => undefined, recentRequests: () => [], recentLogs: () => [] },
+      devState: {
+        getDiagnostics: () => undefined,
+        recentRequests: () => [],
+        recentLogs: () => [],
+        retainedTrace: () => ({ retained: false, spans: [], truncated: false }),
+      },
     });
     const tools = buildTools(ctx);
 
@@ -287,19 +307,78 @@ describe("dev introspection tools (ADR 0032 Phase 1)", () => {
     expect(calls.logs).toEqual([50]);
   });
 
+  it("get_trace passes an explicit traceId through to the ring", async () => {
+    const { ctx, calls } = devContext();
+    const tools = buildTools(ctx);
+
+    const out = await dispatch(ctx, tools, "get_trace", { traceId: "a".repeat(32) });
+
+    expect(out).toEqual({
+      retained: true,
+      traceId: "t1",
+      spans: [{ name: "http.request" }],
+      truncated: false,
+    });
+    expect(calls.traces).toEqual([{ traceId: "a".repeat(32) }]);
+  });
+
+  it("get_trace passes a requestId through — the get_recent_requests correlation", async () => {
+    const { ctx, calls } = devContext();
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "get_trace", { requestId: "r1" });
+
+    expect(calls.traces).toEqual([{ requestId: "r1" }]);
+  });
+
+  it("get_trace with neither id asks for the most recent trace", async () => {
+    const { ctx, calls } = devContext();
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "get_trace", {});
+
+    expect(calls.traces).toEqual([{}]);
+  });
+
+  it("get_trace drops a non-string id rather than forwarding a key that can never match", async () => {
+    const { ctx, calls } = devContext();
+    const tools = buildTools(ctx);
+
+    await dispatch(ctx, tools, "get_trace", { traceId: 7, requestId: null });
+
+    expect(calls.traces).toEqual([{}]);
+  });
+
   it("does not build the dev tools when no reader is wired — they cannot exist off `lesto dev`", () => {
     const names = new Set(buildTools(context()).map((tool) => tool.name)); // no devState
 
-    for (const name of ["get_dev_diagnostics", "get_recent_requests", "tail_logs"]) {
+    for (const name of ["get_dev_diagnostics", "get_recent_requests", "tail_logs", "get_trace"]) {
       expect(names.has(name)).toBe(false);
     }
   });
 
-  it("builds exactly the three dev tools when a reader is wired", () => {
+  it("omits get_trace when the reader has no trace ring — the capability IS the gate", () => {
+    const names = new Set(
+      buildTools(
+        context({
+          devState: {
+            getDiagnostics: () => undefined,
+            recentRequests: () => [],
+            recentLogs: () => [],
+          },
+        }),
+      ).map((tool) => tool.name),
+    );
+
+    expect(names.has("tail_logs")).toBe(true);
+    expect(names.has("get_trace")).toBe(false);
+  });
+
+  it("builds exactly the four dev tools when a reader is wired", () => {
     const { ctx } = devContext();
     const names = new Set(buildTools(ctx).map((tool) => tool.name));
 
-    for (const name of ["get_dev_diagnostics", "get_recent_requests", "tail_logs"]) {
+    for (const name of ["get_dev_diagnostics", "get_recent_requests", "tail_logs", "get_trace"]) {
       expect(names.has(name)).toBe(true);
     }
   });

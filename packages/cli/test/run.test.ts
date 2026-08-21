@@ -3358,14 +3358,27 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
       }),
     );
 
-    // runDev fills the ring: one served request, then a failed route change.
+    // runDev fills the ring exactly as a served request does: mint the request span
+    // through the tracer `runDev` handed `serve`, then emit the access line the
+    // runtime would — carrying the `traceId` it stamps beside the span, which is
+    // what `get_trace({ requestId })` resolves through (ADR 0048 Phase 0.2). No
+    // `LESTO_OTLP_URL` is set here, which is the point: the dev span sink alone
+    // turns tracing on, and every exported span tees into the ring.
+    const requestSpan = capture.options()?.tracer?.startSpan("http.request");
+
+    if (requestSpan === undefined) throw new Error("dev wired no tracer");
+
     capture.options()?.logRequest?.({
       method: "GET",
       path: "/posts",
       status: 200,
       ms: 4,
       requestId: "req-1",
+      traceId: requestSpan.data.traceId,
     });
+
+    requestSpan.end();
+
     onChange?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -3384,7 +3397,11 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
     const handle = await startMcpHttpServer(devContext, { token: devToken, port: 0 });
 
     const base = `http://127.0.0.1:${handle.port}/`;
-    const call = (name: string, extraHeaders: Record<string, string> = {}): Promise<Response> =>
+    const call = (
+      name: string,
+      extraHeaders: Record<string, string> = {},
+      args: Record<string, unknown> = {},
+    ): Promise<Response> =>
       fetch(base, {
         method: "POST",
         headers: {
@@ -3397,7 +3414,7 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
           jsonrpc: "2.0",
           id: 1,
           method: "tools/call",
-          params: { name, arguments: {} },
+          params: { name, arguments: args },
         }),
       });
 
@@ -3416,6 +3433,26 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
       const logs = (await toolResult(await call("tail_logs"))) as string[];
       expect(logs).toContain("routes refreshed: src/routes.gen.ts (2 route files)");
 
+      // get_trace → the span the tracer minted, found by the SAME requestId
+      // `get_recent_requests` just reported. This is the whole Phase-0.2 claim:
+      // an agent can go from "what was served" to "what happened inside it" in one
+      // hop, with no OTLP collector anywhere.
+      const trace = (await toolResult(
+        await call("get_trace", {}, { requestId: requests[0]?.requestId }),
+      )) as { retained: boolean; traceId: string; truncated: boolean; spans: { name: string }[] };
+
+      expect(trace.retained).toBe(true);
+      expect(trace.truncated).toBe(false);
+      expect(trace.spans.map((span) => span.name)).toEqual(["http.request"]);
+      expect(trace.traceId).toBe(requestSpan?.data.traceId);
+
+      // A trace the ring never saw is a truthful "not retained", never an error.
+      const missing = (await toolResult(
+        await call("get_trace", {}, { traceId: "0".repeat(32) }),
+      )) as { retained: boolean };
+
+      expect(missing.retained).toBe(false);
+
       // A foreign-Origin call is refused with MCP_DEV_ORIGIN_REJECTED before any dispatch.
       const rejected = await call("get_dev_diagnostics", { origin: "https://evil.example" });
       expect(rejected.status).toBe(403);
@@ -3428,6 +3465,8 @@ describe("run dev — dev-state ring (ADR 0032 Phase 1)", () => {
         "get_dev_diagnostics",
         "get_recent_requests",
         "tail_logs",
+        "get_trace",
+        "get_trace",
       ]);
       expect(audited.every((record) => record.outcome === "ok")).toBe(true);
     } finally {
@@ -5039,6 +5078,79 @@ describe("parseServeLimit", () => {
 
   it("is undefined for a negative value", () => {
     expect(parseServeLimit("-1")).toBeUndefined();
+  });
+});
+
+describe("the dev trace ring turns tracing on locally (ADR 0048 Phase 0.2)", () => {
+  const sites: readonly Site[] = [
+    { name: "marketing", render: "static", basePath: "/", pages: ["/"] },
+  ];
+
+  it("gives `dev` a tracer with NO collector configured — and tees every span into the ring", async () => {
+    const devState = createDevState();
+    const capture = optionCapturingServe();
+
+    await run(
+      ["dev"],
+      depsWith({
+        serve: capture.serve,
+        loadSites: () => Promise.resolve(sites),
+        devState,
+        env: {},
+      }),
+    );
+
+    const tracer = capture.options()?.tracer;
+
+    // The behaviour change, stated: with `LESTO_OTLP_URL` unset, `dev` still mints
+    // spans. They go nowhere but the in-process ring.
+    expect(tracer).toBeDefined();
+
+    const span = tracer?.startSpan("http.request");
+
+    if (span === undefined) throw new Error("dev wired no tracer");
+
+    // The access entry carries the trace the runtime stamped on it — never a span
+    // attribute, which a client could forge through the public browser-spans
+    // receiver.
+    capture.options()?.logRequest?.({
+      method: "GET",
+      path: "/posts",
+      status: 200,
+      ms: 1,
+      requestId: "req-9",
+      traceId: span.data.traceId,
+    });
+
+    span.end();
+
+    expect(devState.retainedTrace({ requestId: "req-9" })).toMatchObject({
+      retained: true,
+      traceId: span?.data.traceId,
+      truncated: false,
+    });
+  });
+
+  it("leaves `serve` untraced with no collector configured — the unchanged path", async () => {
+    const capture = optionCapturingServe();
+
+    await run(["serve"], depsWith({ serve: capture.serve, env: {} }));
+
+    // `serve` passes no span sink, so the "off unless LESTO_OTLP_URL" rule holds.
+    expect(capture.options()?.tracer).toBeUndefined();
+  });
+
+  it("leaves `dev` untraced when the bin wired no ring at all", async () => {
+    const capture = optionCapturingServe();
+
+    await run(
+      ["dev"],
+      depsWith({ serve: capture.serve, loadSites: () => Promise.resolve(sites), env: {} }),
+    );
+
+    // No ring, no sink, no collector → no tracer. `dev` without the control plane
+    // is exactly as untraced as it always was.
+    expect(capture.options()?.tracer).toBeUndefined();
   });
 });
 

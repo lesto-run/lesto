@@ -11,6 +11,10 @@
  *   - `get_recent_requests` → the access-log entry `serve`'s `logRequest` seam fed.
  *   - `tail_logs`           → the route-refresh dev-loop line.
  *   - `get_dev_diagnostics` → the `DevError` a failed route re-load recorded.
+ *   - `get_trace`           → the request's SPANS, from the bounded dev trace ring
+ *                             (ADR 0048 Phase 0.2), found by the very `requestId`
+ *                             `get_recent_requests` reported — and with no OTLP
+ *                             collector configured, which is the point of the ring.
  *
  * It also asserts the transport's security floor (a foreign-Origin call is refused
  * before any dispatch) and that every accepted call was audited — the governance
@@ -50,26 +54,38 @@ const ACCESS_ENTRY = {
   requestId: "req-estate-1",
 } as const;
 
+/** The slice of `serve`'s options this dogfood drives by hand. */
+interface CapturedServeOptions {
+  logRequest?: (entry: typeof ACCESS_ENTRY & { traceId?: string }) => void;
+
+  tracer?: {
+    startSpan(name: string): {
+      setAttribute(key: string, value: unknown): unknown;
+      setStatus(status: string): unknown;
+      end(): void;
+      readonly data: { readonly traceId: string; readonly spanId: string };
+    };
+  };
+}
+
 /**
  * A `serve` fake that never binds a socket but captures its options, so the test can
- * invoke the wired `logRequest` — the same seam a real served request would drive.
+ * invoke the wired `logRequest` — the same seam a real served request would drive —
+ * and mint a span through the `tracer` `runDev` teed into the dev trace ring.
  */
 function capturingServe(): {
   serve: CliDeps["serve"];
-  logRequest: () => ((entry: typeof ACCESS_ENTRY) => void) | undefined;
+  options: () => CapturedServeOptions | undefined;
 } {
-  let captured: { logRequest?: (entry: typeof ACCESS_ENTRY) => void } | undefined;
+  let captured: CapturedServeOptions | undefined;
 
-  const serve = ((
-    _app: unknown,
-    options?: { logRequest?: (entry: typeof ACCESS_ENTRY) => void },
-  ) => {
+  const serve = ((_app: unknown, options?: CapturedServeOptions) => {
     captured = options;
 
     return Promise.resolve({ port: 0, close: () => Promise.resolve() });
   }) as unknown as CliDeps["serve"];
 
-  return { serve, logRequest: () => captured?.logRequest };
+  return { serve, options: () => captured };
 }
 
 let drain: (() => Promise<void>) | undefined;
@@ -132,14 +148,30 @@ describe("estate `lesto dev` — the dev MCP control plane, dogfooded end-to-end
     });
 
     // runDev has returned; fill the ring the way a live session would:
-    //   1. a served request (the `logRequest` seam), and
-    //   2. a watched route change → a "routes refreshed" log line + a failed re-load's DevError.
-    serve.logRequest()?.(ACCESS_ENTRY);
+    //   1. a served request (the `logRequest` seam),
+    //   2. its request SPAN through the tracer runDev teed into the trace ring, and
+    //   3. a watched route change → a "routes refreshed" log line + a failed re-load's DevError.
+    // estate runs with no `LESTO_OTLP_URL` here — the dev span sink alone is what
+    // turns tracing on (ADR 0048 Phase 0.2), which is exactly the claim under test.
+    // The access line carries the `traceId` the runtime stamps on it beside the
+    // request span, which is what `get_trace({ requestId })` resolves through.
+    const requestSpan = serve.options()?.tracer?.startSpan("http.request");
+
+    if (requestSpan === undefined) throw new Error("estate dev wired no tracer");
+
+    serve.options()?.logRequest?.({ ...ACCESS_ENTRY, traceId: requestSpan.data.traceId });
+
+    requestSpan.end();
+
     onRouteChange?.();
     await new Promise((resolve) => setTimeout(resolve, 25));
 
     const base = `http://127.0.0.1:${mcpPort}/`;
-    const call = (name: string, extraHeaders: Record<string, string> = {}): Promise<Response> =>
+    const call = (
+      name: string,
+      extraHeaders: Record<string, string> = {},
+      args: Record<string, unknown> = {},
+    ): Promise<Response> =>
       fetch(base, {
         method: "POST",
         headers: {
@@ -152,7 +184,7 @@ describe("estate `lesto dev` — the dev MCP control plane, dogfooded end-to-end
           jsonrpc: "2.0",
           id: 1,
           method: "tools/call",
-          params: { name, arguments: {} },
+          params: { name, arguments: args },
         }),
       });
 
@@ -179,6 +211,18 @@ describe("estate `lesto dev` — the dev MCP control plane, dogfooded end-to-end
     expect(diagnostics.source).toBe("app-reload");
     expect(diagnostics.message).toContain("syntax error");
 
+    // get_trace → the span that request minted, found by the SAME requestId
+    // `get_recent_requests` just reported (ADR 0048 Phase 0.2). One hop from "what
+    // was served" to "what happened inside it", with no OTLP collector anywhere.
+    const trace = (await toolResult(
+      await call("get_trace", {}, { requestId: ACCESS_ENTRY.requestId }),
+    )) as { retained: boolean; traceId: string; truncated: boolean; spans: { name: string }[] };
+
+    expect(trace.retained).toBe(true);
+    expect(trace.truncated).toBe(false);
+    expect(trace.traceId).toBe(requestSpan.data.traceId);
+    expect(trace.spans.map((span) => span.name)).toEqual(["http.request"]);
+
     // A foreign-Origin call is refused with MCP_DEV_ORIGIN_REJECTED before any dispatch.
     const rejected = await call("tail_logs", { origin: "https://evil.example" });
     expect(rejected.status).toBe(403);
@@ -190,6 +234,7 @@ describe("estate `lesto dev` — the dev MCP control plane, dogfooded end-to-end
       "get_recent_requests",
       "tail_logs",
       "get_dev_diagnostics",
+      "get_trace",
     ]);
     expect(audited.every((record) => record.outcome === "ok")).toBe(true);
   }, 30_000);

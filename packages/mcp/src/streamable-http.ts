@@ -57,7 +57,7 @@ export interface McpHttpServerOptions {
    * `devState` is excluded STRUCTURALLY (ADR 0032): the dev introspection tools are built
    * only when a `devState` reader is present (`buildTools`), so dropping it from the type
    * makes "the remote OAuth transport can never advertise/reach `get_dev_diagnostics` /
-   * `get_recent_requests` / `tail_logs`" a compile-time guarantee — a remote caller cannot
+   * `get_recent_requests` / `tail_logs` / `get_trace`" a compile-time guarantee — a remote caller cannot
    * even pass a reader that would leak DevError stacks (absolute fs paths) or access-log
    * paths to a read-scoped bearer.
    */

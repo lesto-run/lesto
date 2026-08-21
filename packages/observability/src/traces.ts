@@ -20,7 +20,7 @@ import type { OtlpHttpExporterOptions } from "./otlp";
 import type { BrowserSpan } from "./rum";
 import { Tracer } from "./tracer";
 import type { InboundTrace } from "./tracer";
-import type { Span, SpanData } from "./types";
+import type { Span, SpanData, SpanExporter } from "./types";
 
 /**
  * The environment a {@link tracesFromEnv} reads — the two-env-var setup, plus a
@@ -427,11 +427,20 @@ export function createTraces(options: TracesOptions): Traces {
 /**
  * Build a {@link Traces} from the environment, or `undefined` when tracing is off.
  *
- * `LESTO_OTLP_URL` is the on switch: absent, we return `undefined` and the app
- * runs with NO tracer (zero spans, zero overhead). Present, we construct an
- * `OtlpHttpExporter` over the parsed headers + service name, a `Tracer` over it,
- * and the live handle. `currentSpan` and `fetchFn` are injected so the runtime
- * wires the request-span seam and a worker passes its own `fetch`.
+ * `LESTO_OTLP_URL` is the on switch for the COLLECTOR: absent, nothing is shipped
+ * anywhere. Present, we construct an `OtlpHttpExporter` over the parsed headers +
+ * service name. `currentSpan` and `fetchFn` are injected so the runtime wires the
+ * request-span seam and a worker passes its own `fetch`.
+ *
+ * `spanSink` is an additional, IN-PROCESS observer of every exported span — the
+ * `lesto dev` trace ring (ADR 0048 Phase 0.2). It is a TEE, never a replacement:
+ * with a collector configured, every span goes to BOTH. And it is a second way to
+ * turn tracing on — with NO collector configured but a sink supplied, spans are
+ * still minted and still reach the sink, while `flush()` is a no-op because there
+ * is nowhere to ship them. That is what lets the dev loop hold a queryable trace
+ * without asking a developer to run an OTLP collector. With NEITHER, we return
+ * `undefined` and the app runs with no tracer at all (zero spans, zero overhead) —
+ * unchanged.
  *
  * This is the construction the CLI calls for `lesto serve`/`dev`; the edge adapter
  * mirrors it with the worker `env` and `ctx.waitUntil(traces.flush())`.
@@ -442,28 +451,43 @@ export function tracesFromEnv(
     readonly currentSpan?: CurrentSpan;
     readonly fetchFn?: typeof fetch;
     readonly onError?: (error: unknown) => void;
+    readonly spanSink?: SpanExporter;
   } = {},
 ): Traces | undefined {
   const url = env.LESTO_OTLP_URL;
 
-  // The on switch: no collector configured means no tracing at all.
-  if (url === undefined || url === "") return undefined;
+  const collector =
+    url === undefined || url === ""
+      ? undefined
+      : new OtlpHttpExporter({
+          url,
+          headers: parseOtlpHeaders(env.LESTO_OTLP_HEADERS),
+          serviceName: env.LESTO_OTLP_SERVICE ?? "lesto",
+          ...(options.fetchFn === undefined ? {} : { fetchFn: options.fetchFn }),
+          ...(options.onError === undefined ? {} : { onError: options.onError }),
+        } satisfies OtlpHttpExporterOptions);
 
-  const exporterOptions: OtlpHttpExporterOptions = {
-    url,
-    headers: parseOtlpHeaders(env.LESTO_OTLP_HEADERS),
-    serviceName: env.LESTO_OTLP_SERVICE ?? "lesto",
-    ...(options.fetchFn === undefined ? {} : { fetchFn: options.fetchFn }),
-    ...(options.onError === undefined ? {} : { onError: options.onError }),
+  const { spanSink } = options;
+
+  // Nowhere for a span to go — neither a collector nor a local sink — so mint none.
+  if (collector === undefined && spanSink === undefined) return undefined;
+
+  // The ONE seam every span passes: the tracer's finished spans AND the browser
+  // receiver's pre-built ones (below). Teeing here is why the ring holds both.
+  const exporter: SpanExporter = {
+    export: (span) => {
+      collector?.export(span);
+      spanSink?.export(span);
+    },
   };
-
-  const exporter = new OtlpHttpExporter(exporterOptions);
 
   const tracer = new Tracer({ exporter });
 
   return createTraces({
     tracer,
-    flush: () => exporter.flush(),
+    // No collector means nothing to ship: flushing is honestly a no-op rather than
+    // a pretended success against an exporter that does not exist.
+    flush: () => collector?.flush() ?? Promise.resolve(),
     // The browser-spans seam writes pre-built spans straight to this exporter, so
     // a RUM span shares the collector + trace id with the server spans the tracer
     // feeds. Wired here so the env-driven app gets the join for free.

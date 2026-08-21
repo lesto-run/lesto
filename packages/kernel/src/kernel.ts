@@ -138,6 +138,9 @@ export interface AccessLogEntry {
   /** The per-request id, shared with the request context and the request span. */
   readonly requestId: string;
 
+  /** The trace this request ran on, when a tracer is wired; absent when it is not. */
+  readonly traceId?: string;
+
   /** Present (`true`) only when the response body tore down mid-stream. */
   readonly truncated?: boolean;
 

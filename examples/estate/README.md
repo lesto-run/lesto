@@ -33,8 +33,9 @@ one origin, one cookie.
 `lesto dev` also stands up the **dev MCP control plane** (ADR 0032) on a loopback
 port — it prints the URL and a per-session `x-lesto-dev-token` to stderr on boot.
 An agent (or `curl`) can call `get_dev_diagnostics` to read the current build/reload
-error, `get_recent_requests` to read the live access log, and `tail_logs` to read
-the dev-loop activity — the agent-native dev loop, dogfooded on this app. The plane
+error, `get_recent_requests` to read the live access log, `tail_logs` to read
+the dev-loop activity, and `get_trace` (preview) to read the spans one of those
+requests produced — the agent-native dev loop, dogfooded on this app. The plane
 is **dev-only**: `bun run build` / `deploy` (below) never mount it.
 
 **Production shape** — prerender then path-mount:

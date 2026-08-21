@@ -23,7 +23,13 @@ import { currentRequestSpan } from "@lesto/web";
 import type { HandleOptions, LestoResponse, UiDialect } from "@lesto/web";
 
 import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
-import type { CurrentSpan, TraceSeams, Traces, TracesEnv } from "@lesto/observability";
+import type {
+  CurrentSpan,
+  SpanExporter,
+  TraceSeams,
+  Traces,
+  TracesEnv,
+} from "@lesto/observability";
 
 import type { deleteEntry, persistEntries, pruneEntries } from "@lesto/content-store";
 import type { RuntimeEntry } from "@lesto/content-core";
@@ -661,8 +667,13 @@ export interface CliDeps {
    * as a seam so a test can inject a `ServeTracing` whose `stopInterval` is a spy and
    * assert the teardown paths (graceful shutdown AND the dev MCP-reject unwind) actually
    * stop it — a lifecycle a real `unref`'d interval otherwise makes unobservable.
+   *
+   * `spanSink` is the in-process observer of every exported span — `lesto dev` passes
+   * the dev-state ring (ADR 0048 Phase 0.2), `lesto serve` passes nothing. It TEES:
+   * a configured collector still gets every span. It is also a second way to turn
+   * tracing on, so the dev loop holds a queryable trace with no collector running.
    */
-  buildServeTracing?: (deps: CliDeps) => ServeTracing | undefined;
+  buildServeTracing?: (deps: CliDeps, spanSink?: SpanExporter) => ServeTracing | undefined;
 
   /** Where a line of output goes (the bin passes `console.log`). */
   out: (line: string) => void;
@@ -821,9 +832,12 @@ export interface ServeTracing {
  * Construct the OTLP tracer from the environment and the flush lifecycle a
  * long-lived server runs.
  *
- * `tracesFromEnv` reads the two-var setup (`LESTO_OTLP_URL` is the on switch) and
- * builds the `Tracer` + `OtlpHttpExporter`; absent a URL it returns `undefined`
- * and so do we — the server runs untraced, zero overhead. With tracing on we
+ * `tracesFromEnv` reads the two-var setup (`LESTO_OTLP_URL` is the collector's on
+ * switch) and builds the `Tracer` + `OtlpHttpExporter`; absent a URL AND absent a
+ * `spanSink` it returns `undefined` and so do we — the server runs untraced, zero
+ * overhead. A `spanSink` alone turns tracing on locally (spans are minted and land
+ * in the sink; `flush` ships nothing, because there is nowhere to ship). With
+ * tracing on we
  * start the steady flush interval and hand back the serve-options slice
  * (request tracer + `traceparent` parser + an `onDrain` final flush). The request
  * span seam reads `context.span`, so a db query or inline job fired during a
@@ -834,8 +848,11 @@ export interface ServeTracing {
  * is `traces.flush()` (an edge worker calls it from `ctx.waitUntil`); here the
  * node tier flushes on an interval AND on drain.
  */
-function buildServeTracing(deps: CliDeps): ServeTracing | undefined {
-  const traces = tracesFromEnv(deps.env ?? {}, { currentSpan: requestSpan });
+function buildServeTracing(deps: CliDeps, spanSink?: SpanExporter): ServeTracing | undefined {
+  const traces = tracesFromEnv(deps.env ?? {}, {
+    currentSpan: requestSpan,
+    ...(spanSink === undefined ? {} : { spanSink }),
+  });
 
   if (traces === undefined) return undefined;
 
@@ -2016,14 +2033,29 @@ async function readHtmlBody(body: LestoResponse["body"]): Promise<string> {
  * takes effect on the next request with no socket churn.
  */
 async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
-  // Tracing is wired on `dev` exactly as on `serve` (off unless `LESTO_OTLP_URL`
-  // is set), so a developer sees the same spans locally that production emits.
+  // The live-dev-state ring (ADR 0032 Phase 1) + its composed trace ring (ADR 0048
+  // Phase 0.2), when the bin wired one: `runDev` fills both as it works so the dev
+  // MCP introspection tools can read them. Absent → every write below is a no-op and
+  // behaviour is unchanged. Read FIRST because the tracing built below tees into it.
+  const devState = deps.devState;
+
+  // Tracing on `dev` is `serve`'s, plus the dev trace ring (ADR 0048 Phase 0.2):
+  // every exported span is TEED into the ring, so `get_trace` can answer what
+  // actually happened inside a request. Passing the sink also turns tracing ON when
+  // no `LESTO_OTLP_URL` is set — spans are minted in-process and go nowhere else —
+  // because a ring that fills only for a developer already running an OTLP collector
+  // would not be a queryable span store at all. `serve` passes no sink, so its
+  // "off unless LESTO_OTLP_URL" behaviour is untouched.
+  //
   // Built BEFORE the app so its `seams` thread into `loadApp` — a project whose
   // `lesto.app.ts` default-exports a config factory wires `db.onQuery` and a
   // query run during a dev request becomes a `db.query` child span. Built through the
   // `deps` seam (defaulting to the internal builder) so a test can observe the
   // teardown-path `stopInterval`; the bin never overrides it.
-  const tracing = (deps.buildServeTracing ?? buildServeTracing)(deps);
+  const tracing = (deps.buildServeTracing ?? buildServeTracing)(
+    deps,
+    devState === undefined ? undefined : { export: (span) => devState.recordSpan(span) },
+  );
 
   const config = await deps.loadApp(tracing?.seams);
 
@@ -2066,11 +2098,6 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
   // otherwise leaves the page — and its island state — exactly as before the overlay
   // existed. A route change reloads regardless (a new route needs a fresh document).
   let overlayUp = false;
-
-  // The live-dev-state ring (ADR 0032 Phase 1), when the bin wired one: `runDev` fills
-  // it as it works so the dev MCP introspection tools can read it. Absent → every write
-  // below is a no-op and behaviour is unchanged.
-  const devState = deps.devState;
 
   // Emit a dev-loop activity line to stderr AND (when wired) the dev-state log ring, so
   // `tail_logs` surfaces the same events the developer sees on the console.
@@ -2260,6 +2287,9 @@ async function runDev(args: readonly string[], deps: CliDeps): Promise<number> {
         ? {}
         : {
             logRequest: (entry: AccessEntry) => {
+              // The entry carries the `traceId` the runtime stamped on it beside
+              // the request span (ADR 0048 Phase 0.2), so recording it is all the
+              // correlation `get_trace({ requestId })` needs.
               devState.recordRequest(entry);
               defaultLogRequest(entry);
             },

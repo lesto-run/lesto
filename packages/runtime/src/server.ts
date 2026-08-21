@@ -143,6 +143,18 @@ export interface AccessEntry {
   readonly requestId: string;
 
   /**
+   * The id of the trace this request ran on, when a tracer is wired; absent when
+   * it is not (the untraced default).
+   *
+   * The access line and the request span are minted by the same code and settled
+   * in the same `finally`, so this is the correlation at its source — a consumer
+   * that keeps both an access log and a span store (`lesto dev`'s rings) can join
+   * them without re-deriving the link from a span ATTRIBUTE, which is a field a
+   * client-supplied span could otherwise set.
+   */
+  readonly traceId?: string;
+
+  /**
    * Whether the response body was truncated — the stream tore down mid-flight
    * (the producer errored, or the client hung up) so the client received an
    * incomplete body. Present (`true`) only on a truncated streamed response;
@@ -1860,6 +1872,10 @@ async function handleAdmitted(
         status,
         ms: deps.now() - start,
         requestId,
+        // The span is right here, about to be stamped and ended below — so the
+        // access line carries the trace it ran on rather than leaving a consumer
+        // to rebuild that link from a span attribute.
+        ...(span === undefined ? {} : { traceId: span.data.traceId }),
         ...(truncated ? { truncated: true } : {}),
       });
 

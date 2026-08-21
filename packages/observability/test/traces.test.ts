@@ -435,6 +435,53 @@ describe("tracesFromEnv", () => {
     expect(tracesFromEnv({ LESTO_OTLP_URL: "" })).toBeUndefined();
   });
 
+  it("tees every span to an injected spanSink AS WELL AS the collector", async () => {
+    // The dev trace ring (ADR 0048 Phase 0.2) observes in-process; it never
+    // replaces the collector, so a configured OTLP endpoint still receives the span.
+    const { fetchFn, calls } = fakeFetch();
+    const sink = new InMemoryExporter();
+
+    const traces = tracesFromEnv(
+      { LESTO_OTLP_URL: "http://collector:4318/v1/traces" },
+      { fetchFn, spanSink: sink },
+    );
+
+    traces!.seams.onQuery({ sql: "SELECT 1", durationMs: 1 });
+    // A browser span rides the OTHER path into the same seam — pre-built, ids kept.
+    traces!.seams.onBrowserSpan({
+      traceId: "a".repeat(32),
+      spanId: "b".repeat(16),
+      name: "browser.navigation",
+      startedAt: 1,
+      endedAt: 2,
+      attributes: {},
+      status: 1,
+    });
+
+    await traces!.flush();
+
+    expect(sink.spans.map((span) => span.name)).toEqual(["db.query", "browser.navigation"]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("turns tracing ON for a spanSink alone — no collector, so flush is a no-op", async () => {
+    // What makes the dev ring real: a developer running no OTLP collector still
+    // gets minted spans, in-process only. Nothing is shipped anywhere.
+    const { fetchFn, calls } = fakeFetch();
+    const sink = new InMemoryExporter();
+
+    const traces = tracesFromEnv({}, { fetchFn, spanSink: sink });
+
+    expect(traces).toBeDefined();
+
+    traces!.seams.onQuery({ sql: "SELECT 1", durationMs: 1 });
+
+    await expect(traces!.flush()).resolves.toBeUndefined();
+
+    expect(sink.spans.map((span) => span.name)).toEqual(["db.query"]);
+    expect(calls).toHaveLength(0);
+  });
+
   it("builds a live Traces from the env and flushes spans to the configured collector", async () => {
     const { fetchFn, calls } = fakeFetch();
 
