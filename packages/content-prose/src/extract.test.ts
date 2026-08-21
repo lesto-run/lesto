@@ -145,3 +145,50 @@ describe("extract", () => {
     expect(allText).toContain("Cell");
   });
 });
+
+const kinds = (source: string) => extract(source).map((s) => `${s.kind}:${s.text}`);
+
+describe("span kind", () => {
+  it("labels each block kind", () => {
+    expect(kinds("# Title\nBody\n- Item\n> Quote\n| a | b |")).toEqual([
+      "heading:Title",
+      "paragraph:Body",
+      "listItem:Item",
+      "blockquote:Quote",
+      "tableRow:| a | b |",
+    ]);
+  });
+
+  it("labels an ordered list item", () => {
+    expect(kinds("1. First")).toEqual(["listItem:First"]);
+  });
+
+  it("labels a star bullet, whose marker the emphasis pass blanks", () => {
+    // extract() blanks a single `*` before classification, so the kind must be
+    // read from the original source line, not from the working copy.
+    expect(kinds("* First\n* Second")).toEqual(["listItem:First", "listItem:Second"]);
+  });
+
+  it("does not mistake emphasis for a list marker", () => {
+    expect(kinds("*emphasis* leads this line")).toEqual([
+      "paragraph:emphasis",
+      "paragraph:leads this line",
+    ]);
+  });
+
+  it("strips the marker of a nested list item and keeps the offset", () => {
+    const source = "- top\n  - nested";
+    const spans = extract(source);
+    expect(spans.map((s) => s.text)).toEqual(["top", "nested"]);
+    for (const span of spans) {
+      expect(source.slice(span.offset, span.offset + span.text.length)).toBe(span.text);
+    }
+  });
+
+  it("keeps span offsets faithful for every block marker", () => {
+    const source = "# Head\n\n  Indented body text\n\n  - nested item\n\n> quoted line";
+    for (const span of extract(source)) {
+      expect(source.slice(span.offset, span.offset + span.text.length)).toBe(span.text);
+    }
+  });
+});

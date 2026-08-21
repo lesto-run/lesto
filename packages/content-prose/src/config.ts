@@ -21,6 +21,7 @@ export const RULE_NAMES = [
   "cliches",
   "readability",
   "spelling",
+  "ste",
 ] as const;
 
 export type RuleName = (typeof RULE_NAMES)[number];
@@ -64,9 +65,10 @@ export interface ResolvedConfig {
 
 /**
  * Default severity for each prose rule.
- * Most rules are warnings; repeated and profanity are errors.
+ * Most rules are warnings; repeated, profanity and spelling are errors.
+ * `ste` is off: ASD-STE100 is a house style, not a general prose default.
  */
-export const DEFAULT_SEVERITIES: Record<RuleName, "warn" | "error"> = {
+export const DEFAULT_SEVERITIES: Record<RuleName, "off" | "warn" | "error"> = {
   fillers: "warn",
   weasel: "warn",
   hedge: "warn",
@@ -79,6 +81,7 @@ export const DEFAULT_SEVERITIES: Record<RuleName, "warn" | "error"> = {
   cliches: "warn",
   readability: "warn",
   spelling: "error",
+  ste: "off",
 };
 
 /**
@@ -103,7 +106,7 @@ export const A11Y_DEFAULT_SEVERITIES: Record<A11yRuleName, "warn" | "error"> = {
  */
 export function normalizeSeverity(
   value: RuleSeverity | undefined,
-  defaultSeverity: "warn" | "error",
+  defaultSeverity: "off" | "warn" | "error",
 ): "off" | "warn" | "error" {
   if (value === undefined) return defaultSeverity;
   if (value === 0 || value === "off") return "off";

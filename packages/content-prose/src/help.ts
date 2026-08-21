@@ -90,6 +90,16 @@ export const RULE_HELP: Record<string, HelpGenerator> = {
     prompt: `Correct the spelling of "${match}".`,
   }),
 
+  // Fallback help for the ASD-STE100 rule. The `ste` rule attaches per-check
+  // help to each diagnostic, so this only serves direct getHelpForRule calls.
+  ste: () => ({
+    help: "This text does not follow ASD-STE100 Simplified Technical English. STE keeps sentences short, uses one approved word per meaning, and allows only simple verb tenses.",
+    suggestion:
+      "Rewrite in short sentences. Use the active voice, one idea per sentence, and a simple tense.",
+    prompt:
+      "Rewrite this text in ASD-STE100 Simplified Technical English: short sentences (20 words or fewer), active voice, one idea per sentence, simple tenses, no contractions, and at most 3 nouns in a row.",
+  }),
+
   // A11y (accessibility) rules
   altText: () => ({
     help: "Images must have alt text for screen reader users and when images fail to load. Alt text describes the image content and purpose.",

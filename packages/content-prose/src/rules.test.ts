@@ -179,8 +179,8 @@ describe("simplify", () => {
 });
 
 describe("rules array", () => {
-  it("exports all 12 rules", () => {
-    expect(rules).toHaveLength(12);
+  it("exports all 13 rules", () => {
+    expect(rules).toHaveLength(13);
   });
 
   it("each rule is a function", () => {

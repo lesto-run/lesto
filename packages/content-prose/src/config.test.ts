@@ -23,8 +23,12 @@ describe("RULE_NAMES", () => {
     expect(RULE_NAMES).toContain("readability");
   });
 
-  it("has 12 rules", () => {
-    expect(RULE_NAMES).toHaveLength(12);
+  it("includes the ste rule", () => {
+    expect(RULE_NAMES).toContain("ste");
+  });
+
+  it("has 13 rules", () => {
+    expect(RULE_NAMES).toHaveLength(13);
   });
 });
 
@@ -33,6 +37,10 @@ describe("DEFAULT_SEVERITIES", () => {
     for (const ruleName of RULE_NAMES) {
       expect(DEFAULT_SEVERITIES[ruleName]).toBeDefined();
     }
+  });
+
+  it("sets ste off by default", () => {
+    expect(DEFAULT_SEVERITIES.ste).toBe("off");
   });
 
   it("sets repeated and profanity as error", () => {

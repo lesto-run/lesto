@@ -2,7 +2,6 @@
  * Built-in Prose Rules - OOP + FP refactoring with RuleContext class and declarative registry.
  */
 import type { Rule, Diagnostic } from "./types.js";
-import { offsetToPositionFast, type LineIndex } from "./position.js";
 import type { RuleName } from "./config.js";
 import { cuss } from "cuss";
 import { fillers as fillersList } from "fillers";
@@ -10,20 +9,23 @@ import { hedges as hedgesList } from "hedges";
 import { weasels as weaselsList } from "weasels";
 // @ts-expect-error - no-cliches has no types
 import noCliches from "no-cliches";
-import { getHelpForRule } from "./help.js";
 import { tokenizeSentences, calculateARI } from "./sentence-tokenizer.js";
 import { getSpellCheckerSync } from "./spelling.js";
+import { RuleContext, escapeRegex, preserveCase } from "./rule-context.js";
+import { ste } from "./ste.js";
 
 // Word Lists & Pattern Utilities
+/** Build a case-insensitive, word-bounded alternation over a word list. */
+const wordListPattern = (words: string[]): RegExp =>
+  new RegExp(`\\b(${words.map(escapeRegex).join("|")})\\b`, "gi");
+
 const fillersWords = fillersList as string[],
   hedgesWords = hedgesList as string[],
   weaselsWords = weaselsList as string[];
 const cussWords = cuss as Record<string, number>;
-const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const wordListPattern = (words: string[]): RegExp =>
-  new RegExp(`\\b(${words.map(escapeRegex).join("|")})\\b`, "gi");
 
 // Data Maps
+/** Corporate-speak simplifications. */
 const SIMPLIFY_MAP: Record<string, string> = {
   utilize: "use",
   utilizes: "uses",
@@ -89,76 +91,12 @@ const P = {
   spelling: /\b([a-zA-Z]+(?:'[a-zA-Z]+)?)\b/g,
 } as const;
 
-// RuleContext - Core class for all rule execution
-class RuleContext {
-  constructor(
-    readonly file: string,
-    readonly lineIndex: LineIndex,
-    readonly severity: Diagnostic["severity"] = "warning",
-  ) {}
-
-  diag(
-    rule: string,
-    offset: number,
-    message: string,
-    matchText: string,
-    extra?: Partial<Pick<Diagnostic, "length" | "fix" | "help" | "suggestion" | "prompt">>,
-  ): Diagnostic {
-    const { line, column } = offsetToPositionFast(this.lineIndex, offset);
-    const id = `${rule}-${offset}-${matchText
-      .slice(0, 20)
-      .toLowerCase()
-      .replace(/\s+/g, "_")
-      .replace(/[^a-z0-9_]/g, "")}`;
-    return {
-      id,
-      rule,
-      message,
-      file: this.file,
-      offset,
-      line,
-      column,
-      severity: this.severity,
-      ...extra,
-    };
-  }
-
-  *scan(text: string, pattern: RegExp, baseOffset = 0) {
-    pattern.lastIndex = 0;
-    for (let m; (m = pattern.exec(text)); ) {
-      if (!m[0].length) {
-        pattern.lastIndex++;
-        continue;
-      }
-      yield { text: m[0], groups: m.slice(1), offset: baseOffset + m.index, index: m.index };
-    }
-  }
-
-  withHelp(rule: string, match: string, extra?: Partial<Diagnostic>): Partial<Diagnostic> {
-    const h = getHelpForRule(rule, match);
-    return {
-      ...extra,
-      ...(h?.help === undefined ? {} : { help: h.help }),
-      ...(h?.suggestion === undefined ? {} : { suggestion: h.suggestion }),
-      ...(h?.prompt === undefined ? {} : { prompt: h.prompt }),
-    };
-  }
-}
-
 // Fix Helpers
 const getRemovalRange = (spanText: string, i: number, len: number, off: number) => {
   const e = i + len;
   const [s, end] =
     spanText[e] === " " ? [i, e + 1] : i > 0 && spanText[i - 1] === " " ? [i - 1, e] : [i, e];
   return { start: off + s, end: off + end };
-};
-
-const preserveCase = (o: string, r: string): string => {
-  const oFirst = o[0],
-    rFirst = r[0];
-  if (!o || !r || oFirst === undefined || rFirst === undefined) return r;
-  if (o === o.toUpperCase()) return r.toUpperCase();
-  return oFirst === oFirst.toUpperCase() ? rFirst.toUpperCase() + r.slice(1) : r;
 };
 
 // Rule Factory - Pattern-based rule with optional removal fix
@@ -378,6 +316,7 @@ export const ruleRegistry: Record<RuleName, Rule> = {
   cliches,
   readability,
   spelling,
+  ste,
 };
 /** @deprecated Use ruleRegistry for config-aware linting. */
 export const rules: Rule[] = Object.values(ruleRegistry);

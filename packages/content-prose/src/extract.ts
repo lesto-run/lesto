@@ -5,7 +5,7 @@
  * This approach is faster and works in web workers (no DOM dependency).
  */
 
-import type { TextSpan } from "./types.js";
+import type { SpanKind, TextSpan } from "./types.js";
 
 /**
  * Extract text spans from markdown content.
@@ -80,17 +80,34 @@ export function extract(content: string): TextSpan[] {
   for (const skip of mergedSkipRanges) {
     if (pos < skip.start) {
       // Extract spans from this region
-      extractSpansFromRegion(workingContent, pos, skip.start, spans);
+      extractSpansFromRegion(workingContent, content, pos, skip.start, spans);
     }
     pos = skip.end;
   }
 
   // Handle remaining content after last skip region
   if (pos < workingContent.length) {
-    extractSpansFromRegion(workingContent, pos, workingContent.length, spans);
+    extractSpansFromRegion(workingContent, content, pos, workingContent.length, spans);
   }
 
   return spans;
+}
+
+/**
+ * Classify a line by the markdown marker it starts with.
+ * An unmarked line is paragraph text - including a wrapped continuation line.
+ *
+ * This reads the ORIGINAL source line, not the working copy. The working copy
+ * has already blanked single `*` emphasis markers, which would erase a `* item`
+ * list marker and make the item look like a paragraph.
+ */
+function classifyLine(line: string): SpanKind {
+  const trimmed = line.trimStart();
+  if (trimmed.startsWith("|")) return "tableRow";
+  if (/^#{1,6}\s/.test(trimmed)) return "heading";
+  if (trimmed.startsWith(">")) return "blockquote";
+  if (/^(?:[-*+]\s|\d+\.\s)/.test(trimmed)) return "listItem";
+  return "paragraph";
 }
 
 /**
@@ -99,6 +116,7 @@ export function extract(content: string): TextSpan[] {
  */
 function extractSpansFromRegion(
   content: string,
+  source: string,
   start: number,
   end: number,
   spans: TextSpan[],
@@ -110,14 +128,18 @@ function extractSpansFromRegion(
   let lineOffset = start;
 
   for (const line of lines) {
-    // Skip markdown headings markers, list markers, blockquote markers
-    // but keep the text content
-    const textMatch = line.match(/^(?:#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s*)?(.*)$/);
-    const text = textMatch?.[1] ?? line;
+    // Strip markdown heading, list and blockquote markers but keep the text
+    // content. The marker is captured so the span can record which kind of
+    // block it came from - rules that reason about sentences and paragraphs
+    // need to know where one block ends and the next begins.
+    const textMatch = line.match(/^[ \t]*(#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s*)?(.*)$/);
+    const text = textMatch?.[2] ?? line;
     // Calculate prefix length directly - indexOf can return wrong position
     // if the captured text happens to appear earlier in the line
     // e.g., "## ## ##" - indexOf("## ##") returns 0, but prefix is 3 chars
     const textStart = textMatch ? line.length - text.length : 0;
+    // The working copy preserves length, so the same range indexes the source.
+    const kind = classifyLine(source.slice(lineOffset, lineOffset + line.length));
 
     if (text.trim()) {
       // Find contiguous text runs (split by multiple spaces or special chars)
@@ -132,6 +154,7 @@ function extractSpansFromRegion(
           spans.push({
             text: spanText,
             offset: spanOffset,
+            kind,
           });
         }
       }

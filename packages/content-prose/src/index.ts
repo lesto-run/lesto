@@ -93,6 +93,7 @@ async function dispatchCustomRuleAsync(
 // Re-export building blocks for custom linting pipelines
 export { extract } from "./extract.js";
 export { rules, ruleRegistry } from "./rules.js";
+export { ste, STE_LIMITS } from "./ste.js";
 export { createLineIndex } from "./position.js";
 export { format } from "./format.js";
 export {
@@ -122,6 +123,7 @@ export type {
   LintResult,
   RichLintResult,
   Severity,
+  SpanKind,
   TextSpan,
   Fix,
   Rule,

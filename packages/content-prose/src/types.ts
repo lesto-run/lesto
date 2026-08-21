@@ -46,9 +46,17 @@ export interface RichLintResult extends LintResult {
   };
 }
 
+/** The kind of markdown block a span was extracted from. */
+export type SpanKind = "paragraph" | "heading" | "listItem" | "blockquote" | "tableRow";
+
 export interface TextSpan {
   text: string;
   offset: number;
+  /**
+   * The markdown block this span came from. Absent when spans are built by hand
+   * rather than by extract(); consumers should treat absent as "paragraph".
+   */
+  kind?: SpanKind;
 }
 
 export type Rule = (spans: TextSpan[], file: string, lineIndex: LineIndex) => Diagnostic[];
