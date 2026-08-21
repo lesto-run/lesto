@@ -10,9 +10,21 @@
  * helper — the two pieces of client code the framework ships.
  */
 
-export { hydrateDocumentIslands, hydrateIslands } from "./hydrate";
+// The mount half plus its teardown half: `MountFn` returns a `Disposer` the
+// runtime retains per container, so a DOM swap can END an island instead of
+// orphaning its React root (and the poll timers / focus listeners its effects
+// registered). `disposeDetachedIslands` takes whatever the document has let go —
+// what soft nav runs after every swap, and what an app that swaps DOM itself must
+// run too — and `islandDisposer` is the caller-held handle for one island.
+export {
+  disposeDetachedIslands,
+  hydrateDocumentIslands,
+  hydrateIslands,
+  islandDisposer,
+} from "./hydrate";
 export type {
   Disconnect,
+  Disposer,
   HydrateOptions,
   HydrationResult,
   IslandRoot,

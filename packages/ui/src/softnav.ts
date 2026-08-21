@@ -45,7 +45,7 @@
  */
 
 import { UiError } from "./errors";
-import { hydrateDocumentIslands } from "./hydrate";
+import { disposeDetachedIslands, hydrateDocumentIslands } from "./hydrate";
 import type { HydrateOptions, HydrationResult, IslandRoot } from "./hydrate";
 import type { Registry } from "./registry";
 import { eligibleAnchor, LAYOUT_ATTR, PREFETCH_ATTR, RELOAD_ATTR } from "./softnav-contract";
@@ -145,6 +145,11 @@ export interface SwapResult {
  * (root = `<body>`). A caller can inject a finer swap (a single content region, a
  * view-transition wrapper for Bet I) without this module knowing how the page is
  * structured; a finer swap that wants scoped re-hydration returns its own `root`.
+ *
+ * **Teardown is the runtime's, not the swapper's.** Whatever a swap detaches from
+ * the live document has its islands disposed immediately afterwards (the runtime
+ * sweeps every retained island the document no longer holds), so an injected swap
+ * never has to know about island lifetimes.
  */
 export type PageSwapper = (html: string, doc: Document) => SwapResult | string | undefined;
 
@@ -369,6 +374,11 @@ const defaultFetchPage: PageFetcher = async (url, signal) => {
  * Replace a live element's CONTENTS with a fetched element's children, importing
  * the fetched nodes into the live document. Shared by the full-body swap and the
  * partial layout swap so the import-and-replace rule lives in one place.
+ *
+ * It does not tear anything down: `replaceChildren` detaches DOM without stopping
+ * what is mounted in it, and the caller sweeps the detached islands one statement
+ * later ({@link disposeDetachedIslands}) — which covers an injected swapper too,
+ * so doing it here as well would only be the same work twice.
  */
 function replaceContents(live: Element, fetched: Element, doc: Document): void {
   live.replaceChildren(...Array.from(fetched.childNodes).map((node) => doc.importNode(node, true)));
@@ -680,6 +690,15 @@ export function enableSoftNav(registry: Registry, options: SoftNavOptions = {}):
       }
 
       const { title, root } = readSwapResult(swap(html, doc), doc);
+
+      // Whatever the swap detached is now dead DOM with live islands still mounted
+      // in it: a React root keeps its effects, its `useQuery` poll timer, and its
+      // focus/online listeners running for the life of the tab. This is the ONE
+      // teardown point, so an INJECTED `swap` — which owns its own DOM replacement
+      // and which this module cannot instrument — is covered exactly like the
+      // default. It runs in the same synchronous job as the swap, so no timer or
+      // effect can observe the window in between.
+      disposeDetachedIslands();
 
       if (title !== undefined) doc.title = title;
 
@@ -1036,6 +1055,11 @@ export function enableDevPageRefresh(
     const { html } = await fetchPage(doc.URL, new AbortController().signal);
 
     const { title, root } = readSwapResult(swap(html, doc), doc);
+
+    // Same teardown contract as a soft navigation: end the islands the swap just
+    // detached before re-hydrating, so a saved file cannot pile up a live root per
+    // reload.
+    disposeDetachedIslands();
 
     if (title !== undefined) doc.title = title;
 

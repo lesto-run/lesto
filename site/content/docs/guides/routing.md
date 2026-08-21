@@ -194,6 +194,11 @@ updates history, and restores scroll — no full reload, no white flash. Back an
 Forward replay the same swap from `popstate`, restoring each entry's saved scroll
 position.
 
+The swap also **unmounts** the islands it replaces, so a swapped-out island stops
+work it started: a `useQuery` with a `refetchInterval` stops polling, and its
+refetch-on-focus and refetch-on-reconnect listeners come off. An island in a
+layout the swap preserved keeps running, and keeps its state.
+
 ```tsx
 import { Link } from "@lesto/ui";
 import { enableSoftNav, hydrateDocumentIslands } from "@lesto/ui/client";

@@ -113,6 +113,19 @@ a plain object, so every decline branch is unit-tested with no DOM.
   `test/soft-nav.test.tsx` drives the whole loop (forward swap, history URL update,
   Back replay) through the real app under jsdom, with `fetchPage` wired to
   `app.handle`.
+- **The swap ENDS what it replaces (amended 2026-08-18, ADR 0048 Phase 0.1).** As
+  first shipped, the swap was a bare `replaceChildren`: it detached the old DOM and
+  tore down nothing, so every navigation orphaned a React root with live effects —
+  and a `useQuery` `refetchInterval` / focus / reconnect registration kept firing
+  against DOM no user could see, for the life of the tab. `MountFn` now returns a
+  `Disposer`, `hydrateIslands` retains it per container, and after every swap the
+  runtime sweeps the islands the document no longer holds
+  (`disposeDetachedIslands`) — ONE endpoint, so an INJECTED `PageSwapper` the
+  runtime cannot instrument is covered exactly like the default. A
+  layout-preserving partial swap disposes only the inner region's islands: the
+  preserved outer layout stays connected and keeps its mounted state, which is the
+  whole point of the partial swap. A second call on a retained handle raises the
+  coded `UI_ISLAND_ALREADY_DISPOSED`.
 
 ### Security — what the swap does and does not add
 

@@ -15,11 +15,23 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Registry } from "@lesto/ui";
-import { enableSoftNav } from "@lesto/ui/client";
+import { act } from "react";
+
+import { ISLAND_ATTR, Registry, UiError } from "@lesto/ui";
+import { enableSoftNav, hydrateDocumentIslands, islandDisposer } from "@lesto/ui/client";
+import type { Disposer, ObserveFn } from "@lesto/ui/client";
 
 import { buildApp } from "../src/app";
+import DeferredPanel from "../app/islands/deferred-panel";
+import LiveListing from "../app/islands/live-listing";
+import SaveNote from "../app/islands/save-note";
 import type { LestoResponse } from "@lesto/web";
+
+/**
+ * jsdom has no `IntersectionObserver`, so the `visible` island's observation is
+ * injected: it watches nothing and never reports the region seen.
+ */
+const neverVisible: ObserveFn = () => () => undefined;
 
 /** Drain a page's streamed body to a string. */
 async function drain(response: LestoResponse): Promise<string> {
@@ -61,7 +73,9 @@ describe("soft navigation over the file-routed gallery (ADR 0024)", () => {
     window.history.replaceState(null, "", "/lab/gallery");
     const indexHtml = await drain(await app.handle("GET", "/lab/gallery"));
     const indexBody = new DOMParser().parseFromString(indexHtml, "text/html").body;
-    document.body.replaceChildren(...Array.from(indexBody.childNodes).map((n) => document.importNode(n, true)));
+    document.body.replaceChildren(
+      ...Array.from(indexBody.childNodes).map((n) => document.importNode(n, true)),
+    );
 
     // Wire soft nav's fetch to the real app — a "navigation" is an app.handle call.
     const fetched: string[] = [];
@@ -110,7 +124,9 @@ describe("soft navigation over the file-routed gallery (ADR 0024)", () => {
     window.history.replaceState(null, "", "/lab/gallery");
     const indexHtml = await drain(await app.handle("GET", "/lab/gallery"));
     const indexBody = new DOMParser().parseFromString(indexHtml, "text/html").body;
-    document.body.replaceChildren(...Array.from(indexBody.childNodes).map((n) => document.importNode(n, true)));
+    document.body.replaceChildren(
+      ...Array.from(indexBody.childNodes).map((n) => document.importNode(n, true)),
+    );
 
     const fetchPage = vi.fn(async (url: string) => {
       const path = new URL(url, "http://localhost:3000").pathname;
@@ -123,9 +139,7 @@ describe("soft navigation over the file-routed gallery (ADR 0024)", () => {
     });
 
     // Forward to the detail page...
-    document
-      .querySelector<HTMLAnchorElement>('a[href="/lab/gallery/bel-air-glen"]')
-      ?.click();
+    document.querySelector<HTMLAnchorElement>('a[href="/lab/gallery/bel-air-glen"]')?.click();
     await vi.waitFor(() =>
       expect(document.body.innerHTML).toContain('data-file-route="gallery-detail"'),
     );
@@ -138,6 +152,88 @@ describe("soft navigation over the file-routed gallery (ADR 0024)", () => {
     );
 
     expect(window.location.pathname).toBe("/lab/gallery");
+
+    disable();
+  });
+
+  it("disposes the swapped-out page's islands — the dispose contract (ADR 0048)", async () => {
+    // `/lab` carries three real islands. A soft navigation away from it must END
+    // them: a detached React root keeps its effects — and a `useQuery` poll or a
+    // focus listener registered in one — running for the life of the tab.
+    const app = await buildApp();
+
+    // The LiveListing island fetches on mount through the typed client; answer it
+    // here so the island mounts deterministically with no real network.
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: () =>
+          Promise.resolve({
+            id: "malibu-cliff",
+            title: "Malibu Cliff House",
+            neighborhood: "Malibu",
+            price: 100,
+          }),
+      } as unknown as Response),
+    );
+
+    window.history.replaceState(null, "", "/lab");
+    const labHtml = await drain(await app.handle("GET", "/lab"));
+    const labBody = new DOMParser().parseFromString(labHtml, "text/html").body;
+    document.body.replaceChildren(
+      ...Array.from(labBody.childNodes).map((n) => document.importNode(n, true)),
+    );
+
+    // The estate island registry, as `client.tsx` builds it — plus the two islands
+    // `/lab` adds beyond the marketing header.
+    const registry = new Registry()
+      .defineClient(LiveListing.island)
+      .defineClient(SaveNote.island)
+      .defineClient(DeferredPanel.island);
+
+    act(() => {
+      hydrateDocumentIslands(registry, { observe: neverVisible });
+    });
+
+    // Every island shell on the page now holds a teardown — mounted roots for the
+    // eager two, the pending observation for the deferred one.
+    const shells = Array.from(document.querySelectorAll(`[${ISLAND_ATTR}]`));
+    const handles = shells.map((shell) => islandDisposer(shell));
+
+    expect(shells).toHaveLength(3);
+    expect(handles.every((handle) => typeof handle === "function")).toBe(true);
+
+    const disable = enableSoftNav(registry, {
+      fetchPage: async (url: string) => {
+        const path = new URL(url, "http://localhost:3000").pathname;
+
+        return { html: await drain(await app.handle("GET", path)), url };
+      },
+      window: { scrollX: 0, scrollY: 0, scrollTo: () => {} },
+    });
+
+    document.querySelector<HTMLAnchorElement>('a[href="/lab/streaming"]')?.click();
+
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain("the listings render resolved"),
+    );
+
+    // Each retained handle has already run — the only way a second call raises the
+    // coded double-dispose error.
+    for (const handle of handles) {
+      let caught: unknown;
+
+      try {
+        (handle as Disposer)();
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(UiError);
+      expect((caught as UiError).code).toBe("UI_ISLAND_ALREADY_DISPOSED");
+    }
 
     disable();
   });

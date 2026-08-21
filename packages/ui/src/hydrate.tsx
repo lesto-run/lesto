@@ -46,6 +46,13 @@
  * a visible one in its result: found, pending, reported under `deferred`, with
  * the eventual mount (or failure) appended to the caller-held arrays.
  *
+ * A mount is a two-sided contract: `MountFn` returns a `Disposer`, and the runtime
+ * RETAINS it per container. That is what lets a later DOM swap end an island
+ * instead of orphaning it — detaching a container does not stop the React root
+ * inside it, nor the effects it registered (a `useQuery` poll timer keeps firing
+ * against detached DOM forever). Soft navigation drains the retained handles after
+ * every swap; `disposeDetachedIslands` and `islandDisposer` are that surface.
+ *
  * Everything that varies is injected, so the whole runtime is exercised under
  * jsdom with no real browser:
  *   - `root`     — where to look for shells (defaults to `document`);
@@ -185,12 +192,36 @@ export type ObserveFn = (container: Element, onVisible: () => void) => Disconnec
 export type Disconnect = () => void;
 
 /**
+ * Take one mounted island back down — the other half of a {@link MountFn}.
+ *
+ * A mount that brings an island to life owns live resources: a React root, its
+ * effects, and anything those effects registered (a `useQuery` poll timer, a
+ * focus/online listener — see `data-client.ts`). Detaching the island's DOM does
+ * NOT stop any of it; only running this does.
+ *
+ * Called AT MOST ONCE. The runtime retains it per container and drops the entry
+ * as it runs, so it can never drive a second teardown; a caller that holds one
+ * through {@link islandDisposer} and calls it twice gets a coded
+ * `UI_ISLAND_ALREADY_DISPOSED` rather than a double `root.unmount()`.
+ */
+export type Disposer = () => void;
+
+/**
  * How to bring one island to life. `ssr` tells the mount whether the container
  * already holds the component's server-rendered output (hydrate it) or only a
  * fallback (mount fresh). `onRecoverableError` is the sink the hydrate path wires
  * to React's recoverable-error callback.
+ *
+ * It RETURNS a {@link Disposer}: a mount that cannot say how to take the island
+ * down leaves a live root behind every time the DOM under it is swapped, which is
+ * exactly the leak this contract closes. The runtime retains what a mount returns
+ * (see {@link disposeDetachedIslands}).
  */
-export type MountFn = (container: Element, element: ReactElement, context: MountContext) => void;
+export type MountFn = (
+  container: Element,
+  element: ReactElement,
+  context: MountContext,
+) => Disposer;
 
 /** The non-element inputs a mount needs to choose and configure its strategy. */
 export interface MountContext {
@@ -265,12 +296,18 @@ export interface HydrateOptions {
  */
 const reactMount: MountFn = (container, element, context) => {
   if (context.ssr) {
-    hydrateRoot(container, element, { onRecoverableError: context.onRecoverableError });
+    const root = hydrateRoot(container, element, {
+      onRecoverableError: context.onRecoverableError,
+    });
 
-    return;
+    return () => root.unmount();
   }
 
-  createRoot(container).render(element);
+  const root = createRoot(container);
+
+  root.render(element);
+
+  return () => root.unmount();
 };
 
 /** Default sink: surface a recoverable hydration error on the console, don't hide it. */
@@ -308,6 +345,133 @@ const intersectionObserve: ObserveFn = (container, onVisible) => {
 
   return () => observer.disconnect();
 };
+
+/** One retained island: the id it was mounted under, and how to take it down. */
+interface LiveIsland {
+  id: string;
+  dispose: Disposer;
+}
+
+/**
+ * Every live island mount, keyed by the container it owns.
+ *
+ * Browser-module state, deliberately — a React root already lives on its
+ * container, and this is the framework's parallel bookkeeping so the swap that
+ * detaches a container can also END it. Without it, `hydrateIslands` has no way to
+ * answer "what is mounted here?", and a soft navigation's `replaceChildren`
+ * silently orphans every root it detaches (with its effects, its poll timers, and
+ * its focus/online listeners still live).
+ *
+ * It is DRAINED, never merely appended to: running a handle removes its entry
+ * ({@link disposeOnce}), and {@link disposeDetachedIslands} takes everything the
+ * document has let go — which every swap runs, so an app on `enableSoftNav` never
+ * accumulates. An app that swaps DOM ITSELF and never soft-navigates does: each
+ * `hydrateIslands` call retains one entry per container, and an entry is a STRONG
+ * reference that keeps its detached subtree alive. Such an app must call
+ * {@link disposeDetachedIslands} after it detaches — that is the price of a
+ * registry that can find a container the document no longer holds.
+ */
+const liveIslands = new Map<Element, LiveIsland>();
+
+/**
+ * Wrap a raw {@link Disposer} so it runs exactly once: the first call deregisters
+ * the island and tears it down, and a second raises the coded
+ * `UI_ISLAND_ALREADY_DISPOSED` instead of driving a second `root.unmount()`.
+ *
+ * Deregistration happens BEFORE the teardown runs, so a disposer that throws
+ * leaves no zombie entry behind for a later sweep to call again.
+ */
+function disposeOnce(container: Element, id: string, dispose: Disposer): Disposer {
+  let spent = false;
+
+  return () => {
+    if (spent) {
+      throw new UiError("UI_ISLAND_ALREADY_DISPOSED", `island "${id}" was already disposed`, {
+        id,
+      });
+    }
+
+    spent = true;
+
+    liveIslands.delete(container);
+
+    dispose();
+  };
+}
+
+/**
+ * Run and drop `container`'s retained teardown, if any, containing a throw.
+ *
+ * A disposer belongs to the island being REPLACED or swept, so its failure is that
+ * island's, not the caller's: it must not abort a sweep mid-navigation, and it must
+ * not fail the mount that is taking its place. Reported, never propagated — the
+ * same one-broken-region-cannot-take-the-page-down contract the mount loop keeps.
+ */
+function releaseIsland(container: Element): string | undefined {
+  const live = liveIslands.get(container);
+
+  if (live === undefined) return undefined;
+
+  try {
+    live.dispose();
+  } catch (error) {
+    console.error(`[lesto/ui] island "${live.id}" failed to dispose`, error);
+  }
+
+  return live.id;
+}
+
+/** Retain `dispose` as the teardown for the island mounted into `container`. */
+function retainIsland(container: Element, id: string, dispose: Disposer): void {
+  liveIslands.set(container, { id, dispose: disposeOnce(container, id, dispose) });
+}
+
+/**
+ * The teardown handle retained for `container`, or `undefined` when nothing is
+ * retained there (nothing mounted, or it was already disposed).
+ *
+ * The caller-held half of the dispose contract: an app that removes an island's
+ * region itself — a modal host, a virtualized list, a hand-rolled router — must be
+ * able to end that island rather than leave a root running under detached DOM.
+ * Calling the returned handle twice throws `UI_ISLAND_ALREADY_DISPOSED`.
+ *
+ * A `"visible"` island that has not yet been seen retains a handle too: its
+ * teardown stops the pending observation rather than unmounting a root.
+ */
+export function islandDisposer(container: Element): Disposer | undefined {
+  return liveIslands.get(container)?.dispose;
+}
+
+/**
+ * Dispose every island whose container has left the document, returning the ids
+ * taken down.
+ *
+ * The ONE teardown endpoint, on purpose. Disposing the swap's own subtree
+ * *before* `replaceChildren` was tried and removed: it covered only the swaps this
+ * package writes, while an injected {@link PageSwapper} owns its own DOM
+ * replacement and would still have leaked — so everything it disposed, this swept
+ * one statement later anyway. Sweeping by CONNECTEDNESS covers both, and it runs
+ * in the same synchronous job as the swap, so no timer, effect, or microtask can
+ * observe the window between detaching a container and ending its island.
+ *
+ * An id in the result is one whose retained teardown RAN — a mounted island's root
+ * unmount, or a not-yet-seen `"visible"` island's pending observation.
+ *
+ * A teardown that THROWS is contained, not propagated: the sweep runs mid-
+ * navigation, so one broken disposer must not abort the rest or kill the
+ * navigation — the same one-broken-region-cannot-take-the-page-down contract the
+ * mount loop keeps. Such an id is still in the result — it names an island the
+ * registry let go, which is what the caller asked about, not a promise the
+ * teardown succeeded.
+ */
+export function disposeDetachedIslands(): string[] {
+  // Snapshot first: each `dispose()` mutates the registry it is being read from.
+  const doomed = [...liveIslands].filter(([container]) => !container.isConnected);
+
+  for (const [container] of doomed) releaseIsland(container);
+
+  return doomed.map(([, live]) => live.id);
+}
 
 /**
  * Hydrate every island in an explicit `manifest` array, pairing each mount's `id`
@@ -385,11 +549,21 @@ export function hydrateIslands(
     container: Element,
     props: Record<string, unknown>,
   ): void => {
+    // A container that still holds a live island — a re-hydrate over the same
+    // shell — is taken down BEFORE the new mount, or the first root keeps running
+    // its effects under DOM the second one now owns. Contained on its own: a
+    // teardown that throws belongs to the OLD island and must not fail the new one.
+    releaseIsland(container);
+
     try {
-      mount(container, createElement(component, props), {
+      const dispose = mount(container, createElement(component, props), {
         ssr: entry.ssr,
         onRecoverableError,
       });
+
+      // Retain the teardown so the swap that later detaches this container can
+      // END the island rather than orphan it (see `disposeDetachedIslands`).
+      retainIsland(container, entry.id, dispose);
 
       mounted.push(entry.id);
     } catch (error) {
@@ -427,9 +601,27 @@ export function hydrateIslands(
     const componentReady: Promise<NonNullable<ClientComponentDef["component"]>> =
       def.component === undefined ? def.load() : Promise.resolve(def.component);
 
+    // Retain a CANCEL for the in-flight mount before anything can land. A soft
+    // navigation while a chunk or a bind is still arriving would otherwise find
+    // nothing to dispose, and the mount would then land in a container the
+    // document has already let go — a live root nothing can reach, which is the
+    // exact leak this contract closes. Disposing the pending island (a sweep, or a
+    // caller's handle) trips this instead, and the mount is simply abandoned.
+    let cancelled = false;
+
+    retainIsland(container, entry.id, () => {
+      cancelled = true;
+    });
+
     Promise.all([componentReady, resolveBinds(entry, bindTimeoutMs)]).then(
-      ([component, data]) => finish(entry, component, container, { ...entry.props, ...data }),
+      ([component, data]) =>
+        cancelled ? undefined : finish(entry, component, container, { ...entry.props, ...data }),
       (error: unknown) => {
+        // The island is dead: drop its pending cancel, or the ring would hold an
+        // entry for a mount that will never come. Already gone when the island was
+        // swept before its chunk failed.
+        releaseIsland(container);
+
         onMountError(error, { id: entry.id, component: entry.component });
 
         failed.push(entry.id);
@@ -483,15 +675,39 @@ export function hydrateIslands(
       // teardown here keeps every observer — real or injected — behaving the same.
       let mountedOnce = false;
 
+      // Symmetric with `finish`: a re-hydrate over a container that is already
+      // being watched must end the first observation, or its observer keeps a
+      // strong reference to the element for the life of the page.
+      liveIslands.get(container)?.dispose();
+
       const disconnect = observe(container, () => {
         if (mountedOnce) return;
 
         mountedOnce = true;
 
-        mountOne(entry, def, container);
+        // End the pending observation THROUGH its retained handle rather than
+        // dropping the entry raw. That handle IS `disconnect`, so this both stops
+        // the watching exactly once and marks the handle spent — without which a
+        // caller holding it (see {@link islandDisposer}) would later run it, evict
+        // the MOUNT's teardown from the registry, and orphan the very React root
+        // this contract exists to end.
+        releaseIsland(container);
 
-        disconnect();
+        mountOne(entry, def, container);
       });
+
+      // Retain the pending OBSERVATION as this container's teardown. A page that
+      // navigates away before the region is ever seen has no mount to dispose, but
+      // it does leave an observer holding a detached element — a real
+      // `IntersectionObserver` keeps a strong reference to every target it watches.
+      //
+      // Guarded, because `observe` is an injected seam and one that reports
+      // visibility SYNCHRONOUSLY has already mounted by the time this line runs:
+      // retaining unconditionally would overwrite the mount's teardown with a spent
+      // disconnect and orphan the root, which is the exact leak this closes. That
+      // observer still has to be stopped — nothing else holds it.
+      if (mountedOnce) disconnect();
+      else retainIsland(container, entry.id, disconnect);
 
       continue;
     }

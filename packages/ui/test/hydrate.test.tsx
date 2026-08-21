@@ -7,8 +7,15 @@ import { createElement } from "react";
 import { ISLAND_ATTR, Registry, UiError } from "../src/index";
 import { renderPage, renderPageMarkup } from "../src/server";
 import type { ClientComponentDef, ComponentDef, IslandMount } from "../src/index";
-import { hydrateIslands } from "../src/hydrate";
-import type { MountErrorSink, MountFn, ObserveFn } from "../src/hydrate";
+import { disposeDetachedIslands, hydrateIslands, islandDisposer } from "../src/hydrate";
+import type { Disposer, MountErrorSink, MountFn, ObserveFn } from "../src/hydrate";
+
+/**
+ * The teardown an injected test `mount` returns when the test does not care about
+ * disposal — the seam's contract is "say how to take this down", and a fake that
+ * mounts nothing has nothing to take down.
+ */
+const noopDispose: Disposer = () => undefined;
 
 // ---------------------------------------------------------------------------
 // Client components used as hydration targets. Each renders something the test
@@ -106,6 +113,10 @@ function paint(tree: unknown): ReturnType<typeof renderPage>["islands"] {
 
 afterEach(() => {
   document.body.innerHTML = "";
+  // Blanking the body only DETACHES the islands a test mounted; their React roots
+  // are still live until something ends them. Drain the registry so no root — and
+  // no retained handle — survives into the next test.
+  disposeDetachedIslands();
   delete window.__lestoData;
   vi.restoreAllMocks();
 });
@@ -137,6 +148,8 @@ describe("hydrateIslands — deferred islands (createRoot)", () => {
       const props = (element as { props: Record<string, unknown> }).props;
 
       mounts.push({ id: container.getAttribute(ISLAND_ATTR), plan: props.plan, ssr: context.ssr });
+
+      return noopDispose;
     };
 
     const result = hydrateIslands(registry(), manifest, { mount });
@@ -202,6 +215,8 @@ describe("hydrateIslands — ssr islands (hydrateRoot)", () => {
     const mount: MountFn = (_container, _element, context) => {
       sawSsr = context.ssr;
       sawSink = typeof context.onRecoverableError === "function";
+
+      return noopDispose;
     };
 
     hydrateIslands(registry(), manifest, { mount });
@@ -255,7 +270,11 @@ describe("hydrateIslands — pairing and drift", () => {
     const calls: string[] = [];
 
     const result = hydrateIslands(registry(), manifest, {
-      mount: (container) => calls.push(container.tagName),
+      mount: (container) => {
+        calls.push(container.tagName);
+
+        return noopDispose;
+      },
     });
 
     expect(result).toEqual({ mounted: [], missing: ["$"], failed: [], deferred: [] });
@@ -270,7 +289,7 @@ describe("hydrateIslands — pairing and drift", () => {
     const result = hydrateIslands(
       registry(),
       [{ id: "$", component: "Account", props: { plan: "y" }, ssr: false }],
-      { root, mount: () => undefined },
+      { root, mount: () => noopDispose },
     );
 
     expect(result).toEqual({ mounted: ["$"], missing: [], failed: [], deferred: [] });
@@ -292,7 +311,14 @@ describe("hydrateIslands — pairing and drift", () => {
     const result = hydrateIslands(
       registry(),
       [{ id, component: "Account", props: { plan: "z" }, ssr: false }],
-      { root, mount: (container) => void seen.push(container) },
+      {
+        root,
+        mount: (container) => {
+          seen.push(container);
+
+          return noopDispose;
+        },
+      },
     );
 
     expect(result).toEqual({ mounted: [id], missing: [], failed: [], deferred: [] });
@@ -317,7 +343,11 @@ describe("hydrateIslands — pairing and drift", () => {
         { id: "ok", component: "Account", props: { plan: "live" }, ssr: false },
       ],
       {
-        mount: (container) => void mounted.push(container.getAttribute(ISLAND_ATTR) as string),
+        mount: (container) => {
+          mounted.push(container.getAttribute(ISLAND_ATTR) as string);
+
+          return noopDispose;
+        },
         onMountError: (error, info) =>
           errors.push({ error: error as UiError, id: info.id, component: info.component }),
       },
@@ -379,6 +409,8 @@ describe("hydrateIslands — per-island mount resilience", () => {
       }
 
       mounted.push(id as string);
+
+      return noopDispose;
     };
 
     const onMountError: MountErrorSink = (error, info) => {
@@ -1061,5 +1093,462 @@ describe("hydrateIslands — data binds (ADR 0010)", () => {
 
     expect(document.body.querySelector(".lazy-profile")?.textContent).toBe("hi Cleo");
     expect(result.mounted).toEqual(["$"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The dispose contract (ADR 0048 Phase 0.1). A mount that cannot be taken down
+// leaks a React root — with its effects, poll timers, and focus listeners still
+// live — every time the DOM under it is swapped. These tests pin the other half:
+// `MountFn` returns a teardown, the runtime retains it per container, and there
+// are exactly three ways to drain it.
+// ---------------------------------------------------------------------------
+
+/** An observer that reports its region visible before it even returns. */
+const seeImmediately: ObserveFn = (_container, onVisible) => {
+  onVisible();
+
+  return () => undefined;
+};
+
+/** The island shell for `id` in the live document, which the tests tear down by hand. */
+function islandShell(id: string): Element {
+  const container = document.body.querySelector(`[${ISLAND_ATTR}="${id}"]`);
+
+  if (container === null) throw new Error(`no island shell for "${id}"`);
+
+  return container;
+}
+
+/** Hydrate `manifest` inside `act`, so React has committed before the test looks. */
+function hydrate(manifest: readonly IslandMount[]): ReturnType<typeof hydrateIslands> {
+  let result!: ReturnType<typeof hydrateIslands>;
+
+  act(() => {
+    result = hydrateIslands(registry(), manifest);
+  });
+
+  return result;
+}
+
+describe("hydrateIslands — the dispose contract", () => {
+  it("returns a real teardown from the createRoot (ssr: false) mount", () => {
+    hydrate(paint({ type: "Account", props: { plan: "Ada" } }));
+
+    const container = islandShell("$");
+
+    expect(container.querySelector(".live")?.textContent).toBe("Hi, Ada");
+
+    const dispose = islandDisposer(container);
+
+    expect(dispose).toBeTypeOf("function");
+
+    act(() => dispose?.());
+
+    // React cleared the container it owned — the root is genuinely unmounted, not
+    // merely forgotten.
+    expect(container.querySelector(".live")).toBeNull();
+    expect(islandDisposer(container)).toBeUndefined();
+  });
+
+  it("returns a real teardown from the hydrateRoot (ssr: true) mount", () => {
+    // The OTHER default branch: `hydrateRoot` must hand back its root too, or an
+    // ssr island is the one flavour that can never be ended.
+    hydrate(paint({ type: "Stamp", props: { label: "READY" } }));
+
+    const container = islandShell("$");
+
+    expect(container.querySelector(".stamp")?.textContent).toBe("READY");
+
+    act(() => islandDisposer(container)?.());
+
+    expect(container.querySelector(".stamp")).toBeNull();
+    expect(islandDisposer(container)).toBeUndefined();
+  });
+
+  it("throws UI_ISLAND_ALREADY_DISPOSED when a retained handle is called twice", () => {
+    hydrate(paint({ type: "Account", props: { plan: "Ada" } }));
+
+    const dispose = islandDisposer(islandShell("$")) as Disposer;
+
+    act(() => dispose());
+
+    let caught: unknown;
+
+    try {
+      dispose();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(UiError);
+    expect((caught as UiError).code).toBe("UI_ISLAND_ALREADY_DISPOSED");
+    expect((caught as UiError).details).toEqual({ id: "$" });
+    expect(Object.isFrozen((caught as UiError).details)).toBe(true);
+  });
+
+  it("has no teardown for a shell nothing mounted into", () => {
+    paint({ type: "Account", props: { plan: "Ada" } });
+
+    expect(islandDisposer(islandShell("$"))).toBeUndefined();
+  });
+
+  it("ends the previous mount when the same shell is hydrated again", () => {
+    const manifest = paint({ type: "Account", props: { plan: "Ada" } });
+
+    hydrate(manifest);
+
+    const container = islandShell("$");
+    const first = islandDisposer(container) as Disposer;
+
+    act(() => void hydrateIslands(registry(), manifest));
+
+    const second = islandDisposer(container) as Disposer;
+
+    expect(second).not.toBe(first);
+
+    // The first root was ENDED by the re-hydrate, not left running under the
+    // second one: its handle is spent, which only a real teardown makes true.
+    expect(() => first()).toThrow(UiError);
+    expect(container.querySelector(".live")?.textContent).toBe("Hi, Ada");
+  });
+
+  it("disposeDetachedIslands takes exactly what the document let go", () => {
+    document.body.innerHTML =
+      `<div id="host"><div ${ISLAND_ATTR}="gone"></div></div>` +
+      `<div ${ISLAND_ATTR}="stays"></div>`;
+
+    hydrate([
+      { id: "gone", component: "Account", props: { plan: "gone" }, ssr: false },
+      { id: "stays", component: "Account", props: { plan: "stays" }, ssr: false },
+    ]);
+
+    const gone = islandShell("gone");
+    const stays = islandShell("stays");
+
+    // A swap detaches the shell without ending the island — the leak, reproduced.
+    (document.body.querySelector("#host") as Element).replaceChildren();
+
+    expect(gone.isConnected).toBe(false);
+
+    let disposed!: string[];
+
+    act(() => {
+      disposed = disposeDetachedIslands();
+    });
+
+    expect(disposed).toEqual(["gone"]);
+    expect(islandDisposer(gone)).toBeUndefined();
+    expect(islandDisposer(stays)).toBeTypeOf("function");
+  });
+
+  it("stops a never-seen visible island from watching a detached shell", () => {
+    // A `"visible"` island that is swapped away before its region is ever seen has
+    // no root to unmount — but a real `IntersectionObserver` holds a strong
+    // reference to every target it watches, so the observation is the leak.
+    const manifest = paint({ type: "Lazy", props: { tag: "X" } });
+
+    let disconnects = 0;
+
+    const observe: ObserveFn = () => () => {
+      disconnects += 1;
+    };
+
+    const result = hydrateIslands(registry(), manifest, { observe });
+
+    expect(result.deferred).toEqual(["$"]);
+
+    const container = islandShell("$");
+
+    // Nothing mounted, yet the container has a teardown: the pending observation.
+    expect(islandDisposer(container)).toBeTypeOf("function");
+    expect(container.querySelector(".lazy-live")).toBeNull();
+
+    document.body.replaceChildren();
+
+    expect(disposeDetachedIslands()).toEqual(["$"]);
+    expect(disconnects).toBe(1);
+    expect(islandDisposer(container)).toBeUndefined();
+  });
+
+  it("hands the mount's teardown to the container when a visible island goes live", () => {
+    // The regression this pins: the pending OBSERVATION and the eventual MOUNT are
+    // two successive teardowns for one container. If the transition drops the first
+    // entry raw instead of running it, a caller still holding that handle can later
+    // fire it, evict the MOUNT's teardown from the registry, and orphan the very
+    // React root this whole contract exists to end.
+    const manifest = paint({ type: "Lazy", props: { tag: "Y" } });
+
+    let fire: (() => void) | undefined;
+
+    const observe: ObserveFn = (_container, onVisible) => {
+      fire = onVisible;
+
+      return () => undefined;
+    };
+
+    hydrateIslands(registry(), manifest, { observe });
+
+    const container = islandShell("$");
+    const pending = islandDisposer(container) as Disposer;
+
+    act(() => fire?.());
+
+    expect(container.querySelector(".lazy-live")?.textContent).toBe("Y");
+
+    // The observation handle is SPENT, so a caller holding it is told so…
+    expect(() => pending()).toThrow(UiError);
+
+    // …and the mount's own teardown is still the retained one, and still works.
+    const mounted = islandDisposer(container);
+
+    expect(mounted).toBeTypeOf("function");
+    expect(mounted).not.toBe(pending);
+
+    act(() => mounted?.());
+
+    expect(container.querySelector(".lazy-live")).toBeNull();
+  });
+
+  it("abandons a lazy island whose chunk lands AFTER its shell was swapped away", async () => {
+    // The window this closes: between `hydrateIslands` and the chunk resolving,
+    // nothing was retained, so a navigation swept nothing and the mount then
+    // landed in a container the document had already let go — a live root nothing
+    // could reach. On the last navigation of a session it would run forever.
+    let resolveChunk!: (component: NonNullable<ClientComponentDef["component"]>) => void;
+
+    const Slow: ClientComponentDef = {
+      name: "Slow",
+      load: () =>
+        new Promise<NonNullable<ClientComponentDef["component"]>>((resolve) => {
+          resolveChunk = resolve;
+        }),
+    };
+
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+    const container = islandShell("$");
+
+    const result = hydrateIslands(new Registry().defineClient(Slow), [
+      { id: "$", component: "Slow", props: {}, ssr: false },
+    ]);
+
+    expect(result.deferred).toEqual(["$"]);
+    // The in-flight mount is retained, so a sweep can reach it.
+    expect(islandDisposer(container)).toBeTypeOf("function");
+
+    // Navigate: the shell is detached and swept while the chunk is still in flight.
+    document.body.replaceChildren();
+
+    expect(disposeDetachedIslands()).toEqual(["$"]);
+
+    await act(async () => {
+      resolveChunk(() => createElement("span", { className: "slow-live" }, "late"));
+    });
+
+    // The chunk arrived to a container nobody holds: no mount, nothing retained.
+    expect(container.querySelector(".slow-live")).toBeNull();
+    expect(result.mounted).toEqual([]);
+    expect(islandDisposer(container)).toBeUndefined();
+  });
+
+  it("drops the pending entry when a lazy island's chunk FAILS", async () => {
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+    const sunk = new Error("chunk fetch failed");
+
+    const Broken: ClientComponentDef = { name: "Broken", load: () => Promise.reject(sunk) };
+
+    const errors: unknown[] = [];
+
+    let result!: ReturnType<typeof hydrateIslands>;
+
+    act(() => {
+      result = hydrateIslands(
+        new Registry().defineClient(Broken),
+        [{ id: "$", component: "Broken", props: {}, ssr: false }],
+        { onMountError: (error) => errors.push(error) },
+      );
+    });
+
+    await act(async () => {});
+
+    expect(result.failed).toEqual(["$"]);
+    expect(errors).toEqual([sunk]);
+    // No cancel left behind for a mount that will never come.
+    expect(islandDisposer(islandShell("$"))).toBeUndefined();
+  });
+
+  it("reports a chunk that fails AFTER its island was swept, retaining nothing", async () => {
+    let rejectChunk!: (error: unknown) => void;
+
+    const Slow: ClientComponentDef = {
+      name: "Slow",
+      load: () =>
+        new Promise<NonNullable<ClientComponentDef["component"]>>((_resolve, reject) => {
+          rejectChunk = reject;
+        }),
+    };
+
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+    const container = islandShell("$");
+    const errors: unknown[] = [];
+
+    hydrateIslands(
+      new Registry().defineClient(Slow),
+      [{ id: "$", component: "Slow", props: {}, ssr: false }],
+      { onMountError: (error) => errors.push(error) },
+    );
+
+    document.body.replaceChildren();
+    disposeDetachedIslands();
+
+    const sunk = new Error("chunk 404");
+
+    await act(async () => {
+      rejectChunk(sunk);
+    });
+
+    // The failure is still reported; the already-swept entry is not resurrected.
+    expect(errors).toEqual([sunk]);
+    expect(islandDisposer(container)).toBeUndefined();
+  });
+
+  it("keeps the mount's teardown when an observer reports visibility SYNCHRONOUSLY", () => {
+    // `observe` is an injected seam. One that calls back before it returns has
+    // already mounted by the time the runtime retains the pending observation —
+    // retaining unconditionally would overwrite the mount's teardown with a spent
+    // disconnect and orphan the root.
+    const manifest = paint({ type: "Lazy", props: { tag: "S" } });
+
+    act(() => void hydrateIslands(registry(), manifest, { observe: seeImmediately }));
+
+    const container = islandShell("$");
+
+    expect(container.querySelector(".lazy-live")?.textContent).toBe("S");
+
+    act(() => islandDisposer(container)?.());
+
+    // The retained handle was the MOUNT's, so running it unmounts the root.
+    expect(container.querySelector(".lazy-live")).toBeNull();
+  });
+
+  it("stops an observer it will not retain after a SYNCHRONOUS mount", () => {
+    // Nothing else holds that observer: not retaining it AND not disconnecting it
+    // would leave a real `IntersectionObserver` holding the element forever.
+    const manifest = paint({ type: "Lazy", props: { tag: "D" } });
+
+    let disconnects = 0;
+
+    const observe: ObserveFn = (_container, onVisible) => {
+      onVisible();
+
+      return () => {
+        disconnects += 1;
+      };
+    };
+
+    act(() => void hydrateIslands(registry(), manifest, { observe }));
+
+    expect(disconnects).toBe(1);
+  });
+
+  it("ends a still-watching observation when the same shell is hydrated again", () => {
+    const manifest = paint({ type: "Lazy", props: { tag: "R" } });
+
+    let disconnects = 0;
+
+    const observe: ObserveFn = () => () => {
+      disconnects += 1;
+    };
+
+    hydrateIslands(registry(), manifest, { observe });
+    hydrateIslands(registry(), manifest, { observe });
+
+    // Without this the first observer is unreachable from the registry and keeps a
+    // strong reference to the element for the life of the page.
+    expect(disconnects).toBe(1);
+  });
+
+  it("does not fail a re-mount when the PREVIOUS island's teardown throws", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+    const manifest = [{ id: "$", component: "Account", props: { plan: "x" }, ssr: false }];
+
+    let mounts = 0;
+
+    const mount: MountFn = () => {
+      mounts += 1;
+
+      return () => {
+        throw new Error("unmount blew up");
+      };
+    };
+
+    hydrateIslands(registry(), manifest, { mount });
+
+    const second = hydrateIslands(registry(), manifest, { mount });
+
+    // The old island's broken teardown is its own failure, not the new mount's.
+    expect(second).toEqual({ mounted: ["$"], missing: [], failed: [], deferred: [] });
+    expect(mounts).toBe(2);
+    expect(spy.mock.calls[0]?.[0]).toContain('island "$" failed to dispose');
+  });
+
+  it("contains a throwing teardown so one bad island cannot abort a navigation", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="bad"></div><div ${ISLAND_ATTR}="good"></div>`;
+
+    const boom = new Error("unmount blew up");
+
+    const mount: MountFn = (container) =>
+      container.getAttribute(ISLAND_ATTR) === "bad"
+        ? () => {
+            throw boom;
+          }
+        : noopDispose;
+
+    hydrateIslands(
+      registry(),
+      [
+        { id: "bad", component: "Account", props: { plan: "a" }, ssr: false },
+        { id: "good", component: "Account", props: { plan: "b" }, ssr: false },
+      ],
+      { mount },
+    );
+
+    const good = islandShell("good");
+
+    document.body.replaceChildren();
+
+    // The sweep runs mid-navigation: it must not rethrow, and it must still reach
+    // the island AFTER the broken one.
+    expect(() => disposeDetachedIslands()).not.toThrow();
+    expect(islandDisposer(good)).toBeUndefined();
+    expect(spy.mock.calls[0]?.[0]).toContain('island "bad" failed to dispose');
+    expect(spy.mock.calls[0]?.[1]).toBe(boom);
+  });
+
+  it("retains nothing for an island whose mount threw", () => {
+    document.body.innerHTML = `<div ${ISLAND_ATTR}="$"></div>`;
+
+    const boom = new Error("component blew up during render");
+
+    const mount: MountFn = () => {
+      throw boom;
+    };
+
+    const result = hydrateIslands(
+      registry(),
+      [{ id: "$", component: "Account", props: { plan: "x" }, ssr: false }],
+      { mount, onMountError: () => undefined },
+    );
+
+    expect(result.failed).toEqual(["$"]);
+    expect(islandDisposer(islandShell("$"))).toBeUndefined();
   });
 });
