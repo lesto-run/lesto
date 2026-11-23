@@ -213,25 +213,30 @@ const [seat, event] = await db.batch([
 A select yields its rows, `insert(…).values(…)` / `update` / `delete` yield
 `{ changes }`, and `.returning()` yields the inserted row. `rawRows(sql, params)`
 and `rawChanges(sql, params)` add hand-written statements to the same batch. An
-empty batch resolves `[]`. Inside `db.transaction`, `tx.batch` runs in the open
-transaction.
+empty batch resolves `[]`. Inside `db.transaction`, `tx.batch` runs in a
+savepoint of the open transaction. A failed batch rolls back alone, even when
+you catch its error and the transaction commits.
 
 **A batch cannot branch on its own reads.** Every statement is fixed before the
 batch runs, so no JavaScript runs between them. A later statement does see the
-earlier writes in SQL, so move each check into the write itself:
+earlier writes in SQL, so move each check into the write itself. These gates
+work on SQLite, D1 and Postgres:
 
-- `INSERT … SELECT … WHERE <condition>` writes only when the condition holds.
-- `UPDATE … WHERE state = ?` claims a row; `changes()` in the next statement
-  tells you whether the claim landed.
+- `INSERT … SELECT … WHERE EXISTS (…)` writes only when the condition holds.
+- `UPDATE … WHERE state = ?` claims a row only from the state you expect.
 - A `UNIQUE` index refuses a duplicate and rolls the whole batch back.
-- A guard statement can fail on purpose. For example,
-  `rawChanges("INSERT INTO guard (ok) SELECT NULL WHERE changes() = 0")` writes
-  `NULL` into a `NOT NULL` column. It aborts the batch when the earlier write did
-  not happen.
+- A guard statement can fail on purpose. For example, this guard writes `NULL`
+  into a `NOT NULL` column when the claim did not land:
+  `rawChanges("INSERT INTO guard (ok) SELECT NULL WHERE NOT EXISTS (SELECT 1 FROM seats WHERE id = ? AND state = 'taken')", [id])`.
+  The failure aborts the batch.
+
+`changes()` (the row count of the previous statement) also works as a gate, but
+only on SQLite and D1. Postgres has no `changes()`, so a guard built on it fails
+on `@lesto/pg` and Hyperdrive. Use it only in code that never runs on Postgres.
 
 Cloudflare D1 sets this rule: its only atomic primitive is a batch. `db.batch`
-keeps the same rule on every driver. A batch written for SQLite or Postgres
-runs unchanged on D1.
+keeps the same rule on every driver. A batch that uses the portable gates runs
+unchanged on SQLite, D1 and Postgres.
 
 ### The `SqlDatabase` seam
 
@@ -299,7 +304,9 @@ stable `DbErrorCode` such as `DB_EMPTY_INSERT`, `DB_EMPTY_UPDATE`,
   per call**: Cloudflare D1 rejects multi-statement strings.
 - **Observability via `createDb(handle, { onQuery })`.** An optional sink
   receives every executed query's SQL text and `durationMs` — values never
-  appear (they ride `?` placeholders), and a throwing sink is contained.
+  appear (they ride `?` placeholders), and a throwing sink is contained. A
+  batch reports one event. Its `sql` joins the statements with `"; "`, and its
+  `durationMs` covers the whole batch, from the queue wait to the commit.
 
 ## See also
 

@@ -939,12 +939,23 @@ export interface Db {
   batch<const Q extends readonly BatchQuery<unknown>[]>(queries: Q): Promise<BatchResults<Q>>;
 }
 
-/** A single executed query, reported to {@link DbOptions.onQuery}. */
+/**
+ * One executed query — or one executed {@link Db.batch} — reported to
+ * {@link DbOptions.onQuery}.
+ */
 export interface QueryEvent {
-  /** The SQL text sent to the driver (identifiers only — every value rode a `?`). */
+  /**
+   * The SQL text sent to the driver (identifiers only — every value rode a `?`).
+   * For a batch it is every statement's SQL, in order, joined with `"; "`.
+   */
   readonly sql: string;
 
-  /** Wall-clock duration of the driver round-trip, in milliseconds (fractional). */
+  /**
+   * Wall-clock duration in milliseconds (fractional). For one statement it is the
+   * driver round-trip. For a batch it is the whole `batch()` call: queueing behind
+   * other spans, `BEGIN`/`COMMIT` (or the one native `d1.batch()`), and every
+   * statement together.
+   */
   readonly durationMs: number;
 }
 
@@ -970,8 +981,10 @@ export interface DbOptions {
    * Observability seam: invoked once per *executed* query with the SQL text and a
    * measured `durationMs`. Fires for every `get`/`all`/`run` a statement runs —
    * the select/insert/update/delete terminals AND the {@link Db.raw} escape hatch
-   * (`exec` runs no statement and never reports). Default `undefined` = zero
-   * behaviour change and zero measurement cost.
+   * (`exec` runs no statement and never reports). A non-empty {@link Db.batch}
+   * fires ONCE for the whole batch, with the statements' SQL joined by `"; "`
+   * (an empty batch never reports). Default `undefined` = zero behaviour change and
+   * zero measurement cost.
    *
    * The hook NEVER changes the query's result or its timing the caller observes:
    * it runs after the driver resolves and its own throw is swallowed, so a broken

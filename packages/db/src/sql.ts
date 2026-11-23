@@ -110,12 +110,15 @@ export interface SqlDatabase {
    * This is the portable atomic primitive — the only one Cloudflare D1 has (it
    * has no interactive transaction). A batch is fixed up front: no statement can
    * read an earlier statement's result in JS. A later statement DOES see an
-   * earlier statement's writes in SQL (`changes()`, `EXISTS`, a `UNIQUE` index),
-   * so a check moves into the write (`INSERT … SELECT … WHERE`, `UPDATE … WHERE
-   * state = ?`) or into a guard statement that fails and rolls the batch back.
+   * earlier statement's writes in SQL, so a check moves into the write. The
+   * portable gates work on every dialect: `INSERT … SELECT … WHERE [NOT] EXISTS`,
+   * `UPDATE … WHERE state = ?`, a `UNIQUE` index, or a guard statement that fails
+   * and rolls the batch back. `changes()` is SQLite/D1-only: Postgres has no such
+   * function, so a guard built on it fails on `@lesto/pg` and Hyperdrive.
    *
    * An empty batch is a no-op that resolves `[]` without touching the driver.
-   * On a tx handle a batch runs flat inside the open transaction.
+   * On a tx handle a batch runs inside a SAVEPOINT of the open transaction, so a
+   * failed batch rolls back alone even when the caller catches its error.
    */
   batch(statements: readonly BatchStatement[]): Promise<BatchResult[]>;
 }
