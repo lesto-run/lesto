@@ -1,3 +1,4 @@
+import type { BatchStatement } from "@lesto/db";
 import { describe, expect, it } from "vitest";
 
 import { hyperdriveToSqlDatabase } from "../src/index";
@@ -209,6 +210,11 @@ describe("hyperdriveToSqlDatabase — transaction", () => {
   });
 });
 
+/** A parameterless write for a batch. */
+function write(sql: string): BatchStatement {
+  return { sql, params: [], returns: "changes" };
+}
+
 describe("hyperdriveToSqlDatabase — batch", () => {
   it("runs the statements in order inside ONE BEGIN/COMMIT, with per-statement results", async () => {
     const { connection, calls } = makeHyperdrive((text) =>
@@ -303,7 +309,6 @@ describe("hyperdriveToSqlDatabase — batch", () => {
       return { rows: [], rowCount: 1 };
     });
     const db = hyperdriveToSqlDatabase(connection);
-    const write = (sql: string) => ({ sql, params: [], returns: "changes" as const });
 
     const first = db.batch([
       write("INSERT INTO a1 DEFAULT VALUES"),
