@@ -84,8 +84,11 @@ export type {
 
 export { batchViaSavepoint, batchViaTransaction } from "./batch";
 export { createFifoQueue } from "./fifo";
+export { createSpanGuard } from "./span-guard";
+export type { AsyncContext, SpanGuard } from "./span-guard";
 export type { FifoQueue } from "./fifo";
 export { adaptSyncSqlite } from "./sync-sqlite";
+export type { SyncSqliteOptions } from "./sync-sqlite";
 
 export { DbError, LestoError } from "./errors";
 export type { DbErrorCode } from "./errors";

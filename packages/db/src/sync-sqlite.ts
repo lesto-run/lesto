@@ -22,8 +22,18 @@
  * queue. Without that, a solo write issued while another caller's span is open lands inside
  * that span: the span's rollback erases a write that already resolved, and a `changes()` guard
  * in a batch reads the solo statement's count. Statements on a TX handle run directly, because
- * they belong to the span that holds the queue. So inside a `transaction` callback, use `tx`:
- * a root-handle statement there waits for the span it is part of, and never runs.
+ * they belong to the span that holds the queue. So inside a `transaction` callback, use `tx`.
+ *
+ * ## A root statement inside its own span is refused
+ *
+ * A root-handle statement (`exec`, `prepare(...).run/get/all`, `transaction`, `batch`) issued
+ * from INSIDE one of this handle's own span callbacks would queue behind that span and wait
+ * forever. With an injected async context (`options.asyncContext`, a Node/Bun
+ * `AsyncLocalStorage` — `openSqlite` passes one) the span callback runs marked, and such a
+ * statement rejects with the coded `DB_ROOT_STATEMENT_IN_SPAN` instead. A root statement from a
+ * DIFFERENT concurrent caller carries no mark, so it still waits its turn. Without async context
+ * (the browser OPFS driver) nothing is marked and the statement waits as before: the error is
+ * best-effort there, and no timeout replaces it.
  *
  * ## A rejected span does not poison the queue
  *
@@ -49,7 +59,20 @@
 
 import { batchViaSavepoint, batchViaTransaction } from "./batch";
 import { createFifoQueue } from "./fifo";
+import { createSpanGuard } from "./span-guard";
+import type { AsyncContext } from "./span-guard";
 import type { SqlDatabase, SqlStatement } from "./sql";
+
+/** Options for {@link adaptSyncSqlite}. */
+export interface SyncSqliteOptions {
+  /**
+   * Async context (a Node/Bun `AsyncLocalStorage<object>`) used to refuse a
+   * root-handle statement issued from inside one of this handle's own spans with
+   * `DB_ROOT_STATEMENT_IN_SPAN`. Omit it where async context does not exist (the
+   * browser): such a statement then waits for its own span, which never ends.
+   */
+  readonly asyncContext?: AsyncContext<object>;
+}
 
 /**
  * Wrap engine-specific statements (`exec`/`prepare` over ONE synchronous in-process SQLite
@@ -62,25 +85,33 @@ import type { SqlDatabase, SqlStatement } from "./sql";
  * `async (sql) => raw.exec(sql)`) — there is no real I/O latency, so awaiting it is equivalent
  * to the engine's synchronous call, and this function never touches the engine directly.
  */
-export function adaptSyncSqlite(statements: Pick<SqlDatabase, "exec" | "prepare">): SqlDatabase {
+export function adaptSyncSqlite(
+  statements: Pick<SqlDatabase, "exec" | "prepare">,
+  options: SyncSqliteOptions = {},
+): SqlDatabase {
   // One queue for the one connection. Every span (transaction or batch) AND every statement on
   // the root handle goes through it, so a root statement can never land inside another caller's
   // open BEGIN…COMMIT — where a rollback would erase it, or a `changes()` guard would read it.
   // Statements on a tx handle run directly: they belong to the span that holds the queue.
   const queue = createFifoQueue();
+  const guard = createSpanGuard(options.asyncContext);
+
+  // Queue root work, refusing it (as a rejection) when it comes from inside our own span.
+  const queued = <T>(operation: string, work: () => Promise<T>): Promise<T> =>
+    guard.outside(operation, () => queue.run(work));
 
   const queuedPrepare = (sql: string): SqlStatement => {
     const statement = statements.prepare(sql);
 
     return {
-      run: (params) => queue.run(() => statement.run(params)),
-      get: (params) => queue.run(() => statement.get(params)),
-      all: (params) => queue.run(() => statement.all(params)),
+      run: (params) => queued("run", () => statement.run(params)),
+      get: (params) => queued("get", () => statement.get(params)),
+      all: (params) => queued("all", () => statement.all(params)),
     };
   };
 
   const db: SqlDatabase = {
-    exec: (sql) => queue.run(() => statements.exec(sql)),
+    exec: (sql) => queued("exec", () => statements.exec(sql)),
 
     prepare: queuedPrepare,
 
@@ -96,7 +127,7 @@ export function adaptSyncSqlite(statements: Pick<SqlDatabase, "exec" | "prepare"
     // does not poison the queue (see `createFifoQueue`); the caller still receives the
     // original error.
     transaction: <T>(fn: (tx: SqlDatabase) => Promise<T>): Promise<T> =>
-      queue.run(async () => {
+      queued("transaction", async () => {
         await statements.exec("BEGIN");
 
         try {
@@ -112,7 +143,7 @@ export function adaptSyncSqlite(statements: Pick<SqlDatabase, "exec" | "prepare"
             batch: (batched) => batchViaSavepoint(tx, batched),
           };
 
-          const out = await fn(tx);
+          const out = await guard.enter(() => fn(tx));
 
           await statements.exec("COMMIT");
 
@@ -130,7 +161,7 @@ export function adaptSyncSqlite(statements: Pick<SqlDatabase, "exec" | "prepare"
 
     // A batch is one FIFO-serialized transaction span with its statements run in
     // order, so it queues behind (and never interleaves with) any other span.
-    batch: (batched) => batchViaTransaction(db, batched),
+    batch: (batched) => guard.outside("batch", () => batchViaTransaction(db, batched)),
   };
 
   return db;

@@ -194,6 +194,12 @@ await db.transaction(async (tx) => {
 });
 ```
 
+Inside the callback, use `tx` for every query. SQLite has one connection, so
+the root `db` waits until the transaction ends. A root `db` query from inside the
+callback waits for its own transaction, which then never ends. `openSqlite` refuses
+it with the coded `DB_ROOT_STATEMENT_IN_SPAN` instead. In the browser (the OPFS
+driver) there is no async context to detect this, so the query waits.
+
 ## Batches
 
 `db.batch([...])` runs a list of queries as **one atomic unit**: every

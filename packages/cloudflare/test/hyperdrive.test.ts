@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { BatchStatement } from "@lesto/db";
 import { describe, expect, it } from "vitest";
 
@@ -344,6 +346,61 @@ describe("hyperdriveToSqlDatabase — batch", () => {
     const span = db.transaction((tx) => tx.exec("INSERT INTO b DEFAULT VALUES"));
 
     await Promise.all([batched, span]);
+
+    expect(calls.map((c) => c.text)).toEqual([
+      "BEGIN",
+      "INSERT INTO a DEFAULT VALUES",
+      "COMMIT",
+      "BEGIN",
+      "INSERT INTO b DEFAULT VALUES",
+      "COMMIT",
+    ]);
+  });
+});
+
+describe("hyperdriveToSqlDatabase — a root span inside its own span", () => {
+  it("rejects a root transaction or batch with DB_ROOT_STATEMENT_IN_SPAN; the span still commits", async () => {
+    const { connection, calls } = makeHyperdrive(() => ({ rows: [], rowCount: 1 }));
+    const db = hyperdriveToSqlDatabase(connection, {
+      asyncContext: new AsyncLocalStorage<object>(),
+    });
+
+    await db.transaction(async (tx) => {
+      await expect(db.transaction(async () => 1)).rejects.toMatchObject({
+        code: "DB_ROOT_STATEMENT_IN_SPAN",
+        details: { operation: "transaction" },
+      });
+      await expect(db.batch([write("INSERT INTO a DEFAULT VALUES")])).rejects.toMatchObject({
+        code: "DB_ROOT_STATEMENT_IN_SPAN",
+        details: { operation: "batch" },
+      });
+
+      await tx.exec("INSERT INTO b DEFAULT VALUES");
+    });
+
+    expect(calls.map((c) => c.text)).toEqual(["BEGIN", "INSERT INTO b DEFAULT VALUES", "COMMIT"]);
+  });
+
+  it("a concurrent caller outside the span still waits its turn and succeeds", async () => {
+    const { connection, calls } = makeHyperdrive(() => ({ rows: [], rowCount: 1 }));
+    const db = hyperdriveToSqlDatabase(connection, {
+      asyncContext: new AsyncLocalStorage<object>(),
+    });
+
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const span = db.transaction(async (tx) => {
+      await tx.exec("INSERT INTO a DEFAULT VALUES");
+      await gate;
+    });
+    const outside = db.batch([write("INSERT INTO b DEFAULT VALUES")]);
+
+    release?.();
+    await span;
+    await expect(outside).resolves.toEqual([{ returns: "changes", changes: 1 }]);
 
     expect(calls.map((c) => c.text)).toEqual([
       "BEGIN",

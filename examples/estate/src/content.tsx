@@ -14,6 +14,8 @@
  * on every cold start.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { createDb, createTableSql, defineTable, eq, integer, text } from "@lesto/db";
 import type { Db, Dialect, SqlDatabase } from "@lesto/db";
 import { lesto, type Lesto } from "@lesto/web";
@@ -174,7 +176,11 @@ export function d1ContentStore(d1: D1Database): ContentStore {
  */
 export function hyperdriveContentStore(connection: HyperdriveConnection): ContentStore {
   return makeContentStore(async () => {
-    const handle = hyperdriveToSqlDatabase(connection);
+    // `nodejs_compat` gives the Worker `AsyncLocalStorage`, so a root-handle span
+    // started inside one of this handle's own spans fails coded instead of waiting forever.
+    const handle = hyperdriveToSqlDatabase(connection, {
+      asyncContext: new AsyncLocalStorage<object>(),
+    });
 
     return { handle, db: createDb(handle, { dialect: "postgres" }), dialect: "postgres" };
   });

@@ -31,7 +31,13 @@ export type DbErrorCode =
    * tagged for the wrong `returns` — an adapter bug, refused rather than decoded
    * into a wrong value.
    */
-  | "DB_BATCH_RESULT_MISMATCH";
+  | "DB_BATCH_RESULT_MISMATCH"
+  /**
+   * A root-handle statement was issued from inside the handle's own open span
+   * (transaction or batch callback) on a single-connection adapter. It would wait
+   * for that span forever, so it is refused; use the `tx` handle instead.
+   */
+  | "DB_ROOT_STATEMENT_IN_SPAN";
 
 /** Anything the query/DDL layer can refuse to do. */
 export class DbError extends LestoError<DbErrorCode> {

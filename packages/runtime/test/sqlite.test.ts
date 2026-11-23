@@ -55,6 +55,24 @@ describe("openSqlite", () => {
     close();
   });
 
+  it("refuses a root-handle statement inside its own transaction (DB_ROOT_STATEMENT_IN_SPAN) instead of hanging", async () => {
+    const { db, close } = await openSqlite();
+
+    await db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
+
+    await db.transaction(async (tx) => {
+      await tx.prepare("INSERT INTO t (id) VALUES (1)").run();
+
+      await expect(db.prepare("INSERT INTO t (id) VALUES (2)").run()).rejects.toMatchObject({
+        code: "DB_ROOT_STATEMENT_IN_SPAN",
+      });
+    });
+
+    expect(await db.prepare("SELECT id FROM t").all()).toEqual([{ id: 1 }]);
+
+    close();
+  });
+
   it("stamps the sqlite dialect marker on the handle AND on the tx handle", async () => {
     const { db, close } = await openSqlite();
 

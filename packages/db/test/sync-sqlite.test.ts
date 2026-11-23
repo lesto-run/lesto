@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
@@ -147,23 +149,28 @@ describe("adaptSyncSqlite", () => {
 });
 
 /** A real in-memory better-sqlite3 engine behind {@link adaptSyncSqlite} — the runtime's shape. */
-function realSqlite(): { raw: Database.Database; db: SqlDatabase } {
+function realSqlite(withContext = false): { raw: Database.Database; db: SqlDatabase } {
   const raw = new Database(":memory:");
 
-  const db = adaptSyncSqlite({
-    exec: async (sql) => {
-      raw.exec(sql);
-    },
-    prepare: (sql) => {
-      const statement = raw.prepare(sql);
+  const options = withContext ? { asyncContext: new AsyncLocalStorage<object>() } : {};
 
-      return {
-        run: async (params = []) => statement.run(...(params as never[])),
-        get: async (params = []) => statement.get(...(params as never[])),
-        all: async (params = []) => statement.all(...(params as never[])),
-      };
+  const db = adaptSyncSqlite(
+    {
+      exec: async (sql) => {
+        raw.exec(sql);
+      },
+      prepare: (sql) => {
+        const statement = raw.prepare(sql);
+
+        return {
+          run: async (params = []) => statement.run(...(params as never[])),
+          get: async (params = []) => statement.get(...(params as never[])),
+          all: async (params = []) => statement.all(...(params as never[])),
+        };
+      },
     },
-  });
+    options,
+  );
 
   raw.exec("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, state TEXT)");
 
@@ -438,5 +445,141 @@ describe("adaptSyncSqlite batch", () => {
     await Promise.all([first, batched]);
 
     expect(calls).toEqual(["BEGIN", "COMMIT", "BEGIN", "COMMIT"]);
+  });
+});
+
+/** A one-row insert into `items`. */
+function insert(id: number): string {
+  return `INSERT INTO items (id, name) VALUES (${id}, 'n${id}')`;
+}
+
+/** Every `items` id, in order. */
+function ids(raw: Database.Database): unknown[] {
+  return raw.prepare("SELECT id FROM items ORDER BY id").all();
+}
+
+describe("adaptSyncSqlite — a root statement inside its own span", () => {
+  it("rejects every root operation with DB_ROOT_STATEMENT_IN_SPAN, and the span still commits", async () => {
+    const { raw, db } = realSqlite(true);
+    const refused = { code: "DB_ROOT_STATEMENT_IN_SPAN" };
+
+    await db.transaction(async (tx) => {
+      await tx.prepare(insert(1)).run();
+
+      await expect(db.prepare(insert(2)).run()).rejects.toMatchObject({
+        ...refused,
+        details: { operation: "run" },
+      });
+      await expect(db.prepare("SELECT 1").get()).rejects.toMatchObject(refused);
+      await expect(db.prepare("SELECT 1").all()).rejects.toMatchObject(refused);
+      await expect(db.exec(insert(3))).rejects.toMatchObject(refused);
+      await expect(db.transaction(async () => 1)).rejects.toMatchObject(refused);
+      await expect(
+        db.batch([{ sql: insert(4), params: [], returns: "changes" }]),
+      ).rejects.toMatchObject({ ...refused, details: { operation: "batch" } });
+
+      await tx.prepare(insert(5)).run();
+    });
+
+    expect(ids(raw)).toEqual([{ id: 1 }, { id: 5 }]);
+
+    raw.close();
+  });
+
+  it("refuses inside a batch's span too, and the span still rolls back when its callback throws", async () => {
+    const { raw, db } = realSqlite(true);
+
+    await expect(
+      db.transaction(async (tx) => {
+        await tx.batch([{ sql: insert(1), params: [], returns: "changes" }]);
+
+        await db.prepare(insert(2)).run();
+      }),
+    ).rejects.toMatchObject({ code: "DB_ROOT_STATEMENT_IN_SPAN" });
+
+    expect(ids(raw)).toEqual([]);
+
+    // The queue is free again: the root handle works once the span has ended.
+    await db.prepare(insert(3)).run();
+    expect(ids(raw)).toEqual([{ id: 3 }]);
+
+    raw.close();
+  });
+
+  it("a concurrent caller outside the span still waits its turn and succeeds", async () => {
+    const { raw, db } = realSqlite(true);
+
+    let entered: (() => void) | undefined;
+    const opened = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const span = db.transaction(async (tx) => {
+      await tx.prepare(insert(1)).run();
+      entered?.();
+      await gate;
+    });
+
+    await opened;
+    const outside = db.prepare(insert(2)).run();
+    const outsideBatch = db.batch([{ sql: insert(3), params: [], returns: "changes" }]);
+
+    release?.();
+
+    await span;
+    await expect(outside).resolves.toMatchObject({ changes: 1 });
+    await expect(outsideBatch).resolves.toEqual([{ returns: "changes", changes: 1 }]);
+    expect(ids(raw)).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }]);
+
+    raw.close();
+  });
+
+  it("nested tx-handle use still works inside the span", async () => {
+    const { raw, db } = realSqlite(true);
+
+    await db.transaction(async (tx) => {
+      await tx.exec(insert(1));
+      await tx.transaction((inner) => inner.prepare(insert(2)).run());
+      await tx.batch([{ sql: insert(3), params: [], returns: "changes" }]);
+    });
+
+    expect(ids(raw)).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }]);
+
+    raw.close();
+  });
+
+  it("a root statement inside ANOTHER handle's span is not refused", async () => {
+    const first = realSqlite(true);
+    const second = realSqlite(true);
+
+    await first.db.transaction(async () => {
+      await second.db.prepare(insert(1)).run();
+    });
+
+    expect(ids(second.raw)).toEqual([{ id: 1 }]);
+
+    first.raw.close();
+    second.raw.close();
+  });
+
+  it("without async context the guard is best-effort: the statement waits for its own span", async () => {
+    const { raw, db } = realSqlite();
+    let late: Promise<unknown> | undefined;
+
+    await db.transaction(async (tx) => {
+      await tx.prepare(insert(1)).run();
+
+      // Not awaited: awaiting it here would wait for this very span forever.
+      late = db.prepare(insert(2)).run();
+    });
+
+    await expect(late).resolves.toMatchObject({ changes: 1 });
+    expect(ids(raw)).toEqual([{ id: 1 }, { id: 2 }]);
+
+    raw.close();
   });
 });
