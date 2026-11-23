@@ -8,7 +8,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clientDefineMap, envField, PUBLIC_ENV_DEFINE_KEY } from "@lesto/env";
 import { AssetsError, verifyPublicEnvDefine } from "@lesto/assets";
 
-import { createDb, createTableSql, defineTable, dropTableSql, integer, text } from "@lesto/db";
+import {
+  batchViaTransaction,
+  createDb,
+  createTableSql,
+  defineTable,
+  dropTableSql,
+  integer,
+  text,
+} from "@lesto/db";
 import { currentContext, currentRequestSpan, lesto, runWithContext } from "@lesto/web";
 import type { AccessLogEntry, App, LestoAppConfig, KernelDatabase } from "@lesto/kernel";
 import type { MigrationEntry } from "@lesto/migrate";
@@ -110,6 +118,7 @@ function adapt(raw: Database.Database): KernelDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;
@@ -499,6 +508,7 @@ describe("run serve / dev", () => {
           all: () => Promise.reject(new Error("db down")),
         }),
         transaction: (fn) => fn(downConfig.db),
+        batch: (statements) => batchViaTransaction(downConfig.db, statements),
       },
       app: lesto().get("/", (c) => c.text("ok")),
     };

@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  batchViaTransaction,
   boolean,
   createDb,
   createTableSql,
@@ -60,6 +61,7 @@ function adapt(database: Database.Database): SqlDatabase {
       };
     },
     transaction: async (fn) => fn(adapted),
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

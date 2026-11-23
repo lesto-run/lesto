@@ -208,3 +208,68 @@ describe("hyperdriveToSqlDatabase — transaction", () => {
     });
   });
 });
+
+describe("hyperdriveToSqlDatabase — batch", () => {
+  it("runs the statements in order inside ONE BEGIN/COMMIT, with per-statement results", async () => {
+    const { connection, calls } = makeHyperdrive((text) =>
+      text.startsWith("SELECT") ? { rows: [{ id: 1 }], rowCount: 1 } : { rows: [], rowCount: 2 },
+    );
+
+    const results = await hyperdriveToSqlDatabase(connection).batch([
+      { sql: "UPDATE t SET a = ? WHERE b = ?", params: [1, 2], returns: "changes" },
+      { sql: "SELECT * FROM t WHERE a = ?", params: [1], returns: "rows" },
+    ]);
+
+    expect(results).toEqual([
+      { returns: "changes", changes: 2 },
+      { returns: "rows", rows: [{ id: 1 }] },
+    ]);
+    expect(calls).toEqual([
+      { text: "BEGIN", values: [] },
+      { text: "UPDATE t SET a = $1 WHERE b = $2", values: [1, 2] },
+      { text: "SELECT * FROM t WHERE a = $1", values: [1] },
+      { text: "COMMIT", values: [] },
+    ]);
+  });
+
+  it("all-or-nothing: a failing statement rolls back the span and stops the batch", async () => {
+    const violation = new Error("duplicate key value violates unique constraint");
+    const { connection, calls } = makeHyperdrive((text) => {
+      if (text.startsWith("INSERT INTO t (b)")) throw violation;
+
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(
+      hyperdriveToSqlDatabase(connection).batch([
+        { sql: "INSERT INTO t (a) VALUES (?)", params: [1], returns: "changes" },
+        { sql: "INSERT INTO t (b) VALUES (?)", params: [2], returns: "changes" },
+        { sql: "INSERT INTO t (c) VALUES (?)", params: [3], returns: "changes" },
+      ]),
+    ).rejects.toBe(violation);
+
+    expect(calls.map((c) => c.text)).toEqual([
+      "BEGIN",
+      "INSERT INTO t (a) VALUES ($1)",
+      "INSERT INTO t (b) VALUES ($1)",
+      "ROLLBACK",
+    ]);
+  });
+
+  it("an empty batch resolves [] and never opens a transaction", async () => {
+    const { connection, calls } = makeHyperdrive();
+
+    await expect(hyperdriveToSqlDatabase(connection).batch([])).resolves.toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it("a batch on the tx handle runs flat inside the open span (no second BEGIN)", async () => {
+    const { connection, calls } = makeHyperdrive(() => ({ rows: [], rowCount: 1 }));
+
+    await hyperdriveToSqlDatabase(connection).transaction((tx) =>
+      tx.batch([{ sql: "UPDATE t SET a = 1", params: [], returns: "changes" }]),
+    );
+
+    expect(calls.map((c) => c.text)).toEqual(["BEGIN", "UPDATE t SET a = 1", "COMMIT"]);
+  });
+});

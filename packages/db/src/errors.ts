@@ -25,7 +25,13 @@ export type DbErrorCode =
    * is wrong, and rendering the wrong engine's SQL corrupts quietly — so the
    * contradiction is refused loudly here instead of silently picking a side.
    */
-  | "DB_DIALECT_MISMATCH";
+  | "DB_DIALECT_MISMATCH"
+  /**
+   * A driver's `batch()` returned fewer results than statements, or a result
+   * tagged for the wrong `returns` — an adapter bug, refused rather than decoded
+   * into a wrong value.
+   */
+  | "DB_BATCH_RESULT_MISMATCH";
 
 /** Anything the query/DDL layer can refuse to do. */
 export class DbError extends LestoError<DbErrorCode> {

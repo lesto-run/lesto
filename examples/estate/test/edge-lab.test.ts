@@ -14,7 +14,12 @@ import { describe, expect, it } from "vitest";
 import { buildEdgeApp } from "../src/edge";
 import { d1ContentStore, hyperdriveContentStore } from "../src/content";
 import { toFetchHandler } from "@lesto/cloudflare";
-import type { D1Database, D1PreparedStatement, HyperdriveConnection } from "@lesto/cloudflare";
+import type {
+  D1BatchResult,
+  D1Database,
+  D1PreparedStatement,
+  HyperdriveConnection,
+} from "@lesto/cloudflare";
 import type { LestoResponse } from "@lesto/web";
 
 // >= 32 bytes: the secret-strength guard rejects shorter signing secrets.
@@ -41,9 +46,14 @@ async function body(response: LestoResponse): Promise<string> {
   return out + decoder.decode();
 }
 
-/** A fake D1 binding backed by in-process SQLite — the D1 wire shape over real SQL. */
+/**
+ * A fake D1 binding backed by in-process SQLite — the D1 wire shape over real SQL.
+ * `batch` runs every bound statement in ONE SQLite transaction, rolled back on a
+ * throw, the way D1 runs its native batch.
+ */
 function fakeD1(): D1Database {
   const raw = new Database(":memory:");
+  const execute = new WeakMap<D1PreparedStatement, () => D1BatchResult>();
 
   return {
     prepare(sql: string): D1PreparedStatement {
@@ -67,8 +77,20 @@ function fakeD1(): D1Database {
         }),
       };
 
+      execute.set(statement, () => {
+        const prepared = raw.prepare(sql);
+
+        if (prepared.reader) {
+          return { results: prepared.all(...(bound as never[])), meta: { changes: 0 } };
+        }
+
+        return { results: [], meta: { changes: prepared.run(...(bound as never[])).changes } };
+      });
+
       return statement;
     },
+    batch: async (statements) =>
+      raw.transaction(() => statements.map((statement) => execute.get(statement)!()))(),
   };
 }
 

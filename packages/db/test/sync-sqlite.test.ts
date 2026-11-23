@@ -1,3 +1,4 @@
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
 import { adaptSyncSqlite } from "../src/sync-sqlite";
@@ -141,6 +142,158 @@ describe("adaptSyncSqlite", () => {
     await Promise.all([first, second]);
 
     expect(order).toEqual(["first:start", "first:end", "second:start"]);
+    expect(calls).toEqual(["BEGIN", "COMMIT", "BEGIN", "COMMIT"]);
+  });
+});
+
+/** A real in-memory better-sqlite3 engine behind {@link adaptSyncSqlite} — the runtime's shape. */
+function realSqlite(): { raw: Database.Database; db: SqlDatabase } {
+  const raw = new Database(":memory:");
+
+  const db = adaptSyncSqlite({
+    exec: async (sql) => {
+      raw.exec(sql);
+    },
+    prepare: (sql) => {
+      const statement = raw.prepare(sql);
+
+      return {
+        run: async (params = []) => statement.run(...(params as never[])),
+        get: async (params = []) => statement.get(...(params as never[])),
+        all: async (params = []) => statement.all(...(params as never[])),
+      };
+    },
+  });
+
+  raw.exec("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, state TEXT)");
+
+  return { raw, db };
+}
+
+describe("adaptSyncSqlite batch", () => {
+  it("runs the statements in ONE BEGIN/COMMIT span, in order, with per-statement results", async () => {
+    const { raw, db } = realSqlite();
+
+    const results = await db.batch([
+      { sql: "INSERT INTO items (id, name) VALUES (?, ?)", params: [1, "a"], returns: "changes" },
+      { sql: "INSERT INTO items (id, name) VALUES (?, ?)", params: [2, "b"], returns: "changes" },
+      { sql: "UPDATE items SET state = ?", params: ["x"], returns: "changes" },
+      {
+        sql: "INSERT INTO items (id, name) VALUES (?, ?) RETURNING id, name",
+        params: [3, "c"],
+        returns: "rows",
+      },
+      { sql: "SELECT id FROM items ORDER BY id", params: [], returns: "rows" },
+    ]);
+
+    expect(results).toEqual([
+      { returns: "changes", changes: 1 },
+      { returns: "changes", changes: 1 },
+      { returns: "changes", changes: 2 },
+      { returns: "rows", rows: [{ id: 3, name: "c" }] },
+      { returns: "rows", rows: [{ id: 1 }, { id: 2 }, { id: 3 }] },
+    ]);
+
+    raw.close();
+  });
+
+  it("all-or-nothing: a constraint violation mid-batch leaves no earlier write", async () => {
+    const { raw, db } = realSqlite();
+
+    await expect(
+      db.batch([
+        { sql: "INSERT INTO items (id, name) VALUES (1, 'a')", params: [], returns: "changes" },
+        { sql: "INSERT INTO items (id, name) VALUES (2, 'a')", params: [], returns: "changes" },
+        { sql: "INSERT INTO items (id, name) VALUES (3, 'c')", params: [], returns: "changes" },
+      ]),
+    ).rejects.toThrow(/UNIQUE/);
+
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 0 });
+
+    raw.close();
+  });
+
+  it("a changes()- or EXISTS-gated statement sees the earlier write in the same batch", async () => {
+    const { raw, db } = realSqlite();
+
+    raw.exec("INSERT INTO items (id, name, state) VALUES (1, 'a', 'pending')");
+
+    const claim = {
+      sql: "UPDATE items SET state = 'taken' WHERE id = 1 AND state = 'pending'",
+      params: [],
+      returns: "changes" as const,
+    };
+    // A guard that FAILS (NOT NULL) when the claim before it changed no row.
+    const guard = {
+      sql: "INSERT INTO items (id, name) SELECT 99, NULL WHERE changes() = 0",
+      params: [],
+      returns: "changes" as const,
+    };
+    // Writes only when the earlier write in this batch is visible.
+    const follow = {
+      sql: "INSERT INTO items (id, name) SELECT 2, 'seen' WHERE EXISTS (SELECT 1 FROM items WHERE state = 'taken')",
+      params: [],
+      returns: "changes" as const,
+    };
+
+    await expect(db.batch([claim, guard, follow])).resolves.toEqual([
+      { returns: "changes", changes: 1 },
+      { returns: "changes", changes: 0 },
+      { returns: "changes", changes: 1 },
+    ]);
+
+    // The second identical claim changes nothing, so the guard fails and the batch rolls back.
+    await expect(
+      db.batch([
+        { sql: "INSERT INTO items (id, name) VALUES (3, 'c')", params: [], returns: "changes" },
+        claim,
+        guard,
+      ]),
+    ).rejects.toThrow(/NOT NULL/);
+
+    expect(raw.prepare("SELECT id FROM items ORDER BY id").all()).toEqual([{ id: 1 }, { id: 2 }]);
+
+    raw.close();
+  });
+
+  it("an empty batch resolves [] and never opens a span", async () => {
+    const { calls, statements } = createFakeHandle();
+    const db = adaptSyncSqlite(statements);
+
+    await expect(db.batch([])).resolves.toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it("a batch on the tx handle runs flat inside the open span (no second BEGIN)", async () => {
+    const { calls, statements } = createFakeHandle();
+    const db = adaptSyncSqlite(statements);
+
+    await db.transaction((tx) =>
+      tx.batch([{ sql: "UPDATE t SET a = 1", params: [], returns: "changes" }]),
+    );
+
+    expect(calls).toEqual(["BEGIN", "COMMIT"]);
+  });
+
+  it("queues FIFO behind an open transaction — its BEGIN waits for the span to settle", async () => {
+    const { calls, statements } = createFakeHandle();
+    const db = adaptSyncSqlite(statements);
+
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const first = db.transaction(() => gate);
+    const batched = db.batch([{ sql: "UPDATE t SET a = 1", params: [], returns: "changes" }]);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toEqual(["BEGIN"]);
+
+    release?.();
+    await Promise.all([first, batched]);
+
     expect(calls).toEqual(["BEGIN", "COMMIT", "BEGIN", "COMMIT"]);
   });
 });

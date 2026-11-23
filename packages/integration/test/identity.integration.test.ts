@@ -21,7 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "@lesto/kernel";
 import type { LestoAppConfig, KernelDatabase } from "@lesto/kernel";
 import { installSessionSchema, sqlSessionStore } from "@lesto/auth";
-import { createDb } from "@lesto/db";
+import { batchViaTransaction, createDb } from "@lesto/db";
 import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@lesto/ratelimit";
 import { serve } from "@lesto/runtime";
 import type { Server } from "@lesto/runtime";
@@ -122,6 +122,7 @@ function adapt(raw: Database.Database): KernelDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

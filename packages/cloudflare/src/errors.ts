@@ -13,7 +13,9 @@ export type CloudflareErrorCode =
    * cross-statement atomicity (the rate limiter, the queue's batch writes) must
    * fail CLOSED, never open. See `d1.ts`.
    */
-  | "CLOUDFLARE_D1_TRANSACTION_UNSUPPORTED";
+  | "CLOUDFLARE_D1_TRANSACTION_UNSUPPORTED"
+  /** `d1.batch()` resolved fewer results than statements — a binding bug, refused, never guessed. */
+  | "CLOUDFLARE_D1_BATCH_RESULT_MISSING";
 
 /** Anything the Cloudflare adapter can refuse to do. */
 export class CloudflareError extends LestoError<CloudflareErrorCode> {}

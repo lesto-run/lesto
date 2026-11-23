@@ -27,7 +27,7 @@ import { currentRequestSpan, lesto, runWithContext } from "@lesto/web";
 import { parseTraceparent, tracesFromEnv } from "@lesto/observability";
 import type { CurrentSpan, Traces } from "@lesto/observability";
 
-import { createDb } from "@lesto/db";
+import { batchViaTransaction, createDb } from "@lesto/db";
 import type { Db } from "@lesto/db";
 
 import { startOtlpCollector } from "./otlp-collector";
@@ -67,6 +67,7 @@ function adapt(raw: Database.Database): KernelDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

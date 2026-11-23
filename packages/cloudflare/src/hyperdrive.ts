@@ -27,6 +27,7 @@
  * dialect across both Postgres tiers.
  */
 
+import { batchViaTransaction } from "@lesto/db";
 import type { SqlDatabase } from "@lesto/db";
 import { translate } from "@lesto/pg/translate";
 
@@ -107,7 +108,7 @@ export function hyperdriveToSqlDatabase(connection: HyperdriveConnection): SqlDa
     },
   };
 
-  return {
+  const db: SqlDatabase = {
     ...statements,
 
     // The driver marker (see `SqlDatabase.dialect`): Hyperdrive fronts a real
@@ -126,6 +127,7 @@ export function hyperdriveToSqlDatabase(connection: HyperdriveConnection): SqlDa
         ...statements,
         dialect: "postgres",
         transaction: (inner) => inner(tx),
+        batch: (batched) => batchViaTransaction(tx, batched),
       };
 
       try {
@@ -146,5 +148,10 @@ export function hyperdriveToSqlDatabase(connection: HyperdriveConnection): SqlDa
         throw error;
       }
     },
+
+    // A batch is one BEGIN…COMMIT span on the single connection, statements in order.
+    batch: (batched) => batchViaTransaction(db, batched),
   };
+
+  return db;
 }

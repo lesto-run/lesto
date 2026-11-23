@@ -62,7 +62,7 @@ export type {
 } from "./wrangler";
 
 export { d1ToSqlDatabase } from "./d1";
-export type { D1Database, D1PreparedStatement } from "./d1";
+export type { D1BatchResult, D1Database, D1PreparedStatement } from "./d1";
 
 export { hyperdriveToSqlDatabase } from "./hyperdrive";
 export type { Hyperdrive, HyperdriveConnection, HyperdriveQueryResult } from "./hyperdrive";

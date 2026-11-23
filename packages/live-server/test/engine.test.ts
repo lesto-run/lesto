@@ -1,7 +1,16 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createDb, createTableSql, defineTable, eq, integer, text, timestamp } from "@lesto/db";
+import {
+  batchViaTransaction,
+  createDb,
+  createTableSql,
+  defineTable,
+  eq,
+  integer,
+  text,
+  timestamp,
+} from "@lesto/db";
 import type { Db, SqlDatabase } from "@lesto/db";
 import { LiveProtocolError } from "@lesto/live-protocol";
 import type { Cursor, Row, ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
@@ -57,6 +66,7 @@ function adapt(database: Database.Database): SqlDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

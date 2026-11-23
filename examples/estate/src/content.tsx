@@ -120,12 +120,15 @@ async function ensureSeeded(handle: SqlDatabase, db: Db, dialect: Dialect): Prom
   const existing = await db.select().from(pages).where(eq(pages.slug, first.slug)).get();
   if (existing !== undefined) return;
 
-  for (const page of SEED) {
-    await db
-      .insert(pages)
-      .values({ slug: page.slug, title: page.title, tree: JSON.stringify(page.tree) })
-      .run();
-  }
+  // One atomic batch: a cold start that dies mid-seed leaves no half-seeded table,
+  // on D1 (native batch) and on SQLite / Postgres (one transaction) alike.
+  await db.batch(
+    SEED.map((page) =>
+      db
+        .insert(pages)
+        .values({ slug: page.slug, title: page.title, tree: JSON.stringify(page.tree) }),
+    ),
+  );
 }
 
 /** A lazily-opened, seeded content store: a getter that resolves a ready `Db` once. */

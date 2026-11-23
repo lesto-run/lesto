@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 
+import { batchViaTransaction } from "@lesto/db";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installSchema, Queue, QueueError } from "@lesto/queue";
@@ -89,6 +90,7 @@ describe("runWorker", () => {
         return real.prepare(sql);
       },
       transaction: (fn) => real.transaction(fn),
+      batch: (statements) => batchViaTransaction(flaky, statements),
     };
 
     const resilient = new Queue({ db: flaky });
@@ -123,6 +125,7 @@ describe("runWorker", () => {
         return real.prepare(sql);
       },
       transaction: (fn) => real.transaction(fn),
+      batch: (statements) => batchViaTransaction(flaky, statements),
     };
 
     const resilient = new Queue({ db: flaky });

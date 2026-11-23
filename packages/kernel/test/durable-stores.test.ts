@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { batchViaTransaction } from "@lesto/db";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fromRequestMiddleware, lesto, runWithContext } from "@lesto/web";
@@ -50,6 +51,7 @@ function adapt(raw: Database.Database): KernelDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

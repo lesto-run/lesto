@@ -194,6 +194,57 @@ await db.transaction(async (tx) => {
 });
 ```
 
+## Batches
+
+`db.batch([...])` runs a list of queries as **one atomic unit**: every
+statement commits, or none does. Pass builders without their terminal. Each one
+compiles to the same SQL that its `.all()` / `.run()` / `.returning().get()`
+sends. You get one typed result per query, in order:
+
+```ts
+import { eq, rawChanges } from "@lesto/db";
+
+const [seat, event] = await db.batch([
+  db.insert(seats).values({ eventId, userId }).returning(), // the inserted row
+  db.update(events).set({ status: "full" }).where(eq(events.id, eventId)), // { changes }
+]);
+```
+
+A select yields its rows, `insert(…).values(…)` / `update` / `delete` yield
+`{ changes }`, and `.returning()` yields the inserted row. `rawRows(sql, params)`
+and `rawChanges(sql, params)` add hand-written statements to the same batch. An
+empty batch resolves `[]`. Inside `db.transaction`, `tx.batch` runs in the open
+transaction.
+
+**A batch cannot branch on its own reads.** Every statement is fixed before the
+batch runs, so no JavaScript runs between them. A later statement does see the
+earlier writes in SQL, so move each check into the write itself:
+
+- `INSERT … SELECT … WHERE <condition>` writes only when the condition holds.
+- `UPDATE … WHERE state = ?` claims a row; `changes()` in the next statement
+  tells you whether the claim landed.
+- A `UNIQUE` index refuses a duplicate and rolls the whole batch back.
+- A guard statement can fail on purpose. For example,
+  `rawChanges("INSERT INTO guard (ok) SELECT NULL WHERE changes() = 0")` writes
+  `NULL` into a `NOT NULL` column. It aborts the batch when the earlier write did
+  not happen.
+
+Cloudflare D1 sets this rule: its only atomic primitive is a batch. `db.batch`
+keeps the same rule on every driver. A batch written for SQLite or Postgres
+runs unchanged on D1.
+
+### The `SqlDatabase` seam
+
+Every driver handle implements `batch(statements)`. Each statement is
+`{ sql, params, returns: "rows" | "changes" }`. The handle runs the list
+atomically and resolves one result per statement. A result is
+`{ returns: "rows", rows }` or `{ returns: "changes", changes }`.
+`openSqlite`, the OPFS driver, `@lesto/pg` and Hyperdrive run it as one
+`BEGIN`…`COMMIT` on one connection (`batchViaTransaction` from `@lesto/db` is
+that shared implementation); `d1ToSqlDatabase` makes one native `d1.batch()`
+call. A hand-written `SqlDatabase` must add `batch` — usually
+`batch: (statements) => batchViaTransaction(handle, statements)`.
+
 ## Column builders
 
 | Builder | Storage | JS type | Notes |
@@ -226,7 +277,8 @@ impossible. Terminals: `get()`, `all()`, `run()`, `count()`, and `returning()`
 
 Errors are coded, not just prose: a refused operation throws a `DbError` with a
 stable `DbErrorCode` such as `DB_EMPTY_INSERT`, `DB_EMPTY_UPDATE`,
-`DB_UNRESOLVED_REFERENCE`, or `DB_DUPLICATE_JOIN_NAMESPACE`. Branch on the
+`DB_UNRESOLVED_REFERENCE`, `DB_DUPLICATE_JOIN_NAMESPACE`, or
+`DB_BATCH_RESULT_MISMATCH` (a driver's `batch()` broke its contract). Branch on the
 `code`, never the message.
 
 ## Notes and gotchas

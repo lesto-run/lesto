@@ -45,6 +45,7 @@
  * the same shape `@lesto/pg`'s adapter uses for a driver with no nested-transaction primitive.
  */
 
+import { batchViaTransaction } from "./batch";
 import type { SqlDatabase } from "./sql";
 
 /**
@@ -94,6 +95,7 @@ export function adaptSyncSqlite(statements: Pick<SqlDatabase, "exec" | "prepare"
             ...statements,
             dialect: "sqlite",
             transaction: (inner) => inner(tx),
+            batch: (batched) => batchViaTransaction(tx, batched),
           };
 
           const out = await fn(tx);
@@ -121,6 +123,10 @@ export function adaptSyncSqlite(statements: Pick<SqlDatabase, "exec" | "prepare"
 
       return run;
     },
+
+    // A batch is one FIFO-serialized transaction span with its statements run in
+    // order, so it queues behind (and never interleaves with) any other span.
+    batch: (batched) => batchViaTransaction(db, batched),
   };
 
   return db;
