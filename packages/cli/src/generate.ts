@@ -501,7 +501,7 @@ function modelTestFile(name: ResourceName, fields: readonly Field[]): string {
   return `import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
-import { createDb, createTableSql } from "@lesto/db";
+import { adaptSyncSqlite, createDb, createTableSql } from "@lesto/db";
 
 import { ${name.table}, ${name.camel}Migration } from "./${name.fileStem}";
 
@@ -511,21 +511,22 @@ function memoryDb() {
 
   raw.exec(createTableSql(${name.table}));
 
-  return createDb({
-    exec: async (sql: string) => {
-      raw.exec(sql);
-    },
-    prepare: (sql: string) => {
-      const statement = raw.prepare(sql);
+  return createDb(
+    adaptSyncSqlite({
+      exec: async (sql: string) => {
+        raw.exec(sql);
+      },
+      prepare: (sql: string) => {
+        const statement = raw.prepare(sql);
 
-      return {
-        run: async (params: unknown[] = []) => statement.run(...params),
-        get: async (params: unknown[] = []) => statement.get(...params),
-        all: async (params: unknown[] = []) => statement.all(...params),
-      };
-    },
-    transaction: async <T,>(fn: (tx: unknown) => Promise<T>) => fn(raw),
-  } as never);
+        return {
+          run: async (params: unknown[] = []) => statement.run(...params),
+          get: async (params: unknown[] = []) => statement.get(...params),
+          all: async (params: unknown[] = []) => statement.all(...params),
+        };
+      },
+    }),
+  );
 }
 
 describe("${name.table}", () => {
