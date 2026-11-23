@@ -260,14 +260,37 @@ describe("createPgDatabase — batch", () => {
     expect(state.connected).toBe(0);
   });
 
-  it("a batch on the tx handle runs flat inside the open span (no second BEGIN)", async () => {
-    const { pool, calls } = fakePg(() => ({ rows: [], rowCount: 1 }));
+  it("a batch on the tx handle runs in a SAVEPOINT; a caught failure rolls back only the batch", async () => {
+    const violation = new Error("duplicate key value violates unique constraint");
+    const { pool, calls } = fakePg((text) => {
+      if (text.startsWith("INSERT INTO t (b)")) throw violation;
 
-    await createPgDatabase(pool).transaction((tx) =>
-      tx.batch([{ sql: "UPDATE t SET a = 1", params: [], returns: "changes" }]),
-    );
+      return { rows: [], rowCount: 1 };
+    });
 
-    expect(calls.map((c) => c.text)).toEqual(["BEGIN", "UPDATE t SET a = 1", "COMMIT"]);
+    await createPgDatabase(pool).transaction(async (tx) => {
+      await tx.batch([{ sql: "UPDATE t SET a = 1", params: [], returns: "changes" }]);
+
+      await expect(
+        tx.batch([
+          { sql: "INSERT INTO t (a) VALUES (?)", params: [1], returns: "changes" },
+          { sql: "INSERT INTO t (b) VALUES (?)", params: [1], returns: "changes" },
+        ]),
+      ).rejects.toBe(violation);
+    });
+
+    expect(calls.map((c) => c.text.replace(/lesto_batch_\d+/, "lesto_batch_N"))).toEqual([
+      "BEGIN",
+      "SAVEPOINT lesto_batch_N",
+      "UPDATE t SET a = 1",
+      "RELEASE SAVEPOINT lesto_batch_N",
+      "SAVEPOINT lesto_batch_N",
+      "INSERT INTO t (a) VALUES ($1)",
+      "INSERT INTO t (b) VALUES ($1)",
+      "ROLLBACK TO SAVEPOINT lesto_batch_N",
+      "RELEASE SAVEPOINT lesto_batch_N",
+      "COMMIT",
+    ]);
   });
 });
 

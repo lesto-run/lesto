@@ -82,7 +82,9 @@ export type {
   SqlStatement,
 } from "./sql";
 
-export { batchViaTransaction } from "./batch";
+export { batchViaSavepoint, batchViaTransaction } from "./batch";
+export { createFifoQueue } from "./fifo";
+export type { FifoQueue } from "./fifo";
 export { adaptSyncSqlite } from "./sync-sqlite";
 
 export { DbError, LestoError } from "./errors";

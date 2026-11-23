@@ -20,7 +20,7 @@
  * no `pg` at type-check time. The real `new Pool()` lives in `./pg-driver`.
  */
 
-import { batchViaTransaction } from "@lesto/db";
+import { batchViaSavepoint, batchViaTransaction } from "@lesto/db";
 import type { SqlDatabase } from "@lesto/db";
 
 import { translate } from "./translate";
@@ -115,7 +115,9 @@ export function createPgDatabase(pool: PgPool): SqlDatabase {
           ...statementsOver(client),
           dialect: "postgres",
           transaction: (inner) => inner(tx),
-          batch: (statements) => batchViaTransaction(tx, statements),
+          // A SAVEPOINT, so a failed batch the caller catches rolls back alone and the
+          // transaction stays usable (Postgres aborts the whole transaction otherwise).
+          batch: (statements) => batchViaSavepoint(tx, statements),
         };
 
         const out = await fn(tx);

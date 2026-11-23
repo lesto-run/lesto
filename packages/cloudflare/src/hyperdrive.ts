@@ -27,7 +27,7 @@
  * dialect across both Postgres tiers.
  */
 
-import { batchViaTransaction } from "@lesto/db";
+import { batchViaSavepoint, batchViaTransaction, createFifoQueue } from "@lesto/db";
 import type { SqlDatabase } from "@lesto/db";
 import { translate } from "@lesto/pg/translate";
 
@@ -67,6 +67,12 @@ export interface Hyperdrive {
  * that never masks the original error) directly on that single connection. A nested
  * `transaction` runs flat on the same connection (Postgres has no nested `BEGIN`),
  * matching the node driver's semantics.
+ *
+ * Because there is only one connection, two overlapping spans (`transaction` or
+ * `batch`) would interleave their statements inside one `BEGIN`: an error in one
+ * aborts the shared transaction and discards the other's writes. So every span runs
+ * through one FIFO queue and starts only after the previous span has settled — the
+ * same queue `adaptSyncSqlite` uses for its one SQLite connection.
  *
  * `lastInsertRowid` is intentionally omitted (the seam marks it optional): Postgres
  * has no implicit row id, and the only consumer that wants one reads it via
@@ -108,6 +114,9 @@ export function hyperdriveToSqlDatabase(connection: HyperdriveConnection): SqlDa
     },
   };
 
+  // One queue for the one connection: spans never overlap on it.
+  const queue = createFifoQueue();
+
   const db: SqlDatabase = {
     ...statements,
 
@@ -117,39 +126,41 @@ export function hyperdriveToSqlDatabase(connection: HyperdriveConnection): SqlDa
     // and the tx handle below carries the same stamp.
     dialect: "postgres",
 
-    transaction: async (fn) => {
-      await connection.query("BEGIN");
+    transaction: (fn) =>
+      queue.run(async () => {
+        await connection.query("BEGIN");
 
-      // The transaction-scoped db is the same single connection; a nested
-      // `transaction` runs FLAT on it (Postgres has no nested BEGIN), matching the
-      // node Postgres driver — the migrator never nests.
-      const tx: SqlDatabase = {
-        ...statements,
-        dialect: "postgres",
-        transaction: (inner) => inner(tx),
-        batch: (batched) => batchViaTransaction(tx, batched),
-      };
+        // The transaction-scoped db is the same single connection; a nested
+        // `transaction` runs FLAT on it (Postgres has no nested BEGIN), matching the
+        // node Postgres driver — the migrator never nests.
+        const tx: SqlDatabase = {
+          ...statements,
+          dialect: "postgres",
+          transaction: (inner) => inner(tx),
+          batch: (batched) => batchViaSavepoint(tx, batched),
+        };
 
-      try {
-        const out = await fn(tx);
-
-        await connection.query("COMMIT");
-
-        return out;
-      } catch (error) {
-        // Best-effort rollback: a throwing ROLLBACK must not mask the original
-        // error (which stays the rejection).
         try {
-          await connection.query("ROLLBACK");
-        } catch {
-          /* keep the original error */
+          const out = await fn(tx);
+
+          await connection.query("COMMIT");
+
+          return out;
+        } catch (error) {
+          // Best-effort rollback: a throwing ROLLBACK must not mask the original
+          // error (which stays the rejection).
+          try {
+            await connection.query("ROLLBACK");
+          } catch {
+            /* keep the original error */
+          }
+
+          throw error;
         }
+      }),
 
-        throw error;
-      }
-    },
-
-    // A batch is one BEGIN…COMMIT span on the single connection, statements in order.
+    // A batch is one queued BEGIN…COMMIT span on the single connection, statements in
+    // order. On the tx handle a batch runs in a SAVEPOINT, so a failed batch rolls back alone.
     batch: (batched) => batchViaTransaction(db, batched),
   };
 

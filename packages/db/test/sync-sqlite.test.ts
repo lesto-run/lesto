@@ -264,7 +264,7 @@ describe("adaptSyncSqlite batch", () => {
     expect(calls).toEqual([]);
   });
 
-  it("a batch on the tx handle runs flat inside the open span (no second BEGIN)", async () => {
+  it("a batch on the tx handle runs inside a SAVEPOINT of the open span (no second BEGIN)", async () => {
     const { calls, statements } = createFakeHandle();
     const db = adaptSyncSqlite(statements);
 
@@ -272,7 +272,150 @@ describe("adaptSyncSqlite batch", () => {
       tx.batch([{ sql: "UPDATE t SET a = 1", params: [], returns: "changes" }]),
     );
 
+    expect(calls).toEqual([
+      "BEGIN",
+      expect.stringMatching(/^SAVEPOINT lesto_batch_\d+$/),
+      expect.stringMatching(/^RELEASE SAVEPOINT lesto_batch_\d+$/),
+      "COMMIT",
+    ]);
+  });
+
+  it("a failed tx.batch that the caller catches leaves no write when the transaction commits", async () => {
+    const { raw, db } = realSqlite();
+
+    await db.transaction(async (tx) => {
+      await tx.prepare("INSERT INTO items (id, name) VALUES (5, 'outer')").run();
+
+      await expect(
+        tx.batch([
+          { sql: "INSERT INTO items (id, name) VALUES (1, 'a')", params: [], returns: "changes" },
+          { sql: "INSERT INTO items (id, name) VALUES (2, 'a')", params: [], returns: "changes" },
+        ]),
+      ).rejects.toThrow(/UNIQUE/);
+    });
+
+    // The outer write commits; the batch's first insert rolled back to its savepoint.
+    expect(raw.prepare("SELECT id FROM items ORDER BY id").all()).toEqual([{ id: 5 }]);
+
+    raw.close();
+  });
+
+  it("an empty tx.batch sends nothing", async () => {
+    const { calls, statements } = createFakeHandle();
+    const db = adaptSyncSqlite(statements);
+
+    await expect(db.transaction((tx) => tx.batch([]))).resolves.toEqual([]);
     expect(calls).toEqual(["BEGIN", "COMMIT"]);
+  });
+
+  it("a failing ROLLBACK TO does not mask the batch's original error", async () => {
+    const failure = new Error("constraint");
+    const calls: string[] = [];
+    const db = adaptSyncSqlite({
+      exec: async (sql) => {
+        calls.push(sql);
+
+        if (sql.startsWith("ROLLBACK TO")) throw new Error("rollback failed");
+      },
+      prepare: () => ({
+        run: async () => {
+          throw failure;
+        },
+        get: async () => undefined,
+        all: async () => [],
+      }),
+    });
+
+    await expect(
+      db.transaction((tx) =>
+        tx.batch([{ sql: "INSERT INTO t VALUES (1)", params: [], returns: "changes" }]),
+      ),
+    ).rejects.toBe(failure);
+
+    expect(calls.map((sql) => sql.replace(/\d+$/, "N"))).toEqual([
+      "BEGIN",
+      "SAVEPOINT lesto_batch_N",
+      "ROLLBACK TO SAVEPOINT lesto_batch_N",
+      "ROLLBACK",
+    ]);
+  });
+
+  it("a root-handle write issued during an open span waits for it — the span's rollback cannot erase it", async () => {
+    const { raw, db } = realSqlite();
+
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    let entered: (() => void) | undefined;
+    const opened = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+
+    const span = db.transaction(async (tx) => {
+      await tx.prepare("INSERT INTO items (id, name) VALUES (1, 'span')").run();
+      entered?.();
+      await gate;
+
+      throw new Error("boom");
+    });
+
+    // Issued only once the span's BEGIN has run and its first write landed.
+    await opened;
+    const solo = db.prepare("INSERT INTO items (id, name) VALUES (2, 'solo')").run();
+    const soloExec = db.exec("INSERT INTO items (id, name) VALUES (3, 'exec')");
+
+    await Promise.resolve();
+    await Promise.resolve();
+    release?.();
+
+    await expect(span).rejects.toThrow("boom");
+    await expect(solo).resolves.toMatchObject({ changes: 1 });
+    await soloExec;
+
+    expect(raw.prepare("SELECT id FROM items ORDER BY id").all()).toEqual([{ id: 2 }, { id: 3 }]);
+    await expect(db.prepare("SELECT id FROM items WHERE id = 2").get()).resolves.toEqual({ id: 2 });
+    await expect(db.prepare("SELECT id FROM items").all()).resolves.toHaveLength(2);
+
+    raw.close();
+  });
+
+  it("a changes() guard in a span reads its own claim, never an interleaved root write", async () => {
+    const { raw, db } = realSqlite();
+
+    raw.exec("INSERT INTO items (id, name, state) VALUES (1, 'a', 'taken')");
+
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    let entered: (() => void) | undefined;
+    const opened = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+
+    const span = db.transaction(async (tx) => {
+      // Claims nothing: the row is already taken.
+      await tx.prepare("UPDATE items SET state = 'taken' WHERE state = 'pending'").run();
+      entered?.();
+      await gate;
+      // Must fail, because the claim above changed no row.
+      await tx.prepare("INSERT INTO items (id, name) SELECT 99, NULL WHERE changes() = 0").run();
+    });
+
+    await opened;
+    const solo = db.prepare("INSERT INTO items (id, name) VALUES (2, 'solo')").run();
+
+    await Promise.resolve();
+    await Promise.resolve();
+    release?.();
+
+    await expect(span).rejects.toThrow(/NOT NULL/);
+    await solo;
+
+    raw.close();
   });
 
   it("queues FIFO behind an open transaction — its BEGIN waits for the span to settle", async () => {
