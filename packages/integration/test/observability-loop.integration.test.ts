@@ -22,6 +22,7 @@
  * use; this file is additive and does not touch them.
  */
 
+import { batchViaTransaction } from "@lesto/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createApp } from "@lesto/kernel";
@@ -45,6 +46,7 @@ const stubDb: KernelDatabase = {
     all: async () => [],
   }),
   transaction: async (fn) => fn(stubDb),
+  batch: (statements) => batchViaTransaction(stubDb, statements),
 };
 
 let collector: OtlpCollector;

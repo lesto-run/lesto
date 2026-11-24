@@ -2,8 +2,10 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  adaptSyncSqlite,
   alias,
   and,
+  batchViaTransaction,
   boolean,
   createDb,
   createTableSql,
@@ -22,12 +24,16 @@ import {
   lte,
   ne,
   or,
+  rawChanges,
+  rawRows,
   real,
   text,
   timestamp,
 } from "../src/index";
 
 import type {
+  BatchResult,
+  BatchStatement,
   Column,
   Db,
   Dialect,
@@ -45,7 +51,7 @@ import type {
 // interface. The terminals are async (ADR 0006): the synchronous better-sqlite3
 // engine is wrapped so each terminal resolves a Promise (zero latency); prepare()
 // stays sync. `transaction()` brackets BEGIN/COMMIT (ROLLBACK on reject) over the
-// single in-memory connection.
+// single in-memory connection (the shared `adaptSyncSqlite`, as `openSqlite` uses).
 // ---------------------------------------------------------------------------
 
 let raw: Database.Database;
@@ -53,7 +59,7 @@ let sql: SqlDatabase;
 let db: Db;
 
 function adapt(database: Database.Database): SqlDatabase {
-  const adapted: SqlDatabase = {
+  return adaptSyncSqlite({
     exec: async (statement) => {
       database.exec(statement);
     },
@@ -66,27 +72,7 @@ function adapt(database: Database.Database): SqlDatabase {
         all: async (params = []) => stmt.all(...(params as never[])),
       };
     },
-    transaction: async (fn) => {
-      database.exec("BEGIN");
-
-      try {
-        const out = await fn(adapted);
-        database.exec("COMMIT");
-
-        return out;
-      } catch (error) {
-        try {
-          database.exec("ROLLBACK");
-        } catch {
-          /* preserve the original error */
-        }
-
-        throw error;
-      }
-    },
-  };
-
-  return adapted;
+  });
 }
 
 // The fixture schema every test uses. Spans every column type, both
@@ -285,6 +271,7 @@ describe("rich column types (boolean, timestamp)", () => {
         all: async () => [wireRow],
       }),
       transaction: async (fn) => fn(fake),
+      batch: (statements) => batchViaTransaction(fake, statements),
     };
 
     const row = await createDb(fake, { dialect: "postgres" }).select().from(events).get();
@@ -633,6 +620,7 @@ describe("joins", () => {
         all: async () => [wireRow],
       }),
       transaction: async (fn) => fn(fake),
+      batch: (statements) => batchViaTransaction(fake, statements),
     };
 
     const [row] = await createDb(fake)
@@ -678,6 +666,7 @@ describe("joins", () => {
         all: async () => [wireRow],
       }),
       transaction: async (fn) => fn(fake),
+      batch: (statements) => batchViaTransaction(fake, statements),
     };
 
     const [row] = await createDb(fake)
@@ -944,6 +933,7 @@ describe("select modifiers", () => {
         }),
         exec: async () => {},
         transaction: async (fn) => fn(capture),
+        batch: (statements) => batchViaTransaction(capture, statements),
       };
 
       const got = await createDb(capture).select().from(users).get();
@@ -976,6 +966,7 @@ describe("select modifiers", () => {
         },
         exec: async () => {},
         transaction: async (fn) => fn(capture),
+        batch: (statements) => batchViaTransaction(capture, statements),
       };
 
       const pg = createDb(capture, { dialect: "postgres" });
@@ -1047,6 +1038,7 @@ function captureQuery(dialect?: Dialect): {
       },
     }),
     transaction: async (fn) => fn(handle),
+    batch: (statements) => batchViaTransaction(handle, statements),
   };
 
   return {
@@ -1223,6 +1215,7 @@ function markedCapture(
       },
     }),
     transaction: async (fn) => fn(handle),
+    batch: (statements) => batchViaTransaction(handle, statements),
   };
 
   return { db: createDb(handle, options), last: () => capturedSql };
@@ -1683,5 +1676,288 @@ describe("onQuery observability seam", () => {
 
     // The insert inside the transaction reported through the inherited sink.
     expect(events.some((event) => event.sql.includes("INSERT INTO"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// batch — the builder path
+// ---------------------------------------------------------------------------
+
+describe("batch", () => {
+  const posts = defineTable("posts", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    title: text("title").notNull(),
+  });
+
+  /**
+   * A recording handle over the real rig: every statement a terminal sends, and
+   * every statement list `batch` receives, lands in `sent` as (sql, params), so a
+   * test can compare the two paths directly.
+   */
+  function recording(): { db: Db; sent: { sql: string; params: unknown[] }[] } {
+    const sent: { sql: string; params: unknown[] }[] = [];
+
+    const handle: SqlDatabase = {
+      exec: (statement) => sql.exec(statement),
+      prepare: (statement) => {
+        const stmt = sql.prepare(statement);
+
+        return {
+          run: async (params = []) => {
+            sent.push({ sql: statement, params });
+
+            return stmt.run(params);
+          },
+          get: async (params = []) => {
+            sent.push({ sql: statement, params });
+
+            return stmt.get(params);
+          },
+          all: async (params = []) => {
+            sent.push({ sql: statement, params });
+
+            return stmt.all(params);
+          },
+        };
+      },
+      transaction: (fn) => sql.transaction(fn),
+      batch: async (statements) => {
+        for (const statement of statements) {
+          sent.push({ sql: statement.sql, params: [...statement.params] });
+        }
+
+        return sql.batch(statements);
+      },
+    };
+
+    return { db: createDb(handle), sent };
+  }
+
+  beforeEach(async () => {
+    await db.exec(createTableSql(posts));
+  });
+
+  it("each builder compiles to the SAME (sql, params) its own terminal runs", async () => {
+    const run = recording();
+    const batched = recording();
+
+    const queries = (target: Db) => ({
+      insert: target.insert(users).values({ email: "a@x", passwordHash: "h", score: 1 }),
+      returning: target.insert(users).values({ email: "b@x", passwordHash: "h" }).returning(),
+      update: target.update(users).set({ score: 5 }).where(eq(users.email, "a@x")),
+      remove: target.delete(users).where(eq(users.email, "b@x")),
+      select: target
+        .select()
+        .from(users)
+        .where(gte(users.score, 0))
+        .orderBy(users.id, "desc")
+        .limit(10)
+        .offset(0),
+      join: target.select().from(users).leftJoin(posts, eq(posts.userId, users.id)).limit(5),
+    });
+
+    const viaRun = queries(run.db);
+    await viaRun.insert.run();
+    await viaRun.returning.get();
+    await viaRun.update.run();
+    await viaRun.remove.run();
+    await viaRun.select.all();
+    await viaRun.join.all();
+
+    // Roll the rig back to the same starting rows, then run the batch path.
+    await db.delete(users).where(gte(users.id, 0)).run();
+
+    const viaBatch = queries(batched.db);
+    await batched.db.batch([
+      viaBatch.insert,
+      viaBatch.returning,
+      viaBatch.update,
+      viaBatch.remove,
+      viaBatch.select,
+      viaBatch.join,
+    ]);
+
+    expect(batched.sent).toEqual(run.sent);
+    expect(run.sent).toHaveLength(6);
+  });
+
+  it("resolves one typed result per query, decoded as each terminal would", async () => {
+    await db.insert(users).values({ email: "old@x", passwordHash: "h" }).run();
+
+    const [inserted, created, updated, removed, rows, joined] = await db.batch([
+      db.insert(users).values({ email: "a@x", passwordHash: "h" }),
+      db.insert(users).values({ email: "b@x", passwordHash: "h", rating: 2.5 }).returning(),
+      db.update(users).set({ score: 7 }).where(ne(users.email, "old@x")),
+      db.delete(users).where(eq(users.email, "old@x")),
+      db.select().from(users).orderBy(users.email),
+      db.select().from(users).innerJoin(posts, eq(posts.userId, users.id)),
+    ]);
+
+    // Compile-time: each slot carries its own query's result type.
+    const changes: number = inserted.changes + updated.changes + removed.changes;
+    const email: string = created.email;
+
+    expect(changes).toBe(4);
+    expect(email).toBe("b@x");
+    expect(created).toMatchObject({ email: "b@x", rating: 2.5, score: 0 });
+    expect(inserted).toEqual({ changes: 1 });
+    expect(updated).toEqual({ changes: 2 });
+    expect(removed).toEqual({ changes: 1 });
+    expect(rows.map((row) => [row.email, row.score])).toEqual([
+      ["a@x", 7],
+      ["b@x", 7],
+    ]);
+    expect(joined).toEqual([]);
+  });
+
+  it("all-or-nothing: a constraint violation mid-batch leaves no earlier write", async () => {
+    await expect(
+      db.batch([
+        db.insert(users).values({ email: "a@x", passwordHash: "h" }),
+        db.insert(users).values({ email: "a@x", passwordHash: "h" }),
+      ]),
+    ).rejects.toThrow(/UNIQUE/);
+
+    expect(await db.select().from(users).all()).toEqual([]);
+  });
+
+  it("raw statements gate on the earlier write (changes() / EXISTS) in the same batch", async () => {
+    const created = await db
+      .insert(users)
+      .values({ email: "a@x", passwordHash: "h" })
+      .returning()
+      .get();
+
+    const [claimed, guard, inserted, seen] = await db.batch([
+      db
+        .update(users)
+        .set({ emailVerifiedAt: "now" })
+        .where(and(eq(users.id, created.id), isNull(users.emailVerifiedAt))),
+      rawChanges("INSERT INTO users (email, password_hash) SELECT NULL, 'h' WHERE changes() = 0"),
+      rawChanges(
+        "INSERT INTO posts (user_id, title) SELECT ?, 'welcome' WHERE EXISTS (SELECT 1 FROM users WHERE id = ? AND email_verified_at IS NOT NULL)",
+        [created.id, created.id],
+      ),
+      rawRows<{ title: string }>("SELECT title FROM posts WHERE user_id = ?", [created.id]),
+    ]);
+
+    expect(claimed).toEqual({ changes: 1 });
+    expect(guard).toEqual({ changes: 0 });
+    expect(inserted).toEqual({ changes: 1 });
+    expect(seen).toEqual([{ title: "welcome" }]);
+
+    // A second claim changes nothing, so the guard fails and rolls the batch back.
+    await expect(
+      db.batch([
+        db.insert(posts).values({ userId: created.id, title: "second" }),
+        db
+          .update(users)
+          .set({ emailVerifiedAt: "later" })
+          .where(and(eq(users.id, created.id), isNull(users.emailVerifiedAt))),
+        rawChanges("INSERT INTO users (email, password_hash) SELECT NULL, 'h' WHERE changes() = 0"),
+      ]),
+    ).rejects.toThrow(/NOT NULL/);
+
+    expect(await db.select().from(posts).all()).toHaveLength(1);
+  });
+
+  it("raw items default to no params", async () => {
+    const [rows, written] = await db.batch([
+      rawRows("SELECT COUNT(*) AS n FROM users"),
+      rawChanges("DELETE FROM users"),
+    ]);
+
+    expect(rows).toEqual([{ n: 0 }]);
+    expect(written).toEqual({ changes: 0 });
+  });
+
+  it("an empty batch resolves []", async () => {
+    await expect(db.batch([])).resolves.toEqual([]);
+  });
+
+  it("compiles every query before any statement runs — a refusing builder sends nothing", async () => {
+    const { db: recorded, sent } = recording();
+
+    await expect(
+      recorded.batch([
+        recorded.insert(users).values({ email: "a@x", passwordHash: "h" }),
+        recorded.insert(users).values({} as never),
+      ]),
+    ).rejects.toMatchObject({ code: "DB_EMPTY_INSERT" });
+
+    expect(sent).toEqual([]);
+  });
+
+  it("runs inside a transaction on the tx handle", async () => {
+    await expect(
+      db.transaction(async (tx) => {
+        await tx.batch([tx.insert(users).values({ email: "tx@x", passwordHash: "h" })]);
+
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(await db.select().from(users).all()).toEqual([]);
+  });
+
+  describe("a driver result that does not match its statement", () => {
+    function lying(results: BatchResult[]): Db {
+      return createDb({ ...sql, batch: async (_: readonly BatchStatement[]) => results });
+    }
+
+    it("refuses a rows result where changes was asked for", async () => {
+      const liar = lying([{ returns: "rows", rows: [] }]);
+
+      await expect(liar.batch([liar.delete(users).where(eq(users.id, 1))])).rejects.toMatchObject({
+        code: "DB_BATCH_RESULT_MISMATCH",
+        details: { expected: "changes", received: "rows" },
+      });
+    });
+
+    it("refuses a changes result where rows were asked for", async () => {
+      const liar = lying([{ returns: "changes", changes: 1 }]);
+
+      await expect(liar.batch([liar.select().from(users)])).rejects.toMatchObject({
+        code: "DB_BATCH_RESULT_MISMATCH",
+        details: { expected: "rows", received: "changes" },
+      });
+    });
+
+    it("refuses a missing result", async () => {
+      const liar = lying([]);
+
+      await expect(liar.batch([rawRows("SELECT 1")])).rejects.toMatchObject({
+        code: "DB_BATCH_RESULT_MISMATCH",
+        details: { expected: "rows", received: undefined },
+      });
+    });
+  });
+
+  describe("onQuery", () => {
+    it("reports ONE event per batch, naming every statement", async () => {
+      const events: QueryEvent[] = [];
+      const observed = createDb(sql, { onQuery: (event) => events.push(event) });
+
+      await observed.batch([
+        observed.insert(users).values({ email: "a@x", passwordHash: "h" }),
+        observed.select().from(users),
+      ]);
+
+      expect(events).toHaveLength(1);
+      expect(events[0]?.sql).toBe(
+        'INSERT INTO "users" ("email", "password_hash") VALUES (?, ?); SELECT * FROM "users"',
+      );
+    });
+
+    it("reports nothing for an empty batch", async () => {
+      const events: QueryEvent[] = [];
+      const observed = createDb(sql, { onQuery: (event) => events.push(event) });
+
+      await expect(observed.batch([])).resolves.toEqual([]);
+      expect(events).toEqual([]);
+    });
   });
 });

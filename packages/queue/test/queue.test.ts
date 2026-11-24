@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { batchViaTransaction } from "@lesto/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -67,6 +68,7 @@ function adapt(database: Database.Database): SqlDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;
@@ -117,6 +119,7 @@ describe("installSchema dialect", () => {
         captured += `${sql}\n`;
       },
       transaction: async (fn) => fn(capture),
+      batch: (statements) => batchViaTransaction(capture, statements),
     };
 
     await installSchema(capture);
@@ -139,6 +142,7 @@ describe("installSchema dialect", () => {
         captured += `${sql}\n`;
       },
       transaction: async (fn) => fn(capture),
+      batch: (statements) => batchViaTransaction(capture, statements),
     };
 
     await installSchema(capture, "postgres");
@@ -449,6 +453,7 @@ describe("claim & reclaim", () => {
       },
       exec: async () => {},
       transaction: async (fn) => fn(capture),
+      batch: (statements) => batchViaTransaction(capture, statements),
     };
 
     await new Queue({ db: capture, clock, dialect: "postgres" }).claim();
@@ -470,6 +475,7 @@ describe("claim & reclaim", () => {
       },
       exec: async () => {},
       transaction: async (fn) => fn(capture),
+      batch: (statements) => batchViaTransaction(capture, statements),
     };
 
     await new Queue({ db: capture, clock }).claim();
@@ -513,6 +519,7 @@ function markedDb(dialect: "sqlite" | "postgres"): {
       ddl += `${sql}\n`;
     },
     transaction: async (fn) => fn(handle),
+    batch: (statements) => batchViaTransaction(handle, statements),
   };
 
   return { db: handle, claimSql: () => claim, ddl: () => ddl };
@@ -631,6 +638,7 @@ describe("stats & find", () => {
       }),
       exec: async () => {},
       transaction: async (fn) => fn(capture),
+      batch: (statements) => batchViaTransaction(capture, statements),
     };
 
     const stats = await new Queue({ db: capture, clock }).stats();
@@ -835,6 +843,7 @@ describe("work", () => {
         return db.prepare(sql);
       },
       transaction: (fn) => db.transaction(fn),
+      batch: (statements) => batchViaTransaction(wrapped, statements),
     };
 
     return { db: wrapped, failed: () => thrown };
@@ -908,6 +917,7 @@ describe("work", () => {
         return db.prepare(sql);
       },
       transaction: (fn) => db.transaction(fn),
+      batch: (statements) => batchViaTransaction(flaky, statements),
     };
 
     const reported: QueueError[] = [];
@@ -980,6 +990,7 @@ describe("work", () => {
         return db.prepare(sql);
       },
       transaction: (fn) => db.transaction(fn),
+      batch: (statements) => batchViaTransaction(flaky, statements),
     };
 
     const reported: QueueError[] = [];
@@ -1486,8 +1497,14 @@ describe("batches & dependency edges", () => {
       // which the fix runs on `tx`, not `this.db` — still throws inside the span.
       transaction: (fn) =>
         db.transaction((tx) =>
-          fn({ exec: tx.exec, prepare: faultyPrepare(tx), transaction: tx.transaction }),
+          fn({
+            exec: tx.exec,
+            prepare: faultyPrepare(tx),
+            transaction: tx.transaction,
+            batch: tx.batch,
+          }),
         ),
+      batch: (statements) => batchViaTransaction(faulty, statements),
     };
 
     const q = new Queue({ db: faulty, clock, baseBackoffMs: 1000, maxBackoffMs: 3000 });
@@ -1543,6 +1560,7 @@ describe("batches & dependency edges", () => {
         ],
       }),
       transaction: async (fn) => fn(stringyDb),
+      batch: (statements) => batchViaTransaction(stringyDb, statements),
     };
 
     const pgQueue = new Queue({ db: stringyDb, clock });
@@ -1566,6 +1584,7 @@ describe("batches & dependency edges", () => {
         captured += `${sql}\n`;
       },
       transaction: async (fn) => fn(capture),
+      batch: (statements) => batchViaTransaction(capture, statements),
     };
 
     await installSchema(capture, "postgres");
@@ -1786,6 +1805,7 @@ describe("Scheduler", () => {
         all: async () => [],
       }),
       transaction: async (fn) => fn(failing),
+      batch: (statements) => batchViaTransaction(failing, statements),
     };
     const q3 = new Queue({ db: failing, clock: () => new Date(2026, 5, 8, 9, 30, 0) });
     const schedule = new Scheduler({ queue: q3, clock: () => new Date(2026, 5, 8, 9, 30, 0) });

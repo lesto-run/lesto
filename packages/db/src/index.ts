@@ -61,12 +61,34 @@ export type { Dialect } from "./ddl";
 export { and, eq, gt, gte, inList, isNotNull, isNull, like, lt, lte, ne, or } from "./conditions";
 export type { Condition } from "./conditions";
 
-export { coerceCell, createDb } from "./queries";
-export type { Db, DbOptions, JoinQuery, QueryEvent, SelectQuery } from "./queries";
+export { coerceCell, createDb, rawChanges, rawRows } from "./queries";
+export type {
+  BatchQuery,
+  BatchResults,
+  Db,
+  DbOptions,
+  JoinQuery,
+  QueryEvent,
+  SelectQuery,
+  WriteQuery,
+} from "./queries";
 
-export type { SqlDatabase, SqlStatement } from "./sql";
+export type {
+  BatchChangesResult,
+  BatchResult,
+  BatchRowsResult,
+  BatchStatement,
+  SqlDatabase,
+  SqlStatement,
+} from "./sql";
 
+export { batchViaSavepoint, batchViaTransaction } from "./batch";
+export { createFifoQueue } from "./fifo";
+export { createSpanGuard } from "./span-guard";
+export type { AsyncContext, SpanGuard } from "./span-guard";
+export type { FifoQueue } from "./fifo";
 export { adaptSyncSqlite } from "./sync-sqlite";
+export type { SyncSqliteOptions } from "./sync-sqlite";
 
 export { DbError, LestoError } from "./errors";
 export type { DbErrorCode } from "./errors";

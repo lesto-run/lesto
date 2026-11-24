@@ -194,6 +194,68 @@ await db.transaction(async (tx) => {
 });
 ```
 
+Inside the callback, use `tx` for every query. SQLite has one connection, so
+the root `db` waits until the transaction ends. A root `db` query from inside the
+callback waits for its own transaction, which then never ends. `openSqlite` refuses
+it with the coded `DB_ROOT_STATEMENT_IN_SPAN` instead. In the browser (the OPFS
+driver) there is no async context to detect this, so the query waits.
+
+## Batches
+
+`db.batch([...])` runs a list of queries as **one atomic unit**: every
+statement commits, or none does. Pass builders without their terminal. Each one
+compiles to the same SQL that its `.all()` / `.run()` / `.returning().get()`
+sends. You get one typed result per query, in order:
+
+```ts
+import { eq, rawChanges } from "@lesto/db";
+
+const [seat, event] = await db.batch([
+  db.insert(seats).values({ eventId, userId }).returning(), // the inserted row
+  db.update(events).set({ status: "full" }).where(eq(events.id, eventId)), // { changes }
+]);
+```
+
+A select yields its rows, `insert(…).values(…)` / `update` / `delete` yield
+`{ changes }`, and `.returning()` yields the inserted row. `rawRows(sql, params)`
+and `rawChanges(sql, params)` add hand-written statements to the same batch. An
+empty batch resolves `[]`. Inside `db.transaction`, `tx.batch` runs in a
+savepoint of the open transaction. A failed batch rolls back alone, even when
+you catch its error and the transaction commits.
+
+**A batch cannot branch on its own reads.** Every statement is fixed before the
+batch runs, so no JavaScript runs between them. A later statement does see the
+earlier writes in SQL, so move each check into the write itself. These gates
+work on SQLite, D1 and Postgres:
+
+- `INSERT … SELECT … WHERE EXISTS (…)` writes only when the condition holds.
+- `UPDATE … WHERE state = ?` claims a row only from the state you expect.
+- A `UNIQUE` index refuses a duplicate and rolls the whole batch back.
+- A guard statement can fail on purpose. For example, this guard writes `NULL`
+  into a `NOT NULL` column when the claim did not land:
+  `rawChanges("INSERT INTO guard (ok) SELECT NULL WHERE NOT EXISTS (SELECT 1 FROM seats WHERE id = ? AND state = 'taken')", [id])`.
+  The failure aborts the batch.
+
+`changes()` (the row count of the previous statement) also works as a gate, but
+only on SQLite and D1. Postgres has no `changes()`, so a guard built on it fails
+on `@lesto/pg` and Hyperdrive. Use it only in code that never runs on Postgres.
+
+Cloudflare D1 sets this rule: its only atomic primitive is a batch. `db.batch`
+keeps the same rule on every driver. A batch that uses the portable gates runs
+unchanged on SQLite, D1 and Postgres.
+
+### The `SqlDatabase` seam
+
+Every driver handle implements `batch(statements)`. Each statement is
+`{ sql, params, returns: "rows" | "changes" }`. The handle runs the list
+atomically and resolves one result per statement. A result is
+`{ returns: "rows", rows }` or `{ returns: "changes", changes }`.
+`openSqlite`, the OPFS driver, `@lesto/pg` and Hyperdrive run it as one
+`BEGIN`…`COMMIT` on one connection (`batchViaTransaction` from `@lesto/db` is
+that shared implementation); `d1ToSqlDatabase` makes one native `d1.batch()`
+call. A hand-written `SqlDatabase` must add `batch` — usually
+`batch: (statements) => batchViaTransaction(handle, statements)`.
+
 ## Column builders
 
 | Builder | Storage | JS type | Notes |
@@ -226,7 +288,8 @@ impossible. Terminals: `get()`, `all()`, `run()`, `count()`, and `returning()`
 
 Errors are coded, not just prose: a refused operation throws a `DbError` with a
 stable `DbErrorCode` such as `DB_EMPTY_INSERT`, `DB_EMPTY_UPDATE`,
-`DB_UNRESOLVED_REFERENCE`, or `DB_DUPLICATE_JOIN_NAMESPACE`. Branch on the
+`DB_UNRESOLVED_REFERENCE`, `DB_DUPLICATE_JOIN_NAMESPACE`, or
+`DB_BATCH_RESULT_MISMATCH` (a driver's `batch()` broke its contract). Branch on the
 `code`, never the message.
 
 ## Notes and gotchas
@@ -247,7 +310,9 @@ stable `DbErrorCode` such as `DB_EMPTY_INSERT`, `DB_EMPTY_UPDATE`,
   per call**: Cloudflare D1 rejects multi-statement strings.
 - **Observability via `createDb(handle, { onQuery })`.** An optional sink
   receives every executed query's SQL text and `durationMs` — values never
-  appear (they ride `?` placeholders), and a throwing sink is contained.
+  appear (they ride `?` placeholders), and a throwing sink is contained. A
+  batch reports one event. Its `sql` joins the statements with `"; "`, and its
+  `durationMs` covers the whole batch, from the queue wait to the commit.
 
 ## See also
 

@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installSessionSchema, sqlSessionStore, totpCode } from "@lesto/auth";
-import { createDb, eq } from "@lesto/db";
+import { batchViaTransaction, createDb, eq } from "@lesto/db";
 import type { Db, SqlDatabase } from "@lesto/db";
 import { Migrator } from "@lesto/migrate";
 import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@lesto/ratelimit";
@@ -65,6 +65,7 @@ function adapt(database: Database.Database): SqlDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

@@ -29,7 +29,7 @@ import { qualified } from "./conditions";
 import type { Dialect } from "./ddl";
 import { DbError } from "./errors";
 import { quoteIdentifier } from "./identifier";
-import type { SqlDatabase } from "./sql";
+import type { BatchResult, BatchStatement, SqlDatabase } from "./sql";
 import type { InferInsert, InferRow, InferUpdate, Table } from "./table";
 import { bind } from "./values";
 
@@ -92,6 +92,106 @@ function hydrate<T extends Table>(table: T, raw: unknown): InferRow<T> {
 }
 
 // ---------------------------------------------------------------------------
+// BATCH ITEMS
+//
+// Every builder stage that can run as one statement is also a {@link BatchQuery}:
+// it compiles to the SAME (sql, params) its own terminal sends, plus a decoder
+// that turns the driver's batch result back into what the terminal returns. The
+// key is a module-private symbol, so the fluent surface gains no visible method.
+// ---------------------------------------------------------------------------
+
+const toBatch: unique symbol = Symbol("lesto.db.toBatch");
+
+/** A compiled batch statement plus the decoder for its result. */
+interface BatchEntry<R> {
+  readonly statement: BatchStatement;
+  decode(result: BatchResult | undefined): R;
+}
+
+/**
+ * A query that {@link Db.batch} can run as one statement of an atomic batch.
+ * `R` is what the batch hands back in this query's slot — the same value the
+ * query's own terminal (`all()`, `run()`, `returning().get()`) resolves.
+ */
+export interface BatchQuery<R> {
+  readonly [toBatch]: () => BatchEntry<R>;
+}
+
+/** The result tuple of {@link Db.batch}: each slot typed by its query. */
+export type BatchResults<Q extends readonly BatchQuery<unknown>[]> = {
+  -readonly [K in keyof Q]: Q[K] extends BatchQuery<infer R> ? R : never;
+};
+
+/** Refuse a batch result that is missing or carries the wrong tag. */
+function mismatch(expected: BatchResult["returns"], result: BatchResult | undefined): DbError {
+  return new DbError(
+    "DB_BATCH_RESULT_MISMATCH",
+    `The driver's batch() returned ${result === undefined ? "no result" : `a "${result.returns}" result`} for a statement that asked for "${expected}".`,
+    { expected, received: result?.returns },
+  );
+}
+
+/** The rows of a `returns: "rows"` result. */
+function rowsOf(result: BatchResult | undefined): unknown[] {
+  if (result?.returns !== "rows") throw mismatch("rows", result);
+
+  return result.rows;
+}
+
+/** The `{ changes }` of a `returns: "changes"` result. */
+function changesOf(result: BatchResult | undefined): { changes: number } {
+  if (result?.returns !== "changes") throw mismatch("changes", result);
+
+  return { changes: result.changes };
+}
+
+/** A statement that reads rows, decoded row by row. */
+function rowsEntry<R>(
+  compiled: { sql: string; params: unknown[] },
+  decode: (rows: unknown[]) => R,
+): BatchEntry<R> {
+  return {
+    statement: { sql: compiled.sql, params: compiled.params, returns: "rows" },
+    decode: (result) => decode(rowsOf(result)),
+  };
+}
+
+/** A statement that executes for its affected-row count. */
+function changesEntry(compiled: { sql: string; params: unknown[] }): BatchEntry<{
+  changes: number;
+}> {
+  return {
+    statement: { sql: compiled.sql, params: compiled.params, returns: "changes" },
+    decode: changesOf,
+  };
+}
+
+/**
+ * A hand-written row-returning statement for {@link Db.batch} — a `SELECT`, or a
+ * write with `RETURNING`. Every value rides a `?` placeholder. Rows come back raw
+ * (driver column names, no hydration), like {@link Db.raw}; `R` is the caller's
+ * asserted row shape.
+ */
+export function rawRows<R = Record<string, unknown>>(
+  sql: string,
+  params: readonly unknown[] = [],
+): BatchQuery<R[]> {
+  return { [toBatch]: () => rowsEntry({ sql, params: [...params] }, (rows) => rows as R[]) };
+}
+
+/**
+ * A hand-written write for {@link Db.batch}, run for its affected-row count —
+ * the shape of a guard (`INSERT … SELECT … WHERE`) the builders do not model.
+ * Every value rides a `?` placeholder.
+ */
+export function rawChanges(
+  sql: string,
+  params: readonly unknown[] = [],
+): BatchQuery<{ changes: number }> {
+  return { [toBatch]: () => changesEntry({ sql, params: [...params] }) };
+}
+
+// ---------------------------------------------------------------------------
 // SELECT
 //
 // One {@link SelectQuery} type carries every chain stage. Each modifier
@@ -115,8 +215,11 @@ interface SelectState<T extends Table> {
   readonly offset: number | undefined;
 }
 
-/** A typed SELECT chain. Modifiers return a new query; terminators run it. */
-export interface SelectQuery<T extends Table> {
+/**
+ * A typed SELECT chain. Modifiers return a new query; terminators run it. As a
+ * {@link BatchQuery} it runs with `all()` semantics.
+ */
+export interface SelectQuery<T extends Table> extends BatchQuery<InferRow<T>[]> {
   /** Add or replace the `WHERE` clause. */
   where(condition: Condition): SelectQuery<T>;
 
@@ -260,7 +363,15 @@ function makeQuery<T extends Table>(
   const next = (patch: Partial<SelectState<T>>): SelectQuery<T> =>
     makeQuery(sql, dialect, { ...state, ...patch });
 
+  // The one `all()` statement — shared by the terminal and the batch item.
+  const allEntry = (): BatchEntry<InferRow<T>[]> =>
+    rowsEntry(renderSelect(state, { projection: "*", respectLimitOrder: true, dialect }), (rows) =>
+      rows.map((row) => hydrate(state.table, row)),
+    );
+
   return {
+    [toBatch]: allEntry,
+
     where: (condition) => next({ where: condition }),
     orderBy: (column, direction = "asc") =>
       next({ orderBy: { column: column.spec.name, direction } }),
@@ -296,15 +407,10 @@ function makeQuery<T extends Table>(
     },
 
     async all(): Promise<InferRow<T>[]> {
-      const { sql: stmt, params } = renderSelect(state, {
-        projection: "*",
-        respectLimitOrder: true,
-        dialect,
-      });
+      const entry = allEntry();
+      const { sql: stmt, params } = entry.statement;
 
-      const rows = await sql.prepare(stmt).all(params);
-
-      return rows.map((row) => hydrate(state.table, row));
+      return entry.decode({ returns: "rows", rows: await sql.prepare(stmt).all([...params]) });
     },
 
     async count(): Promise<number> {
@@ -373,8 +479,11 @@ type RowOfShape<S extends Shape> = {
     : InferRow<S[K]["table"]>;
 };
 
-/** A typed JOIN chain — like {@link SelectQuery}, but its rows are namespaced by table. */
-export interface JoinQuery<S extends Shape> {
+/**
+ * A typed JOIN chain — like {@link SelectQuery}, but its rows are namespaced by
+ * table. As a {@link BatchQuery} it runs with `all()` semantics.
+ */
+export interface JoinQuery<S extends Shape> extends BatchQuery<RowOfShape<S>[]> {
   /** Add or replace the `WHERE` clause. */
   where(condition: Condition): JoinQuery<S>;
 
@@ -520,7 +629,15 @@ function makeJoinQuery<S extends Shape>(
   const next = (patch: Partial<JoinState>): JoinQuery<S> =>
     makeJoinQuery<S>(sql, dialect, { ...state, ...patch });
 
+  // The one `all()` statement — shared by the terminal and the batch item.
+  const allEntry = (): BatchEntry<RowOfShape<S>[]> =>
+    rowsEntry(renderJoin(state, dialect), (rows) =>
+      rows.map((row) => hydrateJoin(state, row) as RowOfShape<S>),
+    );
+
   return {
+    [toBatch]: allEntry,
+
     where: (condition) => next({ where: condition }),
     orderBy: (column, direction = "asc") =>
       next({ orderBy: `${qualified(column)} ${direction === "desc" ? "DESC" : "ASC"}` }),
@@ -546,10 +663,10 @@ function makeJoinQuery<S extends Shape>(
     },
 
     async all(): Promise<RowOfShape<S>[]> {
-      const { sql: stmt, params } = renderJoin(state, dialect);
-      const rows = await sql.prepare(stmt).all(params);
+      const entry = allEntry();
+      const { sql: stmt, params } = entry.statement;
 
-      return rows.map((row) => hydrateJoin(state, row) as RowOfShape<S>);
+      return entry.decode({ returns: "rows", rows: await sql.prepare(stmt).all([...params]) });
     },
   };
 }
@@ -575,12 +692,12 @@ function joinFrom<S extends Shape>(
 // INSERT
 // ---------------------------------------------------------------------------
 
-interface InsertReturning<T extends Table> {
+interface InsertReturning<T extends Table> extends BatchQuery<InferRow<T>> {
   /** The single inserted row, hydrated. */
   get(): Promise<InferRow<T>>;
 }
 
-interface InsertValues<T extends Table> {
+interface InsertValues<T extends Table> extends BatchQuery<{ changes: number }> {
   /** Execute the insert; returns `{ changes }`. */
   run(): Promise<{ changes: number }>;
 
@@ -628,7 +745,11 @@ function makeInsert(sql: SqlDatabase): InsertBuilder {
   return function insert<T extends Table>(table: T) {
     return {
       values(input: InferInsert<T>): InsertValues<T> {
+        const returningEntry = (): BatchEntry<InferRow<T>> =>
+          rowsEntry(compileInsert(table, input, true), (rows) => hydrate(table, rows[0]));
+
         return {
+          [toBatch]: () => changesEntry(compileInsert(table, input, false)),
           async run() {
             const { sql: stmt, params } = compileInsert(table, input, false);
             const { changes } = await sql.prepare(stmt).run(params);
@@ -637,6 +758,7 @@ function makeInsert(sql: SqlDatabase): InsertBuilder {
           },
           returning() {
             return {
+              [toBatch]: returningEntry,
               async get(): Promise<InferRow<T>> {
                 const { sql: stmt, params } = compileInsert(table, input, true);
                 const row = await sql.prepare(stmt).get(params);
@@ -655,9 +777,14 @@ function makeInsert(sql: SqlDatabase): InsertBuilder {
 // UPDATE
 // ---------------------------------------------------------------------------
 
+/** A bounded write — runs alone via `run()`, or as one statement of a {@link Db.batch}. */
+export interface WriteQuery extends BatchQuery<{ changes: number }> {
+  run(): Promise<{ changes: number }>;
+}
+
 interface UpdateSet {
   /** Add the `WHERE` clause — required, refusing an unbounded update. */
-  where(condition: Condition): { run(): Promise<{ changes: number }> };
+  where(condition: Condition): WriteQuery;
 }
 
 interface UpdateBuilder {
@@ -689,15 +816,16 @@ function makeUpdate(sql: SqlDatabase): UpdateBuilder {
         const setParams = supplied.map((key) => bind(patchRecord[key]));
 
         return {
-          where(condition: Condition) {
+          where(condition: Condition): WriteQuery {
+            const compiled = {
+              sql: `UPDATE ${quoteIdentifier(table.tableName)} SET ${assignments} WHERE ${condition.sql}`,
+              params: [...setParams, ...condition.params],
+            };
+
             return {
+              [toBatch]: () => changesEntry(compiled),
               async run() {
-                const stmt = `UPDATE ${quoteIdentifier(
-                  table.tableName,
-                )} SET ${assignments} WHERE ${condition.sql}`;
-                const { changes } = await sql
-                  .prepare(stmt)
-                  .run([...setParams, ...condition.params]);
+                const { changes } = await sql.prepare(compiled.sql).run([...compiled.params]);
 
                 return { changes };
               },
@@ -718,18 +846,23 @@ interface DeleteBuilder {
     table: T,
   ): {
     /** Add the `WHERE` clause — required, refusing an unbounded delete. */
-    where(condition: Condition): { run(): Promise<{ changes: number }> };
+    where(condition: Condition): WriteQuery;
   };
 }
 
 function makeDelete(sql: SqlDatabase): DeleteBuilder {
   return function deleteFrom<T extends Table>(table: T) {
     return {
-      where(condition: Condition) {
+      where(condition: Condition): WriteQuery {
+        const compiled = {
+          sql: `DELETE FROM ${quoteIdentifier(table.tableName)} WHERE ${condition.sql}`,
+          params: [...condition.params],
+        };
+
         return {
+          [toBatch]: () => changesEntry(compiled),
           async run() {
-            const stmt = `DELETE FROM ${quoteIdentifier(table.tableName)} WHERE ${condition.sql}`;
-            const { changes } = await sql.prepare(stmt).run([...condition.params]);
+            const { changes } = await sql.prepare(compiled.sql).run([...compiled.params]);
 
             return { changes };
           },
@@ -784,14 +917,45 @@ export interface Db {
    * shape on a pooled (Postgres) driver.
    */
   transaction<R>(fn: (tx: Db) => Promise<R>): Promise<R>;
+
+  /**
+   * Run `queries` as ONE atomic batch (all commit, or none do) through the
+   * driver's {@link SqlDatabase.batch}, and resolve one result per query, in
+   * order, each typed as that query's own terminal would return it: a select
+   * yields its rows, `insert(…).values(…)` / `update` / `delete` yield
+   * `{ changes }`, and `insert(…).values(…).returning()` yields the inserted row.
+   *
+   *   const [created, moved] = await db.batch([
+   *     db.insert(seats).values({ eventId, userId }).returning(),
+   *     db.update(events).set({ seatsLeft: n }).where(eq(events.id, eventId)),
+   *   ]);
+   *
+   * Each query compiles to the same SQL its terminal runs. Every query compiles
+   * before any statement runs, so a builder that refuses (for example
+   * `DB_EMPTY_INSERT`) sends nothing. A batch cannot branch on its own reads: put
+   * the check inside the write ({@link rawChanges} carries a hand-written guard).
+   * An empty list resolves `[]`.
+   */
+  batch<const Q extends readonly BatchQuery<unknown>[]>(queries: Q): Promise<BatchResults<Q>>;
 }
 
-/** A single executed query, reported to {@link DbOptions.onQuery}. */
+/**
+ * One executed query — or one executed {@link Db.batch} — reported to
+ * {@link DbOptions.onQuery}.
+ */
 export interface QueryEvent {
-  /** The SQL text sent to the driver (identifiers only — every value rode a `?`). */
+  /**
+   * The SQL text sent to the driver (identifiers only — every value rode a `?`).
+   * For a batch it is every statement's SQL, in order, joined with `"; "`.
+   */
   readonly sql: string;
 
-  /** Wall-clock duration of the driver round-trip, in milliseconds (fractional). */
+  /**
+   * Wall-clock duration in milliseconds (fractional). For one statement it is the
+   * driver round-trip. For a batch it is the whole `batch()` call: queueing behind
+   * other spans, `BEGIN`/`COMMIT` (or the one native `d1.batch()`), and every
+   * statement together.
+   */
   readonly durationMs: number;
 }
 
@@ -817,8 +981,10 @@ export interface DbOptions {
    * Observability seam: invoked once per *executed* query with the SQL text and a
    * measured `durationMs`. Fires for every `get`/`all`/`run` a statement runs —
    * the select/insert/update/delete terminals AND the {@link Db.raw} escape hatch
-   * (`exec` runs no statement and never reports). Default `undefined` = zero
-   * behaviour change and zero measurement cost.
+   * (`exec` runs no statement and never reports). A non-empty {@link Db.batch}
+   * fires ONCE for the whole batch, with the statements' SQL joined by `"; "`
+   * (an empty batch never reports). Default `undefined` = zero behaviour change and
+   * zero measurement cost.
    *
    * The hook NEVER changes the query's result or its timing the caller observes:
    * it runs after the driver resolves and its own throw is swallowed, so a broken
@@ -867,6 +1033,15 @@ function instrument(sql: SqlDatabase, onQuery: (event: QueryEvent) => void): Sql
     },
 
     transaction: (fn) => sql.transaction(fn),
+
+    // One event per batch: the batch is one driver round-trip, so its statements
+    // share one measured duration.
+    batch: (statements) =>
+      statements.length === 0
+        ? sql.batch(statements)
+        : timed(statements.map((statement) => statement.sql).join("; "), () =>
+            sql.batch(statements),
+          ),
   };
 }
 
@@ -925,5 +1100,13 @@ export function createDb(sql: SqlDatabase, options: DbOptions = {}): Db {
       handle.transaction((txSql) =>
         fn(createDb(txSql, onQuery ? { dialect, onQuery } : { dialect })),
       ),
+    batch: async <const Q extends readonly BatchQuery<unknown>[]>(queries: Q) => {
+      // Compile everything first: a refusing builder must fail before any statement runs.
+      const entries = queries.map((query) => query[toBatch]());
+      const results = await handle.batch(entries.map((entry) => entry.statement));
+
+      // True by construction: slot `i` holds the decode of query `i`.
+      return entries.map((entry, index) => entry.decode(results[index])) as BatchResults<Q>;
+    },
   };
 }

@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import type { BatchStatement } from "@lesto/db";
 import { describe, expect, it } from "vitest";
 
 import { hyperdriveToSqlDatabase } from "../src/index";
@@ -206,5 +209,206 @@ describe("hyperdriveToSqlDatabase — transaction", () => {
     await db.transaction(async (tx) => {
       expect(tx.dialect).toBe("postgres");
     });
+  });
+});
+
+/** A parameterless write for a batch. */
+function write(sql: string): BatchStatement {
+  return { sql, params: [], returns: "changes" };
+}
+
+describe("hyperdriveToSqlDatabase — batch", () => {
+  it("runs the statements in order inside ONE BEGIN/COMMIT, with per-statement results", async () => {
+    const { connection, calls } = makeHyperdrive((text) =>
+      text.startsWith("SELECT") ? { rows: [{ id: 1 }], rowCount: 1 } : { rows: [], rowCount: 2 },
+    );
+
+    const results = await hyperdriveToSqlDatabase(connection).batch([
+      { sql: "UPDATE t SET a = ? WHERE b = ?", params: [1, 2], returns: "changes" },
+      { sql: "SELECT * FROM t WHERE a = ?", params: [1], returns: "rows" },
+    ]);
+
+    expect(results).toEqual([
+      { returns: "changes", changes: 2 },
+      { returns: "rows", rows: [{ id: 1 }] },
+    ]);
+    expect(calls).toEqual([
+      { text: "BEGIN", values: [] },
+      { text: "UPDATE t SET a = $1 WHERE b = $2", values: [1, 2] },
+      { text: "SELECT * FROM t WHERE a = $1", values: [1] },
+      { text: "COMMIT", values: [] },
+    ]);
+  });
+
+  it("all-or-nothing: a failing statement rolls back the span and stops the batch", async () => {
+    const violation = new Error("duplicate key value violates unique constraint");
+    const { connection, calls } = makeHyperdrive((text) => {
+      if (text.startsWith("INSERT INTO t (b)")) throw violation;
+
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(
+      hyperdriveToSqlDatabase(connection).batch([
+        { sql: "INSERT INTO t (a) VALUES (?)", params: [1], returns: "changes" },
+        { sql: "INSERT INTO t (b) VALUES (?)", params: [2], returns: "changes" },
+        { sql: "INSERT INTO t (c) VALUES (?)", params: [3], returns: "changes" },
+      ]),
+    ).rejects.toBe(violation);
+
+    expect(calls.map((c) => c.text)).toEqual([
+      "BEGIN",
+      "INSERT INTO t (a) VALUES ($1)",
+      "INSERT INTO t (b) VALUES ($1)",
+      "ROLLBACK",
+    ]);
+  });
+
+  it("an empty batch resolves [] and never opens a transaction", async () => {
+    const { connection, calls } = makeHyperdrive();
+
+    await expect(hyperdriveToSqlDatabase(connection).batch([])).resolves.toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it("a batch on the tx handle runs in a SAVEPOINT; a caught failure rolls back only the batch", async () => {
+    const violation = new Error("duplicate key value violates unique constraint");
+    const { connection, calls } = makeHyperdrive((text) => {
+      if (text.startsWith("INSERT INTO t (b)")) throw violation;
+
+      return { rows: [], rowCount: 1 };
+    });
+
+    await hyperdriveToSqlDatabase(connection).transaction(async (tx) => {
+      await tx.batch([{ sql: "UPDATE t SET a = 1", params: [], returns: "changes" }]);
+
+      await expect(
+        tx.batch([
+          { sql: "INSERT INTO t (a) VALUES (?)", params: [1], returns: "changes" },
+          { sql: "INSERT INTO t (b) VALUES (?)", params: [1], returns: "changes" },
+        ]),
+      ).rejects.toBe(violation);
+    });
+
+    expect(calls.map((c) => c.text.replace(/lesto_batch_\d+/, "lesto_batch_N"))).toEqual([
+      "BEGIN",
+      "SAVEPOINT lesto_batch_N",
+      "UPDATE t SET a = 1",
+      "RELEASE SAVEPOINT lesto_batch_N",
+      "SAVEPOINT lesto_batch_N",
+      "INSERT INTO t (a) VALUES ($1)",
+      "INSERT INTO t (b) VALUES ($1)",
+      "ROLLBACK TO SAVEPOINT lesto_batch_N",
+      "RELEASE SAVEPOINT lesto_batch_N",
+      "COMMIT",
+    ]);
+  });
+
+  it("two overlapping batches on the one connection run one span after the other", async () => {
+    const { connection, calls } = makeHyperdrive((text) => {
+      if (text.startsWith("INSERT INTO b2")) throw new Error("b2 failed");
+
+      return { rows: [], rowCount: 1 };
+    });
+    const db = hyperdriveToSqlDatabase(connection);
+
+    const first = db.batch([
+      write("INSERT INTO a1 DEFAULT VALUES"),
+      write("INSERT INTO a2 DEFAULT VALUES"),
+    ]);
+    const second = db.batch([
+      write("INSERT INTO b1 DEFAULT VALUES"),
+      write("INSERT INTO b2 DEFAULT VALUES"),
+    ]);
+
+    await expect(first).resolves.toHaveLength(2);
+    await expect(second).rejects.toThrow("b2 failed");
+
+    expect(calls.map((c) => c.text)).toEqual([
+      "BEGIN",
+      "INSERT INTO a1 DEFAULT VALUES",
+      "INSERT INTO a2 DEFAULT VALUES",
+      "COMMIT",
+      "BEGIN",
+      "INSERT INTO b1 DEFAULT VALUES",
+      "INSERT INTO b2 DEFAULT VALUES",
+      "ROLLBACK",
+    ]);
+  });
+
+  it("a transaction overlapping a batch also waits its turn", async () => {
+    const { connection, calls } = makeHyperdrive(() => ({ rows: [], rowCount: 1 }));
+    const db = hyperdriveToSqlDatabase(connection);
+
+    const batched = db.batch([
+      { sql: "INSERT INTO a DEFAULT VALUES", params: [], returns: "changes" },
+    ]);
+    const span = db.transaction((tx) => tx.exec("INSERT INTO b DEFAULT VALUES"));
+
+    await Promise.all([batched, span]);
+
+    expect(calls.map((c) => c.text)).toEqual([
+      "BEGIN",
+      "INSERT INTO a DEFAULT VALUES",
+      "COMMIT",
+      "BEGIN",
+      "INSERT INTO b DEFAULT VALUES",
+      "COMMIT",
+    ]);
+  });
+});
+
+describe("hyperdriveToSqlDatabase — a root span inside its own span", () => {
+  it("rejects a root transaction or batch with DB_ROOT_STATEMENT_IN_SPAN; the span still commits", async () => {
+    const { connection, calls } = makeHyperdrive(() => ({ rows: [], rowCount: 1 }));
+    const db = hyperdriveToSqlDatabase(connection, {
+      asyncContext: new AsyncLocalStorage<object>(),
+    });
+
+    await db.transaction(async (tx) => {
+      await expect(db.transaction(async () => 1)).rejects.toMatchObject({
+        code: "DB_ROOT_STATEMENT_IN_SPAN",
+        details: { operation: "transaction" },
+      });
+      await expect(db.batch([write("INSERT INTO a DEFAULT VALUES")])).rejects.toMatchObject({
+        code: "DB_ROOT_STATEMENT_IN_SPAN",
+        details: { operation: "batch" },
+      });
+
+      await tx.exec("INSERT INTO b DEFAULT VALUES");
+    });
+
+    expect(calls.map((c) => c.text)).toEqual(["BEGIN", "INSERT INTO b DEFAULT VALUES", "COMMIT"]);
+  });
+
+  it("a concurrent caller outside the span still waits its turn and succeeds", async () => {
+    const { connection, calls } = makeHyperdrive(() => ({ rows: [], rowCount: 1 }));
+    const db = hyperdriveToSqlDatabase(connection, {
+      asyncContext: new AsyncLocalStorage<object>(),
+    });
+
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const span = db.transaction(async (tx) => {
+      await tx.exec("INSERT INTO a DEFAULT VALUES");
+      await gate;
+    });
+    const outside = db.batch([write("INSERT INTO b DEFAULT VALUES")]);
+
+    release?.();
+    await span;
+    await expect(outside).resolves.toEqual([{ returns: "changes", changes: 1 }]);
+
+    expect(calls.map((c) => c.text)).toEqual([
+      "BEGIN",
+      "INSERT INTO a DEFAULT VALUES",
+      "COMMIT",
+      "BEGIN",
+      "INSERT INTO b DEFAULT VALUES",
+      "COMMIT",
+    ]);
   });
 });

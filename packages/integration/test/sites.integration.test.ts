@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import Database from "better-sqlite3";
+import { batchViaTransaction } from "@lesto/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createApp } from "@lesto/kernel";
@@ -55,6 +56,7 @@ function adapt(raw: Database.Database): KernelDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

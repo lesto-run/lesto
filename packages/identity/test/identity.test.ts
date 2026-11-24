@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installSessionSchema, sqlSessionStore } from "@lesto/auth";
 import type { Session, SessionStore } from "@lesto/auth";
-import { createDb } from "@lesto/db";
+import { batchViaTransaction, createDb } from "@lesto/db";
 import type { Db, SqlDatabase } from "@lesto/db";
 import { Migrator } from "@lesto/migrate";
 import { installRateLimitSchema, RateLimiter, sqlRateLimitStore } from "@lesto/ratelimit";
@@ -90,6 +90,7 @@ function adapt(database: Database.Database): SqlDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

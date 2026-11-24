@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createDb } from "@lesto/db";
+import { batchViaTransaction, createDb } from "@lesto/db";
 import type { Db, SqlDatabase } from "@lesto/db";
 import { Migrator } from "@lesto/migrate";
 import { installSchema, Queue } from "@lesto/queue";
@@ -64,6 +64,7 @@ function adapt(raw: Database.Database): SqlDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

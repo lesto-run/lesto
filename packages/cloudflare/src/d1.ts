@@ -26,11 +26,12 @@
  * caller that needs cross-statement atomicity fails CLOSED (loud, coded) rather than
  * silently corrupting. This mirrors the mature comparator (Drizzle's D1 driver refuses
  * `transaction()` the same way). A writer that wants an atomic multi-statement write
- * reaches for `d1.batch` directly; a workload that needs a real interactive transaction
- * runs on the Node leg (`openSqlite`/pg), where one is available.
+ * uses `SqlDatabase.batch` (`db.batch([...])` through `createDb`), which this adapter
+ * maps onto ONE native `d1.batch()` call; a workload that needs a real interactive
+ * transaction runs on the Node leg (`openSqlite`/pg), where one is available.
  */
 
-import type { SqlDatabase } from "@lesto/db";
+import type { BatchResult, BatchStatement, SqlDatabase } from "@lesto/db";
 
 import { CloudflareError } from "./errors";
 
@@ -45,9 +46,34 @@ export interface D1PreparedStatement {
   all<T = unknown>(): Promise<{ results: T[] }>;
 }
 
+/** The slice of one `d1.batch()` result this adapter reads. */
+export interface D1BatchResult {
+  results: unknown[];
+
+  meta: { changes?: number };
+}
+
 /** The slice of the D1 database binding this adapter uses. */
 export interface D1Database {
   prepare(sql: string): D1PreparedStatement;
+
+  /** Run the statements in order as one atomic transaction (D1's only atomic primitive). */
+  batch(statements: D1PreparedStatement[]): Promise<D1BatchResult[]>;
+}
+
+/** Map one native batch result onto the `returns` its statement asked for. */
+function toBatchResult(statement: BatchStatement, result: D1BatchResult | undefined): BatchResult {
+  if (result === undefined) {
+    throw new CloudflareError(
+      "CLOUDFLARE_D1_BATCH_RESULT_MISSING",
+      "d1.batch() returned fewer results than the statements it was given.",
+      { sql: statement.sql },
+    );
+  }
+
+  return statement.returns === "rows"
+    ? { returns: "rows", rows: result.results }
+    : { returns: "changes", changes: result.meta.changes ?? 0 };
 }
 
 /** Adapt a Cloudflare D1 binding to the async `SqlDatabase` surface `@lesto/db` consumes. */
@@ -106,10 +132,23 @@ export function d1ToSqlDatabase(d1: D1Database): SqlDatabase {
           "CLOUDFLARE_D1_TRANSACTION_UNSUPPORTED",
           "D1 has no interactive transaction (its only atomic primitive is batch()); " +
             "@lesto/cloudflare refuses transaction() so a caller needing cross-statement " +
-            "atomicity fails closed, never silently loses updates. Use d1.batch for an " +
+            "atomicity fails closed, never silently loses updates. Use batch() for an " +
             "atomic multi-statement write, or run the workload on the Node leg.",
         ),
       ),
+
+    // The native atomic primitive: ONE `d1.batch()` call with every statement
+    // bound, in order. D1 rolls the whole batch back when any statement fails. An
+    // empty batch never reaches D1, which refuses an empty statement list.
+    batch: async (statements) => {
+      if (statements.length === 0) return [];
+
+      const results = await d1.batch(
+        statements.map((statement) => d1.prepare(statement.sql).bind(...statement.params)),
+      );
+
+      return statements.map((statement, index) => toBatchResult(statement, results[index]));
+    },
   };
 
   return adapted;

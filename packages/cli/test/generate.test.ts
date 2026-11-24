@@ -240,6 +240,14 @@ describe("runGenerate — model", () => {
     expect(test).toContain("live: true,");
     expect(test).toContain("at: new Date(0),");
     expect(test).toContain('import { events, eventMigration } from "./event";');
+
+    // The test handle is the shared adapter, so it carries the full driver seam
+    // (transaction AND batch) with no cast hiding a missing member.
+    expect(test).toContain(
+      'import { adaptSyncSqlite, createDb, createTableSql } from "@lesto/db";',
+    );
+    expect(test).toContain("createDb(\n    adaptSyncSqlite({");
+    expect(test).not.toContain("as never");
   });
 
   it("handles a model with no fields (just the id column)", async () => {

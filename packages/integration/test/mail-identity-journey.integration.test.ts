@@ -21,7 +21,7 @@ import Database from "better-sqlite3";
 import { render } from "@react-email/render";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createDb } from "@lesto/db";
+import { batchViaTransaction, createDb } from "@lesto/db";
 import { createFetchProviderTransport, Mailer } from "@lesto/mail";
 import type { EmailRenderer, ProviderRequestBody } from "@lesto/mail";
 import { Schema } from "@lesto/migrate";
@@ -69,6 +69,7 @@ function adapt(raw: Database.Database): SqlDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

@@ -202,6 +202,98 @@ describe("createPgDatabase — transaction", () => {
   });
 });
 
+describe("createPgDatabase — batch", () => {
+  it("runs the statements in order on ONE client inside BEGIN/COMMIT, with per-statement results", async () => {
+    const { pool, calls, state } = fakePg((text) =>
+      text.startsWith("SELECT") ? { rows: [{ id: 1 }], rowCount: 1 } : { rows: [], rowCount: 2 },
+    );
+
+    const results = await createPgDatabase(pool).batch([
+      { sql: "UPDATE t SET a = ? WHERE b = ?", params: [1, 2], returns: "changes" },
+      { sql: "SELECT * FROM t WHERE a = ?", params: [1], returns: "rows" },
+    ]);
+
+    expect(results).toEqual([
+      { returns: "changes", changes: 2 },
+      { returns: "rows", rows: [{ id: 1 }] },
+    ]);
+    expect(calls).toEqual([
+      { text: "BEGIN", values: [], on: "client" },
+      { text: "UPDATE t SET a = $1 WHERE b = $2", values: [1, 2], on: "client" },
+      { text: "SELECT * FROM t WHERE a = $1", values: [1], on: "client" },
+      { text: "COMMIT", values: [], on: "client" },
+    ]);
+    expect(state.connected).toBe(1);
+    expect(state.released).toBe(1);
+  });
+
+  it("all-or-nothing: a failing statement rolls back the span and stops the batch", async () => {
+    const violation = new Error("duplicate key value violates unique constraint");
+    const { pool, calls, state } = fakePg((text) => {
+      if (text.startsWith("INSERT INTO t (b)")) throw violation;
+
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(
+      createPgDatabase(pool).batch([
+        { sql: "INSERT INTO t (a) VALUES (?)", params: [1], returns: "changes" },
+        { sql: "INSERT INTO t (b) VALUES (?)", params: [2], returns: "changes" },
+        { sql: "INSERT INTO t (c) VALUES (?)", params: [3], returns: "changes" },
+      ]),
+    ).rejects.toBe(violation);
+
+    expect(calls.map((c) => c.text)).toEqual([
+      "BEGIN",
+      "INSERT INTO t (a) VALUES ($1)",
+      "INSERT INTO t (b) VALUES ($1)",
+      "ROLLBACK",
+    ]);
+    expect(state.releaseErr).toBe(violation);
+  });
+
+  it("an empty batch resolves [] and never checks out a client", async () => {
+    const { pool, calls, state } = fakePg();
+
+    await expect(createPgDatabase(pool).batch([])).resolves.toEqual([]);
+    expect(calls).toEqual([]);
+    expect(state.connected).toBe(0);
+  });
+
+  it("a batch on the tx handle runs in a SAVEPOINT; a caught failure rolls back only the batch", async () => {
+    const violation = new Error("duplicate key value violates unique constraint");
+    const { pool, calls } = fakePg((text) => {
+      if (text.startsWith("INSERT INTO t (b)")) throw violation;
+
+      return { rows: [], rowCount: 1 };
+    });
+
+    await createPgDatabase(pool).transaction(async (tx) => {
+      await tx.batch([{ sql: "UPDATE t SET a = 1", params: [], returns: "changes" }]);
+
+      await expect(
+        tx.batch([
+          { sql: "INSERT INTO t (a) VALUES (?)", params: [1], returns: "changes" },
+          { sql: "INSERT INTO t (b) VALUES (?)", params: [1], returns: "changes" },
+        ]),
+      ).rejects.toBe(violation);
+    });
+
+    expect(calls.map((c) => c.text.replace(/lesto_batch_\d+/, "lesto_batch_N"))).toEqual([
+      "BEGIN",
+      "SAVEPOINT lesto_batch_N",
+      "UPDATE t SET a = 1",
+      "RELEASE SAVEPOINT lesto_batch_N",
+      "SAVEPOINT lesto_batch_N",
+      "INSERT INTO t (a) VALUES ($1)",
+      "INSERT INTO t (b) VALUES ($1)",
+      "ROLLBACK TO SAVEPOINT lesto_batch_N",
+      "RELEASE SAVEPOINT lesto_batch_N",
+      "COMMIT",
+    ]);
+  });
+});
+
 describe("openPostgres", () => {
   it("builds the db from the injected pool and drains it on close", async () => {
     const fake = fakePg(() => ({ rows: [{ id: 7 }], rowCount: 1 }));

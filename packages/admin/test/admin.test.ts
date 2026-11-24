@@ -3,13 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import {
+  batchViaTransaction,
   createDb,
   createTableSql,
+  type Db,
   defineTable,
   integer,
-  text,
-  type Db,
   type SqlDatabase,
+  text,
 } from "@lesto/db";
 
 import { definePolicy } from "@lesto/authz/policy";
@@ -72,6 +73,7 @@ function adapt(raw: Database.Database): SqlDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

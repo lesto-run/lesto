@@ -24,7 +24,7 @@
 
 import { createRequire } from "node:module";
 
-import { createDb, defineTable, integer, text } from "@lesto/db";
+import { batchViaTransaction, createDb, defineTable, integer, text } from "@lesto/db";
 import type { SqlDatabase } from "@lesto/db";
 import type { ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
 
@@ -111,6 +111,7 @@ const makeSqlDb = (client: AdminClient): SqlDatabase => {
       ],
     }),
     transaction: async (fn) => fn(db),
+    batch: (statements) => batchViaTransaction(db, statements),
   };
 
   return db;

@@ -139,6 +139,17 @@ query builder runs unchanged against either of two:
   In the Worker, `d1ToSqlDatabase(env.DB)` adapts the binding to the `SqlDatabase`
   surface `@lesto/db` consumes.
 
+  D1 has no interactive transaction, so `db.transaction()` refuses on D1 with the
+  coded `CLOUDFLARE_D1_TRANSACTION_UNSUPPORTED`. Use
+  [`db.batch([...])`](/batteries/data#batches) for an atomic multi-statement
+  write: the adapter maps it onto one native `d1.batch()` call. A batch cannot
+  branch on its own reads. Move the check into the write instead: `INSERT …
+  SELECT … WHERE EXISTS`, `UPDATE … WHERE state = ?`, a `UNIQUE` index, or a
+  guard statement that fails. These gates also work on Postgres.
+
+  A `changes()` gate works inside a D1 batch too, but it is SQLite/D1-only: it
+  fails on Hyperdrive.
+
   One trap worth knowing before your first deploy: **remote D1 runs exactly one
   statement per `db.exec()`**. A semicolon-joined, multi-statement DDL string
   installs fine on local SQLite (and even on `wrangler dev`'s local D1), then

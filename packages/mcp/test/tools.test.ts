@@ -5,7 +5,15 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { lesto } from "@lesto/web";
-import { createDb, createTableSql, defineTable, integer, text, type Db } from "@lesto/db";
+import {
+  batchViaTransaction,
+  createDb,
+  createTableSql,
+  type Db,
+  defineTable,
+  integer,
+  text,
+} from "@lesto/db";
 import { createApp } from "@lesto/kernel";
 import { Migrator } from "@lesto/migrate";
 import type { MigrationEntry } from "@lesto/migrate";
@@ -70,6 +78,7 @@ function adapt(raw: Database.Database): KernelDatabase {
         throw error;
       }
     },
+    batch: (statements) => batchViaTransaction(adapted, statements),
   };
 
   return adapted;

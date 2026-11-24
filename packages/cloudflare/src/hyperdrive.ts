@@ -27,7 +27,13 @@
  * dialect across both Postgres tiers.
  */
 
-import type { SqlDatabase } from "@lesto/db";
+import {
+  batchViaSavepoint,
+  batchViaTransaction,
+  createFifoQueue,
+  createSpanGuard,
+} from "@lesto/db";
+import type { AsyncContext, SqlDatabase } from "@lesto/db";
 import { translate } from "@lesto/pg/translate";
 
 /** What a postgres-protocol query hands back — the two fields the adapter reads. */
@@ -67,11 +73,31 @@ export interface Hyperdrive {
  * `transaction` runs flat on the same connection (Postgres has no nested `BEGIN`),
  * matching the node driver's semantics.
  *
+ * Because there is only one connection, two overlapping spans (`transaction` or
+ * `batch`) would interleave their statements inside one `BEGIN`: an error in one
+ * aborts the shared transaction and discards the other's writes. So every span runs
+ * through one FIFO queue and starts only after the previous span has settled — the
+ * same queue `adaptSyncSqlite` uses for its one SQLite connection.
+ *
  * `lastInsertRowid` is intentionally omitted (the seam marks it optional): Postgres
  * has no implicit row id, and the only consumer that wants one reads it via
  * `INSERT ... RETURNING id` + `.get()` — exactly as the node Postgres driver does.
  */
-export function hyperdriveToSqlDatabase(connection: HyperdriveConnection): SqlDatabase {
+/** Options for {@link hyperdriveToSqlDatabase}. */
+export interface HyperdriveOptions {
+  /**
+   * Async context (an `AsyncLocalStorage<object>` from `node:async_hooks` on a
+   * `nodejs_compat` Worker) used to refuse a root-handle `transaction` or `batch`
+   * issued from inside one of this handle's own spans with `DB_ROOT_STATEMENT_IN_SPAN`.
+   * Without it such a call waits for its own span, which never ends.
+   */
+  readonly asyncContext?: AsyncContext<object>;
+}
+
+export function hyperdriveToSqlDatabase(
+  connection: HyperdriveConnection,
+  options: HyperdriveOptions = {},
+): SqlDatabase {
   // The `exec` + `prepare` half of the seam, over any connection (the request
   // connection, or — once a transaction has opened — that same connection again;
   // there is only one in a Worker, so this is the same handle either way).
@@ -107,7 +133,14 @@ export function hyperdriveToSqlDatabase(connection: HyperdriveConnection): SqlDa
     },
   };
 
-  return {
+  // One queue for the one connection: spans never overlap on it.
+  const queue = createFifoQueue();
+
+  // Root statements are not queued here, so only a root span (`transaction` or `batch`)
+  // started inside our own span can wait on itself. The guard refuses exactly that.
+  const guard = createSpanGuard(options.asyncContext);
+
+  const db: SqlDatabase = {
     ...statements,
 
     // The driver marker (see `SqlDatabase.dialect`): Hyperdrive fronts a real
@@ -116,35 +149,45 @@ export function hyperdriveToSqlDatabase(connection: HyperdriveConnection): SqlDa
     // and the tx handle below carries the same stamp.
     dialect: "postgres",
 
-    transaction: async (fn) => {
-      await connection.query("BEGIN");
+    transaction: (fn) =>
+      guard.outside("transaction", () =>
+        queue.run(async () => {
+          await connection.query("BEGIN");
 
-      // The transaction-scoped db is the same single connection; a nested
-      // `transaction` runs FLAT on it (Postgres has no nested BEGIN), matching the
-      // node Postgres driver — the migrator never nests.
-      const tx: SqlDatabase = {
-        ...statements,
-        dialect: "postgres",
-        transaction: (inner) => inner(tx),
-      };
+          // The transaction-scoped db is the same single connection; a nested
+          // `transaction` runs FLAT on it (Postgres has no nested BEGIN), matching the
+          // node Postgres driver — the migrator never nests.
+          const tx: SqlDatabase = {
+            ...statements,
+            dialect: "postgres",
+            transaction: (inner) => inner(tx),
+            batch: (batched) => batchViaSavepoint(tx, batched),
+          };
 
-      try {
-        const out = await fn(tx);
+          try {
+            const out = await guard.enter(() => fn(tx));
 
-        await connection.query("COMMIT");
+            await connection.query("COMMIT");
 
-        return out;
-      } catch (error) {
-        // Best-effort rollback: a throwing ROLLBACK must not mask the original
-        // error (which stays the rejection).
-        try {
-          await connection.query("ROLLBACK");
-        } catch {
-          /* keep the original error */
-        }
+            return out;
+          } catch (error) {
+            // Best-effort rollback: a throwing ROLLBACK must not mask the original
+            // error (which stays the rejection).
+            try {
+              await connection.query("ROLLBACK");
+            } catch {
+              /* keep the original error */
+            }
 
-        throw error;
-      }
-    },
+            throw error;
+          }
+        }),
+      ),
+
+    // A batch is one queued BEGIN…COMMIT span on the single connection, statements in
+    // order. On the tx handle a batch runs in a SAVEPOINT, so a failed batch rolls back alone.
+    batch: (batched) => guard.outside("batch", () => batchViaTransaction(db, batched)),
   };
+
+  return db;
 }

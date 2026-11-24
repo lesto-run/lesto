@@ -266,14 +266,23 @@ describe("createWorkerSqlDatabase", () => {
   it("close() rejects an in-flight request instead of hanging it forever", async () => {
     const channel = programmableChannel();
 
+    let posted: (() => void) | undefined;
+    const reachedWorker = new Promise<void>((resolve) => {
+      posted = resolve;
+    });
+
     // Answer `open`, then NEVER answer the `exec` — the worker went away mid-request.
     channel.onRequest((request) => {
       if (request.op === "open") channel.sendToClient({ id: request.id, ok: true });
+      if (request.op === "exec") posted?.();
     });
 
     const { db, close } = await createWorkerSqlDatabase(channel.clientPort, opts);
     const inflight = db.prepare("SELECT 1").all([]);
 
+    // A root statement runs through the connection's FIFO queue, so wait until it
+    // has actually been posted to the worker before closing.
+    await reachedWorker;
     close();
 
     await expect(inflight).rejects.toThrow(/closed with a request in flight/);

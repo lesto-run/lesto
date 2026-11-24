@@ -20,6 +20,7 @@
  * no `pg` at type-check time. The real `new Pool()` lives in `./pg-driver`.
  */
 
+import { batchViaSavepoint, batchViaTransaction } from "@lesto/db";
 import type { SqlDatabase } from "@lesto/db";
 
 import { translate } from "./translate";
@@ -91,7 +92,7 @@ function statementsOver(queryable: PgQueryable): Pick<SqlDatabase, "exec" | "pre
 
 /** Build an async {@link SqlDatabase} backed by a Postgres connection pool. */
 export function createPgDatabase(pool: PgPool): SqlDatabase {
-  return {
+  const db: SqlDatabase = {
     ...statementsOver(pool),
 
     // The driver marker (see `SqlDatabase.dialect`): this handle — and the
@@ -114,6 +115,9 @@ export function createPgDatabase(pool: PgPool): SqlDatabase {
           ...statementsOver(client),
           dialect: "postgres",
           transaction: (inner) => inner(tx),
+          // A SAVEPOINT, so a failed batch the caller catches rolls back alone and the
+          // transaction stays usable (Postgres aborts the whole transaction otherwise).
+          batch: (statements) => batchViaSavepoint(tx, statements),
         };
 
         const out = await fn(tx);
@@ -139,7 +143,12 @@ export function createPgDatabase(pool: PgPool): SqlDatabase {
         client.release(failure);
       }
     },
+
+    // A batch is one transaction on one checked-out client, statements in order.
+    batch: (statements) => batchViaTransaction(db, statements),
   };
+
+  return db;
 }
 
 /** Connection config handed to the underlying pool (structural — a `pg` PoolConfig). */

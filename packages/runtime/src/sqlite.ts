@@ -34,6 +34,8 @@
  * single-node dev default; fleets run Postgres.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { adaptSyncSqlite } from "@lesto/db";
 import type { KernelDatabase } from "@lesto/kernel";
 
@@ -121,7 +123,11 @@ export async function openSqlite(
   // FIFO/rollback/flat-nesting invariants this connection now shares with the OPFS driver.
   // The adapter also stamps the `dialect: "sqlite"` driver marker on the handle (and its
   // tx handle), so consumers (the queue, `createDb`) infer the engine with no flag to remember.
-  const db: KernelDatabase = adaptSyncSqlite(statements);
+  // The async context lets the adapter refuse a root-handle statement issued from inside one
+  // of its own transactions (`DB_ROOT_STATEMENT_IN_SPAN`) instead of queuing it behind itself.
+  const db: KernelDatabase = adaptSyncSqlite(statements, {
+    asyncContext: new AsyncLocalStorage<object>(),
+  });
 
   return { db, close: () => raw.close() };
 }

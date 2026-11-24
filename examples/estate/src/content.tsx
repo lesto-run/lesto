@@ -14,6 +14,8 @@
  * on every cold start.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { createDb, createTableSql, defineTable, eq, integer, text } from "@lesto/db";
 import type { Db, Dialect, SqlDatabase } from "@lesto/db";
 import { lesto, type Lesto } from "@lesto/web";
@@ -120,12 +122,15 @@ async function ensureSeeded(handle: SqlDatabase, db: Db, dialect: Dialect): Prom
   const existing = await db.select().from(pages).where(eq(pages.slug, first.slug)).get();
   if (existing !== undefined) return;
 
-  for (const page of SEED) {
-    await db
-      .insert(pages)
-      .values({ slug: page.slug, title: page.title, tree: JSON.stringify(page.tree) })
-      .run();
-  }
+  // One atomic batch: a cold start that dies mid-seed leaves no half-seeded table,
+  // on D1 (native batch) and on SQLite / Postgres (one transaction) alike.
+  await db.batch(
+    SEED.map((page) =>
+      db
+        .insert(pages)
+        .values({ slug: page.slug, title: page.title, tree: JSON.stringify(page.tree) }),
+    ),
+  );
 }
 
 /** A lazily-opened, seeded content store: a getter that resolves a ready `Db` once. */
@@ -171,7 +176,11 @@ export function d1ContentStore(d1: D1Database): ContentStore {
  */
 export function hyperdriveContentStore(connection: HyperdriveConnection): ContentStore {
   return makeContentStore(async () => {
-    const handle = hyperdriveToSqlDatabase(connection);
+    // `nodejs_compat` gives the Worker `AsyncLocalStorage`, so a root-handle span
+    // started inside one of this handle's own spans fails coded instead of waiting forever.
+    const handle = hyperdriveToSqlDatabase(connection, {
+      asyncContext: new AsyncLocalStorage<object>(),
+    });
 
     return { handle, db: createDb(handle, { dialect: "postgres" }), dialect: "postgres" };
   });

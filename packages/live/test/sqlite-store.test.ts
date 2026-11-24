@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import Database from "better-sqlite3";
-import { adaptSyncSqlite } from "@lesto/db";
+import { adaptSyncSqlite, batchViaTransaction } from "@lesto/db";
 import type { SqlDatabase } from "@lesto/db";
 import type { ShapeChange, ShapeDefinition } from "@lesto/live-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -740,6 +740,7 @@ function withCallLog(
       };
     },
     transaction: (fn) => target.transaction((tx) => fn(wrap(tx))),
+    batch: (statements) => target.batch(statements),
   });
 
   return wrap(db);
@@ -782,10 +783,12 @@ function withFaultyWrite(
           exec: (sql) => tx.exec(sql),
           prepare: wrapPrepare(tx),
           transaction: (inner) => inner(wrappedTx),
+          batch: (statements) => batchViaTransaction(wrappedTx, statements),
         };
 
         return fn(wrappedTx);
       }),
+    batch: (statements) => db.batch(statements),
   };
 }
 
