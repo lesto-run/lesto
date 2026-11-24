@@ -1,14 +1,10 @@
 {
   "private": true,
-  "license": "MIT",
-  "workspaces": [
-    "packages/*",
-    "examples/*",
-    "!examples/hmr-check",
-    "site",
-    "www",
-    "benchmarks/apps/lesto"
-  ],
+  "workspaces": ["packages/*", "examples/*", "!examples/hmr-check", "site", "www", "benchmarks/apps/lesto"],
+  "packageManager": "bun@1.3.5",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "lint": "oxlint packages",
     "format:check": "bun run --filter '@lesto/*' format:check",
@@ -31,6 +27,10 @@
     "release": "node scripts/publish.mjs",
     "release:cut": "bash scripts/dev/release.sh",
     "release:changeset": "changeset publish"
+  },
+  "license": "MIT",
+  "overrides": {
+    "serialize-javascript": ">=7.0.5"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.102.0",
@@ -56,12 +56,5 @@
     "tsup": "^8.5.1",
     "typescript": "^5.7.0",
     "vitest": "^4.1.8"
-  },
-  "overrides": {
-    "serialize-javascript": ">=7.0.5"
-  },
-  "engines": {
-    "node": ">=22"
-  },
-  "packageManager": "bun@1.3.5"
+  }
 }
