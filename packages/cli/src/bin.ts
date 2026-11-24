@@ -52,6 +52,7 @@ import { isLestoError } from "@lesto/errors";
 
 import { createDevState } from "./dev-state";
 import { createProjectModuleLoader, evictProjectModules } from "./project-module";
+import { watchRearming } from "./rearming-watch";
 import {
   declaresIslandDevPeer,
   isHelpRequest,
@@ -479,52 +480,44 @@ const readAgentRoutes = async (): Promise<readonly RouteDescriptor[]> => {
 // A missing directory is not an error (a project with no `app/` still serves), so each watch
 // is attempted independently and the loop degrades to whatever exists.
 const watchRoutes = (onChange: () => void): (() => void) => {
-  const watchers: ReturnType<typeof watch>[] = [];
-
-  const attach = (dir: string, recursive: boolean, prefix: string): void => {
-    let watcher: ReturnType<typeof watch>;
-
+  // A watch that errors later (the directory is deleted, or the OS runs out of file handles)
+  // degrades inside `watchRearming`: this root simply stops triggering re-loads, and the server
+  // keeps serving. It also re-arms after each created file — see `rearming-watch.ts` for the
+  // Bun-on-Linux gap that makes an edit to a NEW helper or component otherwise reload nothing.
+  //
+  // `filename` is relative to the WATCHED dir, so it is re-prefixed to be project-relative before
+  // the predicate sees it. A null filename (possible on some platforms) is treated as "something
+  // changed here" and allowed through rather than silently dropping a real edit.
+  const attach = (dir: string, recursive: boolean, prefix: string): (() => void) | undefined => {
     try {
-      watcher = watch(dir, { recursive });
+      return watchRearming(watch, dir, recursive, (filename) => {
+        const relative = filename === null ? undefined : `${prefix}${filename}`;
+
+        if (relative !== undefined && !isReloadTriggerPath(relative)) return;
+
+        clearTimeout(timer);
+
+        timer = setTimeout(onChange, WATCH_DEBOUNCE_MS);
+      });
     } catch {
       // The directory does not exist (or cannot be watched) — nothing to watch here; the dev
       // loop still serves, it just has no reload trigger from this root.
-      return;
+      return undefined;
     }
-
-    // A watcher that errors later (the directory is deleted, or the OS runs out of file
-    // handles) emits `error` — and an unhandled `error` on an EventEmitter THROWS, which would
-    // take the whole dev server down over a lost watch. Degrade instead: this root simply
-    // stops triggering re-loads, and the server keeps serving.
-    watcher.on("error", () => watcher.close());
-
-    // `fs.watch` emits its `change` event as (eventType, filename) — `filename` is relative to
-    // the WATCHED dir, so it is re-prefixed to be project-relative before the predicate sees
-    // it. A null filename (possible on some platforms) is treated as "something changed here"
-    // and allowed through rather than silently dropping a real edit.
-    watcher.on("change", (_event, filename) => {
-      const relative = filename === null ? undefined : `${prefix}${String(filename)}`;
-
-      if (relative !== undefined && !isReloadTriggerPath(relative)) return;
-
-      clearTimeout(timer);
-
-      timer = setTimeout(onChange, WATCH_DEBOUNCE_MS);
-    });
-
-    watchers.push(watcher);
   };
 
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  attach(appSrcDir, true, `${APP_SRC_DIR}/`);
-  attach(join(projectRoot, "src"), true, "src/");
-  attach(projectRoot, false, "");
+  const stops = [
+    attach(appSrcDir, true, `${APP_SRC_DIR}/`),
+    attach(join(projectRoot, "src"), true, "src/"),
+    attach(projectRoot, false, ""),
+  ];
 
   return () => {
     clearTimeout(timer);
 
-    for (const watcher of watchers) watcher.close();
+    for (const stop of stops) stop?.();
   };
 };
 
@@ -888,11 +881,9 @@ const buildAppStyles = async (options: {
 // Watch a directory tree recursively and fire `onChange` at most once per debounce
 // window, so a burst of saves coalesces into a single rebuild. Returns a stop handle.
 const watchDir = (dir: string, onChange: () => void): (() => void) => {
-  const watcher = watch(dir, { recursive: true });
-
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  watcher.on("change", () => {
+  const stop = watchRearming(watch, dir, true, () => {
     clearTimeout(timer);
 
     timer = setTimeout(onChange, WATCH_DEBOUNCE_MS);
@@ -900,7 +891,7 @@ const watchDir = (dir: string, onChange: () => void): (() => void) => {
 
   return () => {
     clearTimeout(timer);
-    watcher.close();
+    stop();
   };
 };
 
