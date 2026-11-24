@@ -37,7 +37,11 @@ name* (below); everything already on npm publishes through CI.
    mispins internal deps (e.g. `mailing-lists@0.1.3 → mail@0.0.0`, an E404). **`bun install
    --force` does NOT re-sync it — you must `rm -f bun.lock && bun install`.** Commit the
    regenerated lockfile. (Verified 2026-07-08; the `0.1.3` wave shipped `router`/`ui` mispinned
-   because they were bootstrapped before this was known.)
+   because they were bootstrapped before this was known.) **Approved alternative (0.3.0):** when a
+   full rebuild would move third-party deps (it lifted React 19.2.7 → 19.3.1 and broke `bundle-size`),
+   keep `main`'s `bun.lock` and change only the workspace `version` fields, under bun 1.3.5
+   (`lockfileVersion` 1), then `bun install --frozen-lockfile`; `test:pack-boot`'s cross-ref guard
+   still proves no mispin.
 4. **Preflight — MUST be green before any publish:** `bun run test:pack-boot`. This packs all 49,
    installs + boots a scaffold, AND runs the cross-ref guard (`scripts/pack-and-boot.mjs`) that
    catches exactly the Dragon-1 mispin. The manual bootstrap loop **bypasses** this guard, so run
